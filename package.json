@@ -1,0 +1,26 @@
+{
+  "name": "bird-dog-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "worker:harvest": "node workers/harvest-worker.mjs"
+  },
+  "dependencies": {
+    "next": "^15.5.12",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.17.1",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "eslint": "^9.35.0",
+    "eslint-config-next": "15.5.12",
+    "typescript": "^5.9.2"
+  }
+}
