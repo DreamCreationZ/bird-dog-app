@@ -57,6 +57,7 @@ async function finishJob(jobId, status, errorMessage = null) {
 async function upsertTournament(orgId, company, tournament) {
   const tournamentRows = await supabaseRequest("harvested_tournaments", {
     method: "POST",
+    query: { on_conflict: "org_id,company,external_id" },
     body: [
       {
         org_id: orgId,
@@ -75,6 +76,7 @@ async function upsertTournament(orgId, company, tournament) {
   if (Array.isArray(tournament.games) && tournament.games.length) {
     const gameRows = await supabaseRequest("harvested_games", {
       method: "POST",
+      query: { on_conflict: "org_id,tournament_id,external_id" },
       body: tournament.games.map((game) => ({
         org_id: orgId,
         tournament_id: tournamentId,
@@ -95,6 +97,7 @@ async function upsertTournament(orgId, company, tournament) {
     const playerRows = dedupPlayers.length
       ? await supabaseRequest("harvested_players", {
           method: "POST",
+          query: { on_conflict: "org_id,external_id" },
           body: dedupPlayers.map((player) => ({
             org_id: orgId,
             external_id: player.id,
@@ -127,6 +130,7 @@ async function upsertTournament(orgId, company, tournament) {
     if (rosterRows.length) {
       await supabaseRequest("harvested_rosters", {
         method: "POST",
+        query: { on_conflict: "org_id,game_id,player_id" },
         body: rosterRows,
         prefer: "resolution=merge-duplicates,return=minimal"
       });

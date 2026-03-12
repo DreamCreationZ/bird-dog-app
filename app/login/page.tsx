@@ -35,7 +35,7 @@ export default function LoginPage() {
     <main className="login-shell">
       <section className="login-card">
         <h1>Project Bird Dog</h1>
-        <p>Sign in with your scouting email. Org branding and vault partitioning are based on your domain.</p>
+        <p>Sign up or sign in with your scouting email. Org branding and vault partitioning are based on your domain.</p>
         <form onSubmit={onSubmit}>
           <label>
             Full Name
@@ -46,7 +46,7 @@ export default function LoginPage() {
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </label>
           {error ? <p className="error-text">{error}</p> : null}
-          <button type="submit" disabled={loading}>{loading ? "Signing in..." : "Enter Cockpit"}</button>
+          <button type="submit" disabled={loading}>{loading ? "Authenticating..." : "Continue to Dashboard"}</button>
         </form>
       </section>
     </main>

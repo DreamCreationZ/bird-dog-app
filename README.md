@@ -1,24 +1,30 @@
-# Project Bird Dog (Production-Style v1)
+# Project Bird Dog (v2.0 Build)
 
-This standalone app includes:
-- Session login with org detection from email domain
-- Protected routes and APIs
-- Offline-first queue for notes and pulse events
-- Background sync to Supabase
-- Harvester queue API + dedicated scraper worker
-- SQL schema for multi-tenant row-level security
+This app includes:
+- Domain-based org login/session
+- Sunlight-ready high-contrast scout cockpit
+- Offline-first notes/watchlist/pulse queue with background sync
+- PG/PBR harvester queue + worker ingestion
+- Summer/Fall circuit inventory preloaded in a DB table
+- Locked tournaments that require $500 Stripe unlock per coach
+- Multi-tenant storage boundaries via org_id + RLS-ready schema
+- Shared coach schedule board visible to all logged-in coaches in org
+- Editable coach schedules with generated plan output
+- Target-player list in schedule editor with team auto-fill
+- In-app `Start Map` hotel navigation panel (Google Maps Embed)
+- Bottom tabs for `Tournaments`, `Schedule`, `Notes`
 
 ## Setup
 
-1. Create a Supabase project.
-2. Run [docs/supabase-rls.sql](./docs/supabase-rls.sql) in the SQL editor.
+1. Create Supabase project.
+2. Run [docs/supabase-rls.sql](./docs/supabase-rls.sql) in Supabase SQL Editor.
 3. Create `.env.local` from `.env.example` and fill values.
 
 ```bash
 cp .env.example .env.local
 ```
 
-## Run App
+## Run app
 
 ```bash
 cd /Users/swati/Documents/bird-dog-app
@@ -28,7 +34,7 @@ npm run dev
 
 Open [http://localhost:3000/login](http://localhost:3000/login)
 
-## Run Harvester Worker
+## Run harvester worker
 
 In a second terminal:
 
@@ -37,27 +43,39 @@ cd /Users/swati/Documents/bird-dog-app
 npm run worker:harvest
 ```
 
-## Live tournament ingestion flow
+## Stripe unlock flow setup
 
-1. In app, queue a harvest job from the Harvester Queue panel.
-2. Worker claims `queued` jobs from `harvest_jobs`.
-3. Worker scrapes PG/PBR via rotating proxy templates (`RESIDENTIAL_PROXY_TEMPLATE_URLS`).
-4. Worker writes to:
+1. Set these env vars:
+   - `STRIPE_SECRET_KEY`
+   - `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`
+   - `STRIPE_WEBHOOK_SECRET`
+   - `APP_BASE_URL`
+2. Add webhook endpoint in Stripe dashboard:
+   - `POST https://<your-domain>/api/payments/webhook`
+   - event: `checkout.session.completed`
+3. Locked tournaments from circuit inventory call `/api/payments/checkout`.
+4. Webhook writes unlock record into `org_tournament_unlocks` keyed by `user_id`.
+
+## Data harvester flow
+
+1. Coach unlocks and selects tournament inventory item.
+2. App queues job in `harvest_jobs`.
+3. Worker polls queue, scrapes PG/PBR using proxy rotation template URLs.
+4. Worker stores normalized rows in:
    - `harvested_tournaments`
    - `harvested_games`
    - `harvested_players`
    - `harvested_rosters`
-5. `/api/harvest` reads from those harvested tables.
+5. Cockpit pulls tournament/game/roster data from `/api/harvest`.
 
-If no harvested data exists yet, `/api/harvest` falls back to local mock data so the UI still works.
+## Core endpoints
 
-## Current architecture
-
-- `/api/sync`: validates session org and upserts notes/pulses into Supabase
-- `/api/harvest/jobs`: creates and lists queued scrape jobs
-- `workers/harvest-worker.mjs`: queue consumer + scraper + DB ingestion
-- `/api/harvest`: serves real harvested data per org/company/tournament
-
-## Important production note
-
-This app currently writes to Supabase via server service-role key. For strict end-user RLS enforcement, move client auth to Supabase Auth and issue user JWTs with `org_id` claim.
+- `GET /api/inventory` : preloaded inventory + locked/unlocked status
+- `POST /api/payments/checkout` : create $500 Stripe checkout session
+- `POST /api/payments/webhook` : unlock tournament on successful payment
+- `GET|POST /api/schedules` : save own schedule and view all coach schedules in org
+  - supports generated schedule plan storage (`generated_plan`)
+  - supports target players storage (`desired_players`)
+- `GET|POST /api/harvest/jobs` : list/create scrape jobs
+- `GET /api/harvest` : list tournaments/details from harvested store
+- `POST /api/sync` : sync offline notes/pulses

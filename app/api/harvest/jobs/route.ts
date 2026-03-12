@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHarvestJob, listHarvestJobs } from "@/lib/birddog/repository";
+import { createHarvestJob, hasUserSubscription, listHarvestJobs } from "@/lib/birddog/repository";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 
 export async function GET(req: NextRequest) {
@@ -31,6 +31,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const subscribed = await hasUserSubscription(session.userId);
+    if (!subscribed) {
+      return NextResponse.json({ error: "Subscription required. Unlock tournaments first." }, { status: 402 });
+    }
+
     const job = await createHarvestJob({
       orgId: session.orgId,
       userId: session.userId,

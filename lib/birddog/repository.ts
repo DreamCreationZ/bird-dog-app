@@ -1,4 +1,5 @@
 import { DataProvider, Game, PulseEvent, ScoutNote, Tournament } from "@/lib/birddog/types";
+import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
 import { supabaseRequest } from "@/lib/birddog/supabaseRest";
 
 export type HarvestJob = {
@@ -9,6 +10,14 @@ export type HarvestJob = {
   status: "queued" | "running" | "completed" | "failed";
   created_by: string;
   created_at: string;
+};
+
+export type InventoryRecord = {
+  id: string;
+  slug: string;
+  name: string;
+  season: "summer" | "fall";
+  company: DataProvider;
 };
 
 type TournamentRow = {
@@ -92,6 +101,151 @@ export async function upsertScoutUser(input: {
     ],
     prefer: "resolution=merge-duplicates,return=minimal"
   });
+}
+
+export async function seedCircuitInventory() {
+  const payload = INVENTORY_SEED.map((item) => ({
+    slug: item.slug,
+    name: item.name,
+    season: item.season,
+    company: item.company
+  }));
+
+  await supabaseRequest("circuit_inventory", {
+    method: "POST",
+    query: { on_conflict: "slug" },
+    body: payload,
+    prefer: "resolution=merge-duplicates,return=minimal"
+  });
+}
+
+export async function listCircuitInventory(): Promise<InventoryRecord[]> {
+  const rows = (await supabaseRequest("circuit_inventory", {
+    query: {
+      select: "id,slug,name,season,company",
+      order: "season.asc,name.asc"
+    }
+  })) as InventoryRecord[];
+
+  return rows;
+}
+
+export async function listUserUnlocks(userId: string): Promise<string[]> {
+  const rows = (await supabaseRequest("org_tournament_unlocks", {
+    query: {
+      user_id: `eq.${userId}`,
+      select: "inventory_slug"
+    }
+  })) as Array<{ inventory_slug: string }>;
+  return rows.map((row) => row.inventory_slug);
+}
+
+export async function hasUserSubscription(userId: string): Promise<boolean> {
+  const rows = (await supabaseRequest("org_tournament_unlocks", {
+    query: {
+      user_id: `eq.${userId}`,
+      select: "id",
+      limit: "1"
+    }
+  })) as Array<{ id: string }>;
+  return rows.length > 0;
+}
+
+export async function unlockTournamentForUser(input: {
+  orgId: string;
+  userId: string;
+  inventorySlug: string;
+  stripeSessionId: string;
+  stripePaymentIntentId: string | null;
+  amountCents: number;
+}) {
+  await supabaseRequest("org_tournament_unlocks", {
+    method: "POST",
+    query: { on_conflict: "user_id,inventory_slug" },
+    body: [{
+      org_id: input.orgId,
+      user_id: input.userId,
+      inventory_slug: input.inventorySlug,
+      stripe_session_id: input.stripeSessionId,
+      stripe_payment_intent_id: input.stripePaymentIntentId,
+      amount_cents: input.amountCents
+    }],
+    prefer: "resolution=merge-duplicates,return=minimal"
+  });
+}
+
+export type CoachSchedule = {
+  id: string;
+  org_id: string;
+  user_id: string;
+  coach_name: string;
+  flight_source: string | null;
+  flight_destination: string | null;
+  flight_arrival_time: string | null;
+  hotel_name: string | null;
+  notes: string | null;
+  desired_players: Array<{
+    playerId: string;
+    name: string;
+    team: string;
+  }>;
+  generated_plan: Array<{
+    at: string;
+    title: string;
+    detail: string;
+  }>;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function upsertCoachSchedule(input: {
+  orgId: string;
+  userId: string;
+  coachName: string;
+  flightSource?: string;
+  flightDestination?: string;
+  flightArrivalTime?: string;
+  hotelName?: string;
+  notes?: string;
+  desiredPlayers?: Array<{
+    playerId: string;
+    name: string;
+    team: string;
+  }>;
+  generatedPlan?: Array<{
+    at: string;
+    title: string;
+    detail: string;
+  }>;
+}) {
+  await supabaseRequest("coach_schedules", {
+    method: "POST",
+    query: { on_conflict: "user_id" },
+    body: [{
+      org_id: input.orgId,
+      user_id: input.userId,
+      coach_name: input.coachName,
+      flight_source: input.flightSource || null,
+      flight_destination: input.flightDestination || null,
+      flight_arrival_time: input.flightArrivalTime || null,
+      hotel_name: input.hotelName || null,
+      notes: input.notes || null,
+      desired_players: input.desiredPlayers || [],
+      generated_plan: input.generatedPlan || []
+    }],
+    prefer: "resolution=merge-duplicates,return=minimal"
+  });
+}
+
+export async function listCoachSchedules(orgId: string): Promise<CoachSchedule[]> {
+  const rows = (await supabaseRequest("coach_schedules", {
+    query: {
+      org_id: `eq.${orgId}`,
+      select: "id,org_id,user_id,coach_name,flight_source,flight_destination,flight_arrival_time,hotel_name,notes,desired_players,generated_plan,created_at,updated_at",
+      order: "updated_at.desc"
+    }
+  })) as CoachSchedule[];
+  return rows;
 }
 
 export async function insertSyncBatch(input: {
@@ -300,6 +454,7 @@ export async function upsertHarvestedTournament(input: {
 }) {
   const insertedTournaments = (await supabaseRequest("harvested_tournaments", {
     method: "POST",
+    query: { on_conflict: "org_id,company,external_id" },
     body: [toTournamentRow(input.tournament, input.orgId, input.company)],
     prefer: "resolution=merge-duplicates,return=representation"
   })) as TournamentRow[];
@@ -310,6 +465,7 @@ export async function upsertHarvestedTournament(input: {
   const insertedGames = gamesPayload.length
     ? ((await supabaseRequest("harvested_games", {
         method: "POST",
+        query: { on_conflict: "org_id,tournament_id,external_id" },
         body: gamesPayload,
         prefer: "resolution=merge-duplicates,return=representation"
       })) as GameRow[])
@@ -330,6 +486,7 @@ export async function upsertHarvestedTournament(input: {
   const insertedPlayers = playerPayload.length
     ? ((await supabaseRequest("harvested_players", {
         method: "POST",
+        query: { on_conflict: "org_id,external_id" },
         body: playerPayload,
         prefer: "resolution=merge-duplicates,return=representation"
       })) as PlayerRow[])
@@ -355,6 +512,7 @@ export async function upsertHarvestedTournament(input: {
   if (rosterPayload.length) {
     await supabaseRequest("harvested_rosters", {
       method: "POST",
+      query: { on_conflict: "org_id,game_id,player_id" },
       body: rosterPayload,
       prefer: "resolution=merge-duplicates,return=minimal"
     });

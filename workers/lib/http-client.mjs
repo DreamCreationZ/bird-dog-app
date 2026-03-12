@@ -7,6 +7,10 @@ const defaultUserAgents = [
 let proxyIndex = 0;
 let uaIndex = 0;
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function nextUserAgent() {
   const custom = process.env.SCRAPER_USER_AGENTS
     ? process.env.SCRAPER_USER_AGENTS.split("||").map((item) => item.trim()).filter(Boolean)
@@ -35,24 +39,50 @@ function targetFromHint(company, hint) {
   return `https://www.prepbaseballreport.com/search?query=${encoded}`;
 }
 
+function maybeBlocked(status, body) {
+  if (status === 403 || status === 429 || status === 503) return true;
+  const low = body.toLowerCase();
+  return low.includes("captcha") || low.includes("access denied") || low.includes("temporarily unavailable");
+}
+
 export async function fetchTournamentHtml(company, hint) {
   const target = targetFromHint(company, hint);
-  const template = nextProxyTemplate();
-  const url = template ? template.replace("{url}", encodeURIComponent(target)) : target;
+  const maxAttempts = Number(process.env.SCRAPER_MAX_ATTEMPTS || 5);
 
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": nextUserAgent(),
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const template = nextProxyTemplate();
+    const url = template ? template.replace("{url}", encodeURIComponent(target)) : target;
+
+    try {
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": nextUserAgent(),
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Cache-Control": "no-cache"
+        }
+      });
+
+      const html = await response.text();
+
+      if (!response.ok || maybeBlocked(response.status, html)) {
+        throw new Error(`Blocked or bad response (${response.status})`);
+      }
+
+      return {
+        target,
+        html,
+        viaProxy: Boolean(template),
+        attempt
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      const jitter = Math.floor(Math.random() * 350);
+      const waitMs = Math.min(9000, 500 * 2 ** (attempt - 1) + jitter);
+      await sleep(waitMs);
     }
-  });
-
-  if (!response.ok) {
-    throw new Error(`Scrape fetch failed (${response.status}) for ${target}`);
   }
 
-  return {
-    target,
-    html: await response.text()
-  };
+  throw new Error(`Scrape fetch failed for ${target}: ${lastError?.message || "unknown error"}`);
 }

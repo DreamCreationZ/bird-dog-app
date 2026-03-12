@@ -29,6 +29,7 @@ type BrowserSpeechRecognition = {
 };
 
 type BrowserSpeechConstructor = new () => BrowserSpeechRecognition;
+
 type HarvestJob = {
   id: string;
   company: "PG" | "PBR";
@@ -37,7 +38,42 @@ type HarvestJob = {
   created_at: string;
 };
 
+type InventoryTournament = {
+  slug: string;
+  name: string;
+  season: "summer" | "fall";
+  company: "PG" | "PBR";
+  locked: boolean;
+};
+
+type PlanItem = {
+  at: string;
+  title: string;
+  detail: string;
+};
+
+type DesiredPlayer = {
+  playerId: string;
+  name: string;
+  team: string;
+};
+
+type CoachSchedule = {
+  id: string;
+  user_id: string;
+  coach_name: string;
+  flight_source: string | null;
+  flight_destination: string | null;
+  flight_arrival_time: string | null;
+  hotel_name: string | null;
+  notes: string | null;
+  desired_players: DesiredPlayer[];
+  generated_plan: PlanItem[];
+  updated_at: string;
+};
+
 const CACHE_KEY = "bird_dog_tournament_cache";
+const MAP_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
 
 function timeLabel(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -45,6 +81,13 @@ function timeLabel(iso: string) {
 
 function dateLabel(iso: string) {
   return new Date(iso).toLocaleDateString();
+}
+
+function toInputDateTime(iso: string | null) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function makeOrgKey(orgId: string, userId: string, key: string) {
@@ -114,9 +157,28 @@ export default function BirdDogPage() {
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [selectedTournamentId, setSelectedTournamentId] = useState("");
   const [loadingHarvest, setLoadingHarvest] = useState(false);
+
   const [jobs, setJobs] = useState<HarvestJob[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [jobHint, setJobHint] = useState("PG Spring Showdown");
+
+  const [inventory, setInventory] = useState<InventoryTournament[]>([]);
+  const [subscribed, setSubscribed] = useState(false);
+  const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes">("tournaments");
+
+  const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
+  const [scheduleForm, setScheduleForm] = useState({
+    flightSource: "",
+    flightDestination: "",
+    flightArrivalTime: "",
+    hotelName: "",
+    notes: ""
+  });
+  const [desiredPlayers, setDesiredPlayers] = useState<DesiredPlayer[]>([]);
+  const [desiredPlayerId, setDesiredPlayerId] = useState("");
+  const [myGeneratedPlan, setMyGeneratedPlan] = useState<PlanItem[]>([]);
+  const [activeMapSchedule, setActiveMapSchedule] = useState<CoachSchedule | null>(null);
+  const [mapOrigin, setMapOrigin] = useState<{ lat: number; lng: number } | null>(null);
 
   const selectedTournament = useMemo(
     () => tournaments.find((t) => t.id === selectedTournamentId) || null,
@@ -125,6 +187,7 @@ export default function BirdDogPage() {
 
   const games = selectedTournament?.games || [];
   const players = useMemo(() => uniquePlayers(games), [games]);
+  const playersById = useMemo(() => new Map(players.map((p) => [p.id, p])), [players]);
 
   const [watchlist, setWatchlist] = useState<string[]>([]);
   const watchlistSet = useMemo(() => new Set(watchlist), [watchlist]);
@@ -138,6 +201,7 @@ export default function BirdDogPage() {
   const [recorderState, setRecorderState] = useState<RecorderState>("idle");
   const [transcript, setTranscript] = useState("");
   const [speechSupported, setSpeechSupported] = useState(false);
+  const [tournamentViewTitle, setTournamentViewTitle] = useState("");
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
@@ -186,6 +250,8 @@ export default function BirdDogPage() {
       setCompanies(data.companies || ["PG", "PBR"]);
       await loadCompanyData("PG");
       await fetchJobs();
+      await fetchInventory();
+      await fetchSchedules();
     }
     void boot();
     return () => {
@@ -198,6 +264,16 @@ export default function BirdDogPage() {
       || (window as unknown as { webkitSpeechRecognition?: BrowserSpeechConstructor }).webkitSpeechRecognition;
     setSpeechSupported(Boolean(ctor));
   }, []);
+
+  useEffect(() => {
+    if (!players.length) {
+      setDesiredPlayerId("");
+      return;
+    }
+    if (!desiredPlayerId || !playersById.has(desiredPlayerId)) {
+      setDesiredPlayerId(players[0].id);
+    }
+  }, [players, playersById, desiredPlayerId]);
 
   useEffect(() => {
     if (!user) return;
@@ -234,6 +310,14 @@ export default function BirdDogPage() {
     }, 15000);
     return () => window.clearInterval(id);
   }, [online, user, notes, pulses, syncing]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("payment") === "success") {
+      void fetchInventory();
+      setActiveTab("tournaments");
+    }
+  }, []);
 
   async function loadCompanyData(nextCompany: "PG" | "PBR") {
     setLoadingHarvest(true);
@@ -278,17 +362,187 @@ export default function BirdDogPage() {
     }
   }
 
-  async function queueHarvestJob() {
-    if (!jobHint.trim()) return;
+  async function fetchInventory() {
+    const res = await fetch("/api/inventory");
+    if (!res.ok) return;
+    const data = await res.json();
+    setSubscribed(Boolean(data.subscribed));
+    setInventory(data.inventory || []);
+  }
+
+  function hydrateMySchedule(data: CoachSchedule[]) {
+    const mine = data.find((item) => item.user_id === user?.userId);
+    if (!mine) return;
+
+    setScheduleForm({
+      flightSource: mine.flight_source || "",
+      flightDestination: mine.flight_destination || "",
+      flightArrivalTime: toInputDateTime(mine.flight_arrival_time),
+      hotelName: mine.hotel_name || "",
+      notes: mine.notes || ""
+    });
+    setDesiredPlayers(mine.desired_players || []);
+    setMyGeneratedPlan(mine.generated_plan || []);
+  }
+
+  async function fetchSchedules() {
+    const res = await fetch("/api/schedules");
+    if (!res.ok) return;
+    const data = await res.json();
+    const scheduleList: CoachSchedule[] = data.schedules || [];
+    setSchedules(scheduleList);
+    hydrateMySchedule(scheduleList);
+  }
+
+  function createGeneratedPlan(): PlanItem[] {
+    const plan: PlanItem[] = [];
+    const targetIds = desiredPlayers.length ? new Set(desiredPlayers.map((item) => item.playerId)) : watchlistSet;
+
+    if (scheduleForm.flightArrivalTime) {
+      plan.push({
+        at: new Date(scheduleForm.flightArrivalTime).toISOString(),
+        title: "Arrive",
+        detail: `${scheduleForm.flightSource || "Unknown source"} -> ${scheduleForm.flightDestination || "Unknown destination"}`
+      });
+    }
+
+    const stops = buildPath(games, targetIds);
+    if (stops.length) {
+      stops.forEach((stop) => {
+        plan.push({
+          at: stop.at,
+          title: `Go to ${stop.field}`,
+          detail: `${stop.watchlistCount} player(s): ${stop.players.join(", ")} · walk ${stop.walkFromPrevMinutes} min`
+        });
+      });
+    } else {
+      games.slice(0, 5).forEach((game) => {
+        plan.push({
+          at: game.startTime,
+          title: `Scout ${game.field}`,
+          detail: `${game.homeTeam} vs ${game.awayTeam}`
+        });
+      });
+    }
+
+    if (scheduleForm.hotelName) {
+      const lastTime = plan[plan.length - 1]?.at || new Date().toISOString();
+      plan.push({
+        at: lastTime,
+        title: "Return to hotel",
+        detail: scheduleForm.hotelName
+      });
+    }
+
+    return plan;
+  }
+
+  async function saveSchedule(generatedPlan?: PlanItem[]) {
+    const payload = {
+      ...scheduleForm,
+      desiredPlayers,
+      generatedPlan: generatedPlan ?? myGeneratedPlan
+    };
+
+    const res = await fetch("/api/schedules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) return;
+
+    const data = await res.json();
+    const scheduleList: CoachSchedule[] = data.schedules || [];
+    setSchedules(scheduleList);
+    hydrateMySchedule(scheduleList);
+  }
+
+  async function generateAndSaveSchedule() {
+    const generatedPlan = createGeneratedPlan();
+    setMyGeneratedPlan(generatedPlan);
+    await saveSchedule(generatedPlan);
+  }
+
+  function editSchedule(item: CoachSchedule) {
+    setScheduleForm({
+      flightSource: item.flight_source || "",
+      flightDestination: item.flight_destination || "",
+      flightArrivalTime: toInputDateTime(item.flight_arrival_time),
+      hotelName: item.hotel_name || "",
+      notes: item.notes || ""
+    });
+    setDesiredPlayers(item.desired_players || []);
+    setMyGeneratedPlan(item.generated_plan || []);
+  }
+
+  async function startMapForSchedule(schedule: CoachSchedule) {
+    setActiveTab("schedule");
+    setActiveMapSchedule(schedule);
+
+    if (!navigator.geolocation) {
+      setMapOrigin(null);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setMapOrigin({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude
+        });
+      },
+      () => setMapOrigin(null),
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  }
+
+  const mapEmbedSrc = useMemo(() => {
+    if (!MAP_KEY || !activeMapSchedule?.hotel_name) return "";
+    const destination = encodeURIComponent(activeMapSchedule.hotel_name);
+    const origin = mapOrigin ? `${mapOrigin.lat},${mapOrigin.lng}` : "Current+Location";
+    return `https://www.google.com/maps/embed/v1/directions?key=${MAP_KEY}&origin=${origin}&destination=${destination}&mode=driving`;
+  }, [activeMapSchedule, mapOrigin]);
+
+  function redirectToSubscription() {
+    router.push("/subscribe");
+  }
+
+  async function queueHarvestJob(overrideHint?: string, overrideCompany?: "PG" | "PBR") {
+    const effectiveHint = (overrideHint ?? jobHint).trim();
+    const effectiveCompany = overrideCompany ?? company;
+    if (!effectiveHint) return;
+
     const res = await fetch("/api/harvest/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        company,
-        tournamentHint: jobHint.trim()
+        company: effectiveCompany,
+        tournamentHint: effectiveHint
       })
     });
+
     if (!res.ok) return;
+  }
+
+  async function useUnlockedTournament(item: InventoryTournament) {
+    setCompany(item.company);
+    setJobHint(item.name);
+    await queueHarvestJob(item.name, item.company);
+    await loadCompanyData(item.company);
+    const res = await fetch(`/api/harvest?company=${item.company}`);
+    if (res.ok) {
+      const data = await res.json();
+      const matched = (data?.dataset?.tournaments || []).find((t: Tournament) => t.name.toLowerCase() === item.name.toLowerCase());
+      if (matched) {
+        await loadTournamentDetails(item.company, matched.id);
+        setTournamentViewTitle(matched.name);
+      } else {
+        setTournamentViewTitle(item.name);
+      }
+    } else {
+      setTournamentViewTitle(item.name);
+    }
+    setActiveTab("schedule");
     await fetchJobs();
   }
 
@@ -317,6 +571,20 @@ export default function BirdDogPage() {
 
   function toggleWatch(playerId: string) {
     setWatchlist((prev) => (prev.includes(playerId) ? prev.filter((id) => id !== playerId) : [...prev, playerId]));
+  }
+
+  function addDesiredPlayer() {
+    if (!desiredPlayerId) return;
+    const match = playersById.get(desiredPlayerId);
+    if (!match) return;
+    setDesiredPlayers((prev) => {
+      if (prev.some((item) => item.playerId === desiredPlayerId)) return prev;
+      return [...prev, { playerId: desiredPlayerId, name: match.name, team: match.school || "Unknown Team" }];
+    });
+  }
+
+  function removeDesiredPlayer(playerId: string) {
+    setDesiredPlayers((prev) => prev.filter((item) => item.playerId !== playerId));
   }
 
   function sendPulse() {
@@ -431,6 +699,20 @@ export default function BirdDogPage() {
   }
 
   const itinerary = useMemo(() => buildPath(games, watchlistSet), [games, watchlistSet]);
+  const tournamentPlayerDashboard = useMemo(() => {
+    if (!games.length) return [];
+    return players.map((player) => {
+      const playerGameIds = games.filter((g) => g.players.some((p) => p.id === player.id)).map((g) => g.id);
+      const playerNotes = notes.filter((n) => playerGameIds.includes(n.gameId));
+      return {
+        player,
+        notes: playerNotes
+      };
+    });
+  }, [games, players, notes]);
+  const showTournaments = activeTab === "tournaments";
+  const showSchedule = activeTab === "schedule";
+  const showNotes = activeTab === "notes";
 
   if (authLoading) {
     return <main className="bd-root"><p>Loading session...</p></main>;
@@ -441,9 +723,7 @@ export default function BirdDogPage() {
       <section className="bd-header">
         <div>
           <h1>Project Bird Dog</h1>
-          <p className="muted">
-            {user?.name} ({user?.email}) - {user?.orgName}
-          </p>
+          <p className="muted">{user?.name} ({user?.email}) - {user?.orgName}</p>
           <p className="muted">Status: {online ? "Online" : "Offline"} {syncing ? "| Syncing..." : ""} {lastSyncAt ? `| Last sync ${timeLabel(lastSyncAt)}` : ""}</p>
           {syncError ? <p className="muted">{syncError}</p> : null}
         </div>
@@ -454,19 +734,175 @@ export default function BirdDogPage() {
         </div>
       </section>
 
+      {showSchedule ? (
       <section className="panel grid2">
         <div>
-          <h2>Data Harvester</h2>
+          <h2>Coach Schedule</h2>
+          <label>
+            Flight Source
+            <input value={scheduleForm.flightSource} onChange={(e) => setScheduleForm((p) => ({ ...p, flightSource: e.target.value }))} />
+          </label>
+          <label>
+            Flight Destination
+            <input value={scheduleForm.flightDestination} onChange={(e) => setScheduleForm((p) => ({ ...p, flightDestination: e.target.value }))} />
+          </label>
+          <label>
+            Flight Arrival Time
+            <input type="datetime-local" value={scheduleForm.flightArrivalTime} onChange={(e) => setScheduleForm((p) => ({ ...p, flightArrivalTime: e.target.value }))} />
+          </label>
+          <label>
+            Hotel
+            <input value={scheduleForm.hotelName} onChange={(e) => setScheduleForm((p) => ({ ...p, hotelName: e.target.value }))} />
+          </label>
+          <label>
+            Notes
+            <textarea rows={3} value={scheduleForm.notes} onChange={(e) => setScheduleForm((p) => ({ ...p, notes: e.target.value }))} />
+          </label>
+          <label>
+            Target Player
+            <div className="row wrap">
+              <select value={desiredPlayerId} onChange={(e) => setDesiredPlayerId(e.target.value)}>
+                {players.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name} ({p.school || "Unknown Team"})</option>
+                ))}
+              </select>
+              <button className="secondary" type="button" onClick={addDesiredPlayer}>Add Player</button>
+            </div>
+          </label>
+          {desiredPlayers.length ? (
+            <div className="log-list" style={{ maxHeight: 140, marginTop: 8 }}>
+              {desiredPlayers.map((item) => (
+                <article className="log-card" key={item.playerId}>
+                  <p><strong>{item.name}</strong></p>
+                  <p>Team: {item.team}</p>
+                  <button className="secondary" type="button" onClick={() => removeDesiredPlayer(item.playerId)}>Remove</button>
+                </article>
+              ))}
+            </div>
+          ) : <p className="muted">Add players to guide schedule generation.</p>}
+          <div className="row wrap">
+            <button onClick={() => void saveSchedule()}>Save My Schedule</button>
+            <button className="secondary" onClick={() => void generateAndSaveSchedule()}>Generate Schedule</button>
+            <button className="secondary" onClick={() => void fetchSchedules()}>Refresh</button>
+          </div>
+          {myGeneratedPlan.length ? (
+            <div className="log-list" style={{ maxHeight: 200, marginTop: 10 }}>
+              {myGeneratedPlan.map((item, idx) => (
+                <article key={`${item.at}-${idx}`} className="log-card">
+                  <p><strong>{dateLabel(item.at)} {timeLabel(item.at)}</strong></p>
+                  <p>{item.title}</p>
+                  <p>{item.detail}</p>
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <div>
+          <h2>Team Schedule Board</h2>
+          <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
+          <div className="log-list" style={{ maxHeight: 360 }}>
+            {schedules.length ? schedules.map((item) => (
+              <article key={item.id} className="log-card">
+                <p><strong>{item.coach_name}</strong></p>
+                <p>{item.flight_source || "-"} {"->"} {item.flight_destination || "-"}</p>
+                <p>{item.flight_arrival_time ? new Date(item.flight_arrival_time).toLocaleString() : "No arrival time"}</p>
+                <p>Hotel: {item.hotel_name || "-"}</p>
+                <p>{item.notes || ""}</p>
+                {item.desired_players?.length ? (
+                  <p>
+                    <strong>Targets:</strong> {item.desired_players.map((p) => `${p.name} (${p.team})`).join(", ")}
+                  </p>
+                ) : null}
+                {item.generated_plan?.length ? (
+                  <div>
+                    <p><strong>Generated Plan</strong></p>
+                    {item.generated_plan.map((plan, idx) => (
+                      <p key={`${plan.at}-${idx}`} className="small">{timeLabel(plan.at)} - {plan.title}: {plan.detail}</p>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="row wrap">
+                  {item.user_id === user?.userId ? (
+                    <button className="secondary" onClick={() => editSchedule(item)}>Edit</button>
+                  ) : null}
+                  <button className="secondary" onClick={() => void startMapForSchedule(item)}>Start Map</button>
+                </div>
+              </article>
+            )) : <p className="muted">No schedules shared yet.</p>}
+          </div>
+          <div className="panel" style={{ marginTop: 10 }}>
+            <h3>Tournament Roster</h3>
+            {players.length ? (
+              <div className="table-wrap">
+                <table className="roster-table">
+                  <thead>
+                    <tr>
+                      <th>No.</th>
+                      <th>Name</th>
+                      <th>Pos</th>
+                      <th>School</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {players.map((p, idx) => (
+                      <tr key={p.id}>
+                        <td>{idx + 1}</td>
+                        <td>{p.name}</td>
+                        <td>{p.position}</td>
+                        <td>{p.school}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : <p className="muted">Roster appears after tournament data is loaded.</p>}
+          </div>
+          <div className="panel" style={{ marginTop: 10 }}>
+            <h3>Player Notes Dashboard</h3>
+            <div className="log-list" style={{ maxHeight: 220 }}>
+              {tournamentPlayerDashboard.length ? tournamentPlayerDashboard.map((entry) => (
+                <article key={entry.player.id} className="log-card">
+                  <p><strong>{entry.player.name}</strong> ({entry.player.position})</p>
+                  <p>{entry.player.school}</p>
+                  <p>Notes: {entry.notes.length}</p>
+                  {entry.notes.slice(0, 2).map((note) => (
+                    <p key={note.id} className="small">{timeLabel(note.createdAt)} - {note.transcript}</p>
+                  ))}
+                </article>
+              )) : <p className="muted">No player notes yet for this tournament.</p>}
+            </div>
+          </div>
+        </div>
+      </section>
+      ) : null}
+
+      {showSchedule && activeMapSchedule ? (
+        <section className="panel">
+          <h2>Navigation Map</h2>
+          <p className="muted">Routing to hotel: {activeMapSchedule.hotel_name || "No hotel set"}</p>
+          {!MAP_KEY ? <p className="muted">Set `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` to enable map embed.</p> : null}
+          {MAP_KEY && activeMapSchedule.hotel_name ? (
+            <iframe
+              title="Directions"
+              src={mapEmbedSrc}
+              style={{ width: "100%", height: 320, border: 0, borderRadius: 10 }}
+              loading="lazy"
+              allowFullScreen
+              referrerPolicy="no-referrer-when-downgrade"
+            />
+          ) : null}
+        </section>
+      ) : null}
+
+      {showTournaments ? (
+      <section className="panel grid2">
+        <div>
+          <h2>Tournament Dashboard</h2>
           <div className="row">
             <label>
               Company
-              <select
-                value={company}
-                onChange={(e) => {
-                  const next = e.target.value as "PG" | "PBR";
-                  setCompany(next);
-                }}
-              >
+              <select value={company} onChange={(e) => setCompany(e.target.value as "PG" | "PBR")}>
                 {(companies.length ? companies : ["PG", "PBR"]).map((c) => (
                   <option key={c} value={c}>{c}</option>
                 ))}
@@ -477,13 +913,7 @@ export default function BirdDogPage() {
 
           <label>
             Tournament
-            <select
-              value={selectedTournamentId}
-              onChange={(e) => {
-                const nextTournamentId = e.target.value;
-                void loadTournamentDetails(company, nextTournamentId);
-              }}
-            >
+            <select value={selectedTournamentId} onChange={(e) => void loadTournamentDetails(company, e.target.value)}>
               {tournaments.map((t) => (
                 <option key={t.id} value={t.id}>{t.name} - {t.city} ({dateLabel(t.date)})</option>
               ))}
@@ -495,12 +925,33 @@ export default function BirdDogPage() {
             <button className="secondary" onClick={loadCachedTournament}>Load Offline Cache</button>
             <button className="secondary" onClick={() => void syncNow()}>Force Sync</button>
           </div>
+
+          <div className="panel" style={{ marginTop: 10 }}>
+            <h3>Circuit Inventory</h3>
+            <p className="muted">{subscribed ? "Subscription active: all tournaments unlocked." : "Subscription required: tournaments are locked."}</p>
+            <div className="log-list" style={{ maxHeight: 220 }}>
+              {inventory.length ? inventory.map((item) => (
+                <article key={item.slug} className={`log-card ${item.locked ? "locked-card" : "unlocked-card"}`}>
+                  <p><strong>{item.name}</strong> ({item.season.toUpperCase()} · {item.company})</p>
+                  {item.locked ? (
+                    <button className="secondary" onClick={() => redirectToSubscription()}>
+                      🔒 Subscribe to Unlock
+                    </button>
+                  ) : (
+                    <button className="secondary" onClick={() => void useUnlockedTournament(item)}>Open Tournament</button>
+                  )}
+                </article>
+              )) : <p className="muted">No inventory items found.</p>}
+            </div>
+          </div>
+
           <div className="panel" style={{ marginTop: 10 }}>
             <h3>Harvester Queue</h3>
             <div className="row wrap">
               <input value={jobHint} onChange={(e) => setJobHint(e.target.value)} placeholder="Tournament hint (example: PG Spring Showdown)" />
-              <button className="secondary" onClick={() => void queueHarvestJob()}>Queue Scrape Job</button>
+              <button className="secondary" onClick={() => void queueHarvestJob().then(fetchJobs)}>Queue Scrape Job</button>
               <button className="secondary" onClick={() => void fetchJobs()}>{loadingJobs ? "Loading..." : "Refresh Jobs"}</button>
+              <button className="secondary" onClick={() => void fetchInventory()}>Refresh Inventory</button>
             </div>
             <div className="log-list" style={{ maxHeight: 180 }}>
               {jobs.length ? jobs.map((job) => (
@@ -529,7 +980,9 @@ export default function BirdDogPage() {
           </div>
         </div>
       </section>
+      ) : null}
 
+      {showTournaments ? (
       <section className="panel">
         <h2>Active Watchlist</h2>
         <div className="player-grid">
@@ -545,7 +998,9 @@ export default function BirdDogPage() {
           })}
         </div>
       </section>
+      ) : null}
 
+      {showNotes ? (
       <section className="panel grid2">
         <div>
           <h2>Hands-Free Notes</h2>
@@ -576,7 +1031,9 @@ export default function BirdDogPage() {
           </ol>
         </div>
       </section>
+      ) : null}
 
+      {showNotes ? (
       <section className="panel grid2">
         <div>
           <h2>Audio + Transcript Archive</h2>
@@ -603,6 +1060,13 @@ export default function BirdDogPage() {
           </div>
         </div>
       </section>
+      ) : null}
+
+      <nav className="bottom-tabs">
+        <button className={activeTab === "tournaments" ? "active" : ""} onClick={() => setActiveTab("tournaments")} type="button">Tournaments</button>
+        <button className={activeTab === "schedule" ? "active" : ""} onClick={() => setActiveTab("schedule")} type="button">Schedule</button>
+        <button className={activeTab === "notes" ? "active" : ""} onClick={() => setActiveTab("notes")} type="button">Notes</button>
+      </nav>
     </main>
   );
 }
