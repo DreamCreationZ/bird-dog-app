@@ -73,6 +73,33 @@ async function upsertTournament(orgId, company, tournament) {
 
   const tournamentId = tournamentRows[0].id;
 
+  await supabaseRequest("harvested_rosters", {
+    method: "DELETE",
+    query: {
+      org_id: `eq.${orgId}`,
+      tournament_id: `eq.${tournamentId}`
+    },
+    prefer: "return=minimal"
+  }).catch(() => undefined);
+
+  await supabaseRequest("harvested_games", {
+    method: "DELETE",
+    query: {
+      org_id: `eq.${orgId}`,
+      tournament_id: `eq.${tournamentId}`
+    },
+    prefer: "return=minimal"
+  }).catch(() => undefined);
+
+  await supabaseRequest("harvested_participating_teams", {
+    method: "DELETE",
+    query: {
+      org_id: `eq.${orgId}`,
+      tournament_id: `eq.${tournamentId}`
+    },
+    prefer: "return=minimal"
+  }).catch(() => undefined);
+
   if (Array.isArray(tournament.teams) && tournament.teams.length) {
     await supabaseRequest("harvested_participating_teams", {
       method: "POST",

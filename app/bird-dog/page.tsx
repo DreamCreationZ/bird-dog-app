@@ -73,6 +73,17 @@ type CoachSchedule = {
   updated_at: string;
 };
 
+type PlaceSuggestion = {
+  label: string;
+  placeId: string;
+};
+
+type HotelSuggestion = {
+  name: string;
+  address: string;
+  placeId: string;
+};
+
 const CACHE_KEY = "bird_dog_tournament_cache";
 const MAP_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
 const PREVIEW_UNLOCK_ALL = process.env.NEXT_PUBLIC_BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
@@ -186,6 +197,9 @@ export default function BirdDogPage() {
     hotelName: "",
     notes: ""
   });
+  const [sourceSuggestions, setSourceSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [destinationSuggestions, setDestinationSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [hotelSuggestions, setHotelSuggestions] = useState<HotelSuggestion[]>([]);
   const [desiredPlayers, setDesiredPlayers] = useState<DesiredPlayer[]>([]);
   const [desiredPlayerId, setDesiredPlayerId] = useState("");
   const [myGeneratedPlan, setMyGeneratedPlan] = useState<PlanItem[]>([]);
@@ -196,6 +210,11 @@ export default function BirdDogPage() {
     () => tournaments.find((t) => t.id === selectedTournamentId) || null,
     [tournaments, selectedTournamentId]
   );
+  const selectedInventory = useMemo(
+    () => inventory.find((item) => item.slug === selectedInventorySlug) || null,
+    [inventory, selectedInventorySlug]
+  );
+  const canAccessLockedPages = PREVIEW_UNLOCK_ALL || Boolean(selectedInventory && !selectedInventory.locked);
 
   const games = selectedTournament?.games || [];
   const players = useMemo(() => uniquePlayers(games), [games]);
@@ -286,6 +305,53 @@ export default function BirdDogPage() {
       setDesiredPlayerId(players[0].id);
     }
   }, [players, playersById, desiredPlayerId]);
+
+  useEffect(() => {
+    if (!canAccessLockedPages) {
+      setSourceSuggestions([]);
+      setDestinationSuggestions([]);
+      setHotelSuggestions([]);
+      return;
+    }
+    const sourceQuery = scheduleForm.flightSource.trim();
+    if (sourceQuery.length < 2) {
+      setSourceSuggestions([]);
+      return;
+    }
+    const id = window.setTimeout(() => {
+      void fetch(`/api/maps/autocomplete?q=${encodeURIComponent(sourceQuery)}`)
+        .then((res) => (res.ok ? res.json() : { suggestions: [] }))
+        .then((data) => setSourceSuggestions(Array.isArray(data?.suggestions) ? data.suggestions : []))
+        .catch(() => setSourceSuggestions([]));
+    }, 280);
+    return () => window.clearTimeout(id);
+  }, [scheduleForm.flightSource, canAccessLockedPages]);
+
+  useEffect(() => {
+    if (!canAccessLockedPages) {
+      setDestinationSuggestions([]);
+      setHotelSuggestions([]);
+      return;
+    }
+    const destinationQuery = scheduleForm.flightDestination.trim();
+    if (destinationQuery.length < 2) {
+      setDestinationSuggestions([]);
+      setHotelSuggestions([]);
+      return;
+    }
+    const id = window.setTimeout(() => {
+      void fetch(`/api/maps/autocomplete?q=${encodeURIComponent(destinationQuery)}`)
+        .then((res) => (res.ok ? res.json() : { suggestions: [] }))
+        .then((data) => setDestinationSuggestions(Array.isArray(data?.suggestions) ? data.suggestions : []))
+        .catch(() => setDestinationSuggestions([]));
+
+      void fetch(`/api/maps/hotels?destination=${encodeURIComponent(destinationQuery)}`)
+        .then((res) => (res.ok ? res.json() : { hotels: [] }))
+        .then((data) => setHotelSuggestions(Array.isArray(data?.hotels) ? data.hotels : []))
+        .catch(() => setHotelSuggestions([]));
+    }, 320);
+    return () => window.clearTimeout(id);
+  }, [scheduleForm.flightDestination, canAccessLockedPages]);
 
   useEffect(() => {
     if (!user) return;
@@ -750,11 +816,6 @@ export default function BirdDogPage() {
   }
 
   const itinerary = useMemo(() => buildPath(games, watchlistSet), [games, watchlistSet]);
-  const selectedInventory = useMemo(
-    () => inventory.find((item) => item.slug === selectedInventorySlug) || null,
-    [inventory, selectedInventorySlug]
-  );
-  const canAccessLockedPages = PREVIEW_UNLOCK_ALL || Boolean(selectedInventory && !selectedInventory.locked);
   const tournamentPlayerDashboard = useMemo(() => {
     if (!games.length) return [];
     return players.map((player) => {
@@ -804,11 +865,31 @@ export default function BirdDogPage() {
           <h2>Coach Schedule</h2>
           <label>
             Flight Source
-            <input value={scheduleForm.flightSource} onChange={(e) => setScheduleForm((p) => ({ ...p, flightSource: e.target.value }))} />
+            <input
+              list="flight-source-suggestions"
+              value={scheduleForm.flightSource}
+              onChange={(e) => setScheduleForm((p) => ({ ...p, flightSource: e.target.value }))}
+              placeholder="Type city or airport (example: Rotterdam)"
+            />
+            <datalist id="flight-source-suggestions">
+              {sourceSuggestions.map((option) => (
+                <option key={option.placeId || option.label} value={option.label} />
+              ))}
+            </datalist>
           </label>
           <label>
             Flight Destination
-            <input value={scheduleForm.flightDestination} onChange={(e) => setScheduleForm((p) => ({ ...p, flightDestination: e.target.value }))} />
+            <input
+              list="flight-destination-suggestions"
+              value={scheduleForm.flightDestination}
+              onChange={(e) => setScheduleForm((p) => ({ ...p, flightDestination: e.target.value }))}
+              placeholder="Type city or airport (example: Bangalore)"
+            />
+            <datalist id="flight-destination-suggestions">
+              {destinationSuggestions.map((option) => (
+                <option key={option.placeId || option.label} value={option.label} />
+              ))}
+            </datalist>
           </label>
           <label>
             Flight Arrival Time
@@ -816,8 +897,38 @@ export default function BirdDogPage() {
           </label>
           <label>
             Hotel
-            <input value={scheduleForm.hotelName} onChange={(e) => setScheduleForm((p) => ({ ...p, hotelName: e.target.value }))} />
+            <input
+              list="hotel-suggestions"
+              value={scheduleForm.hotelName}
+              onChange={(e) => setScheduleForm((p) => ({ ...p, hotelName: e.target.value }))}
+              placeholder="Select hotel or type custom name"
+            />
+            <datalist id="hotel-suggestions">
+              {hotelSuggestions.map((hotel) => (
+                <option key={hotel.placeId || `${hotel.name}-${hotel.address}`} value={hotel.name} />
+              ))}
+            </datalist>
           </label>
+          {hotelSuggestions.length ? (
+            <div className="panel" style={{ padding: 10 }}>
+              <p><strong>Suggested Hotels</strong></p>
+              <div className="log-list" style={{ maxHeight: 140 }}>
+                {hotelSuggestions.map((hotel) => {
+                  const checked = scheduleForm.hotelName === hotel.name;
+                  return (
+                    <label key={hotel.placeId || `${hotel.name}-${hotel.address}`} className="row" style={{ alignItems: "center", gap: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => setScheduleForm((p) => ({ ...p, hotelName: checked ? "" : hotel.name }))}
+                      />
+                      <span>{hotel.name} - {hotel.address}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
           <label>
             Notes
             <textarea rows={3} value={scheduleForm.notes} onChange={(e) => setScheduleForm((p) => ({ ...p, notes: e.target.value }))} />

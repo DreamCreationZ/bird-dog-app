@@ -35,6 +35,16 @@ function parseDate(html) {
 }
 
 function parseGames(html) {
+  const blockedTokens = [
+    "sign in",
+    "create account",
+    "valid email format",
+    "forgot password",
+    "not a member yet",
+    "players",
+    "teams",
+    "events"
+  ];
   const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => m[1]);
   const games = [];
 
@@ -43,6 +53,7 @@ function parseGames(html) {
     if (cols.length < 4) continue;
 
     const text = cols.join(" | ").toLowerCase();
+    if (blockedTokens.some((token) => text.includes(token))) continue;
     if (!text.includes("vs") && !text.includes("field") && !text.includes(":") && !text.includes("am") && !text.includes("pm")) continue;
 
     const timeCol = cols.find((c) => /\d{1,2}:\d{2}\s?(am|pm)/i.test(c)) || cols[0];
@@ -73,6 +84,13 @@ function findFirstEventUrl(html) {
   return `https://www.perfectgame.org${href.startsWith("/") ? "" : "/"}${href}`;
 }
 
+function getParticipatingTeamsTableHtml(html) {
+  const sectionMatch = html.match(/participating teams[\s\S]{0,5000}?<table[^>]*>([\s\S]*?)<\/table>/i);
+  if (sectionMatch) return sectionMatch[1];
+  const fallbackTable = html.match(/<table[^>]*>([\s\S]*?)<\/table>/i);
+  return fallbackTable ? fallbackTable[1] : html;
+}
+
 function parseParticipatingTeams(html) {
   const teams = [];
   const blockedTokens = [
@@ -86,7 +104,8 @@ function parseParticipatingTeams(html) {
     "events"
   ];
   const looksLikeFromCell = (value) => /^[A-Za-z .'-]+,\s*[A-Z]{2}$/.test(value.trim());
-  const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => m[1]);
+  const tableHtml = getParticipatingTeamsTableHtml(html);
+  const rows = [...tableHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => m[1]);
   for (const row of rows) {
     const colsRaw = [...row.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((m) => m[1]);
     const cols = colsRaw.map((cell) => cleanText(cell));
