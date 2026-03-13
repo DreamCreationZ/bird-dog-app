@@ -88,6 +88,14 @@ type HotelSuggestion = {
   placeId: string;
 };
 
+type OptimizedStop = ItineraryStop & {
+  gameStartAt: string;
+  gameEndAt: string;
+  arrivalAt: string;
+  coveredPlayerIds: string[];
+  lateByMinutes: number;
+};
+
 const CACHE_KEY = "bird_dog_tournament_cache";
 const PREVIEW_UNLOCK_ALL = process.env.NEXT_PUBLIC_BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
 
@@ -159,33 +167,117 @@ function uniquePlayers(games: Game[]): Player[] {
 }
 
 function buildPath(games: Game[], watchlistIds: Set<string>): ItineraryStop[] {
-  const filtered = games
+  const GAME_MINUTES = 120;
+  const MIN_VIEW_MINUTES = 25;
+  const PRE_GAME_BUFFER_MINUTES = 10;
+  const DEFAULT_TRAVEL_MINUTES = 12;
+
+  const candidates = games
     .map((game) => {
       const targets = game.players.filter((p) => watchlistIds.has(p.id));
       if (!targets.length) return null;
+      const startMs = new Date(game.startTime).getTime();
+      const endMs = startMs + GAME_MINUTES * 60 * 1000;
       return {
         game,
-        stop: {
-          gameId: game.id,
-          field: game.field,
-          at: game.startTime,
-          watchlistCount: targets.length,
-          players: targets.map((p) => p.name),
-          walkFromPrevMinutes: 0
-        }
+        targetPlayers: targets,
+        targetIds: targets.map((p) => p.id),
+        startMs,
+        endMs
       };
     })
-    .filter((item): item is { game: Game; stop: ItineraryStop } => Boolean(item))
-    .sort((a, b) => new Date(a.stop.at).getTime() - new Date(b.stop.at).getTime());
+    .filter((item): item is {
+      game: Game;
+      targetPlayers: Player[];
+      targetIds: string[];
+      startMs: number;
+      endMs: number;
+    } => Boolean(item))
+    .sort((a, b) => a.startMs - b.startMs);
 
-  return filtered.map((item, index) => {
-    if (index === 0) return item.stop;
-    const prev = filtered[index - 1].game.fieldLocation;
-    const curr = item.game.fieldLocation;
-    const distance = Math.hypot(curr.x - prev.x, curr.y - prev.y);
-    const walkFromPrevMinutes = Math.max(2, Math.round(distance * 4));
-    return { ...item.stop, walkFromPrevMinutes };
-  });
+  if (!candidates.length) return [];
+
+  const usedGameIds = new Set<string>();
+  const coveredPlayerIds = new Set<string>();
+  const result: OptimizedStop[] = [];
+
+  let currentEndMs = 0;
+  let prevField: Game["fieldLocation"] | null = null;
+
+  const travelMinutesBetween = (from: Game["fieldLocation"] | null, to: Game["fieldLocation"]) => {
+    if (!from) return 0;
+    const hasValid =
+      Number.isFinite(from.x) && Number.isFinite(from.y) && Number.isFinite(to.x) && Number.isFinite(to.y);
+    if (!hasValid) return DEFAULT_TRAVEL_MINUTES;
+    const distance = Math.hypot(to.x - from.x, to.y - from.y);
+    return Math.max(2, Math.round(distance * 4));
+  };
+
+  while (usedGameIds.size < candidates.length) {
+    let best: OptimizedStop | null = null;
+    let bestScore = -Infinity;
+
+    for (const candidate of candidates) {
+      if (usedGameIds.has(candidate.game.id)) continue;
+
+      const travelMins = travelMinutesBetween(prevField, candidate.game.fieldLocation);
+      const earliestArrivalMs = currentEndMs
+        ? currentEndMs + (travelMins + PRE_GAME_BUFFER_MINUTES) * 60 * 1000
+        : candidate.startMs;
+      const arrivalMs = Math.max(candidate.startMs, earliestArrivalMs);
+      const remainingMinutes = Math.floor((candidate.endMs - arrivalMs) / (60 * 1000));
+      if (remainingMinutes < MIN_VIEW_MINUTES) continue;
+
+      const lateByMinutes = Math.max(0, Math.floor((arrivalMs - candidate.startMs) / (60 * 1000)));
+      const newCoverage = candidate.targetIds.filter((id) => !coveredPlayerIds.has(id)).length;
+      const totalCoverage = candidate.targetIds.length;
+      const waitMinutes = Math.max(0, Math.floor((candidate.startMs - earliestArrivalMs) / (60 * 1000)));
+
+      // Weighted score favors new target coverage, then total targets,
+      // while penalizing long travel, wait, and late arrival.
+      const score =
+        newCoverage * 20
+        + totalCoverage * 6
+        - travelMins * 0.8
+        - waitMinutes * 0.2
+        - lateByMinutes * 1.2;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = {
+          gameId: candidate.game.id,
+          field: candidate.game.field,
+          at: new Date(arrivalMs).toISOString(),
+          watchlistCount: totalCoverage,
+          players: candidate.targetPlayers.map((p) => p.name),
+          walkFromPrevMinutes: travelMins,
+          gameStartAt: new Date(candidate.startMs).toISOString(),
+          gameEndAt: new Date(candidate.endMs).toISOString(),
+          arrivalAt: new Date(arrivalMs).toISOString(),
+          coveredPlayerIds: candidate.targetIds,
+          lateByMinutes
+        };
+      }
+    }
+
+    if (!best) break;
+
+    usedGameIds.add(best.gameId);
+    best.coveredPlayerIds.forEach((id) => coveredPlayerIds.add(id));
+    currentEndMs = new Date(best.gameEndAt).getTime();
+    const chosen = candidates.find((c) => c.game.id === best.gameId);
+    prevField = chosen?.game.fieldLocation || null;
+    result.push(best);
+  }
+
+  return result.map((item) => ({
+    gameId: item.gameId,
+    field: item.field,
+    at: item.at,
+    watchlistCount: item.watchlistCount,
+    players: item.players,
+    walkFromPrevMinutes: item.walkFromPrevMinutes
+  }));
 }
 
 async function blobToDataUrl(blob: Blob): Promise<string> {
