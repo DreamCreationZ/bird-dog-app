@@ -138,6 +138,16 @@ function tournamentIconByName(name: string) {
   return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupEventLogo_PG_LOGO_EVENT.png";
 }
 
+function tournamentDateBadge(name: string) {
+  const low = name.toLowerCase();
+  if (low.includes("underclass world")) return "Oct 1-5";
+  if (low.includes("freshman world")) return "Oct 8-12";
+  if (low.includes("wwba world championship") && !low.includes("freshman") && !low.includes("underclass")) return "Oct 8-12";
+  if (low.includes("13u & 14u world")) return "Oct 16-19";
+  if (low.includes("sophomore world")) return "Sep 24-28";
+  return "";
+}
+
 function uniquePlayers(games: Game[]): Player[] {
   const map = new Map<string, Player>();
   games.forEach((g) => g.players.forEach((p) => map.set(p.id, p)));
@@ -1152,6 +1162,7 @@ export default function BirdDogPage() {
                   void useUnlockedTournament(item);
                 }}
               >
+                {tournamentDateBadge(item.name) ? <p className="tile-date">{tournamentDateBadge(item.name)}</p> : null}
                 <img className="tile-icon" src={tournamentIconByName(item.name)} alt={item.name} />
                 <p className="tile-title"><strong>{item.name}</strong></p>
                 <p className="muted">{item.season.toUpperCase()} · {item.company}</p>

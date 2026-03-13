@@ -227,6 +227,12 @@
   min-height: 38px;
 }
 
+.bd-root .tile-date {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+
 .bd-root .muted {
   color: #4f4a3d;
 }
