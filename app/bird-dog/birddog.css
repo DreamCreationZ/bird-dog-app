@@ -10,6 +10,7 @@
   margin: 0 auto;
   padding: 10px 10px 78px;
   background: var(--bd-bg);
+  background-image: var(--bd-bg-image, none);
   min-height: 100vh;
   color: var(--bd-ink);
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;

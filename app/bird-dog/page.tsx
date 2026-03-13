@@ -106,16 +106,46 @@ type ThemePreset = {
   primary: string;
   accent: string;
   bg: string;
+  bgImage?: string;
   panel: string;
   ink: string;
   line: string;
 };
 
 const THEME_PRESETS: ThemePreset[] = [
-  { id: "field", label: "Field", primary: "#1f3a5f", accent: "#d7a316", bg: "#f3f0e7", panel: "#fffdf8", ink: "#0f0f0f", line: "#d8d2c4" },
-  { id: "mint", label: "Mint", primary: "#0f4f4f", accent: "#2ca77f", bg: "#eef7f3", panel: "#fcfffd", ink: "#0f1f1c", line: "#c8ddd4" },
-  { id: "sunset", label: "Sunset", primary: "#5a2f1f", accent: "#e17f32", bg: "#f8efe8", panel: "#fffaf6", ink: "#1d130f", line: "#ddc9ba" },
-  { id: "night", label: "Night", primary: "#1d2f5e", accent: "#6aa8ff", bg: "#eef2fb", panel: "#f9fbff", ink: "#101621", line: "#ccd7ef" }
+  {
+    id: "light",
+    label: "Light",
+    primary: "#1f3a5f",
+    accent: "#d7a316",
+    bg: "#f8f6ef",
+    bgImage: "linear-gradient(180deg, #fffef8 0%, #f3efe3 100%)",
+    panel: "#fffdf8",
+    ink: "#111111",
+    line: "#d8d2c4"
+  },
+  {
+    id: "flower",
+    label: "Flower",
+    primary: "#8f2d68",
+    accent: "#ff7aa2",
+    bg: "#fff1f7",
+    bgImage: "radial-gradient(circle at 12% 18%, rgba(255,170,204,0.45) 0%, transparent 28%), radial-gradient(circle at 82% 26%, rgba(255,214,153,0.35) 0%, transparent 22%), radial-gradient(circle at 24% 82%, rgba(204,153,255,0.30) 0%, transparent 24%), linear-gradient(180deg, #fff6fb 0%, #ffeef6 100%)",
+    panel: "#fff9fc",
+    ink: "#2b0f1f",
+    line: "#e8bfd3"
+  },
+  {
+    id: "dark",
+    label: "Dark",
+    primary: "#0f172a",
+    accent: "#38bdf8",
+    bg: "#0b1020",
+    bgImage: "linear-gradient(180deg, #111827 0%, #020617 100%)",
+    panel: "#111827",
+    ink: "#e5e7eb",
+    line: "#334155"
+  }
 ];
 
 function timeLabel(iso: string) {
@@ -327,7 +357,7 @@ export default function BirdDogPage() {
   const [authLoading, setAuthLoading] = useState(true);
 
   const brand = useMemo(() => getOrgByEmail(user?.email || ""), [user?.email]);
-  const [themeId, setThemeId] = useState("field");
+  const [themeId, setThemeId] = useState("light");
   const activeTheme = useMemo(
     () => THEME_PRESETS.find((theme) => theme.id === themeId) || THEME_PRESETS[0],
     [themeId]
@@ -1168,6 +1198,7 @@ export default function BirdDogPage() {
         ["--org-primary" as string]: activeTheme.primary || brand.primary,
         ["--org-accent" as string]: activeTheme.accent || brand.accent,
         ["--bd-bg" as string]: activeTheme.bg,
+        ["--bd-bg-image" as string]: activeTheme.bgImage || "none",
         ["--bd-panel" as string]: activeTheme.panel,
         ["--bd-ink" as string]: activeTheme.ink,
         ["--bd-line" as string]: activeTheme.line
