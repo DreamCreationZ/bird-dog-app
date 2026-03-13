@@ -44,6 +44,7 @@ type InventoryTournament = {
   season: "summer" | "fall";
   company: "PG" | "PBR";
   locked: boolean;
+  harvestHint?: string;
 };
 
 type PlanItem = {
@@ -74,6 +75,7 @@ type CoachSchedule = {
 
 const CACHE_KEY = "bird_dog_tournament_cache";
 const MAP_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
+const PREVIEW_UNLOCK_ALL = process.env.NEXT_PUBLIC_BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
 
 function timeLabel(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -164,6 +166,8 @@ export default function BirdDogPage() {
 
   const [inventory, setInventory] = useState<InventoryTournament[]>([]);
   const [subscribed, setSubscribed] = useState(false);
+  const [unlockingSlug, setUnlockingSlug] = useState("");
+  const [selectedInventorySlug, setSelectedInventorySlug] = useState("");
   const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes">("tournaments");
 
   const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
@@ -503,11 +507,28 @@ export default function BirdDogPage() {
     return `https://www.google.com/maps/embed/v1/directions?key=${MAP_KEY}&origin=${origin}&destination=${destination}&mode=driving`;
   }, [activeMapSchedule, mapOrigin]);
 
-  function redirectToSubscription() {
-    router.push("/subscribe");
+  async function openCheckoutForTournament(inventorySlug: string) {
+    setUnlockingSlug(inventorySlug);
+    try {
+      const res = await fetch("/api/payments/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inventorySlug, returnTo: "/bird-dog" })
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.checkoutUrl) {
+        window.open(data.checkoutUrl, "_blank", "noopener,noreferrer");
+      }
+      if (data?.alreadyUnlocked) {
+        await fetchInventory();
+      }
+    } finally {
+      setUnlockingSlug("");
+    }
   }
 
-  async function queueHarvestJob(overrideHint?: string, overrideCompany?: "PG" | "PBR") {
+  async function queueHarvestJob(inventorySlug: string, overrideHint?: string, overrideCompany?: "PG" | "PBR") {
     const effectiveHint = (overrideHint ?? jobHint).trim();
     const effectiveCompany = overrideCompany ?? company;
     if (!effectiveHint) return;
@@ -517,7 +538,8 @@ export default function BirdDogPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         company: effectiveCompany,
-        tournamentHint: effectiveHint
+        tournamentHint: effectiveHint,
+        inventorySlug
       })
     });
 
@@ -525,9 +547,10 @@ export default function BirdDogPage() {
   }
 
   async function useUnlockedTournament(item: InventoryTournament) {
+    setSelectedInventorySlug(item.slug);
     setCompany(item.company);
     setJobHint(item.name);
-    await queueHarvestJob(item.name, item.company);
+    await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company);
     await loadCompanyData(item.company);
     const res = await fetch(`/api/harvest?company=${item.company}`);
     if (res.ok) {
@@ -699,6 +722,11 @@ export default function BirdDogPage() {
   }
 
   const itinerary = useMemo(() => buildPath(games, watchlistSet), [games, watchlistSet]);
+  const selectedInventory = useMemo(
+    () => inventory.find((item) => item.slug === selectedInventorySlug) || null,
+    [inventory, selectedInventorySlug]
+  );
+  const canAccessLockedPages = PREVIEW_UNLOCK_ALL || Boolean(selectedInventory && !selectedInventory.locked);
   const tournamentPlayerDashboard = useMemo(() => {
     if (!games.length) return [];
     return players.map((player) => {
@@ -711,8 +739,8 @@ export default function BirdDogPage() {
     });
   }, [games, players, notes]);
   const showTournaments = activeTab === "tournaments";
-  const showSchedule = activeTab === "schedule";
-  const showNotes = activeTab === "notes";
+  const showSchedule = activeTab === "schedule" && canAccessLockedPages;
+  const showNotes = activeTab === "notes" && canAccessLockedPages;
 
   if (authLoading) {
     return <main className="bd-root"><p>Loading session...</p></main>;
@@ -733,6 +761,14 @@ export default function BirdDogPage() {
           <button className="secondary" onClick={() => void logout()}>Log Out</button>
         </div>
       </section>
+
+      {!canAccessLockedPages && (activeTab === "schedule" || activeTab === "notes") ? (
+        <section className="panel">
+          <h2>Tournament Locked</h2>
+          <p className="muted">Subscribe and unlock a tournament from the dashboard first. Schedule and Notes become available only after unlock.</p>
+          <button className="secondary" onClick={() => setActiveTab("tournaments")}>Back to Dashboard</button>
+        </section>
+      ) : null}
 
       {showSchedule ? (
       <section className="panel grid2">
@@ -831,48 +867,6 @@ export default function BirdDogPage() {
               </article>
             )) : <p className="muted">No schedules shared yet.</p>}
           </div>
-          <div className="panel" style={{ marginTop: 10 }}>
-            <h3>Tournament Roster</h3>
-            {players.length ? (
-              <div className="table-wrap">
-                <table className="roster-table">
-                  <thead>
-                    <tr>
-                      <th>No.</th>
-                      <th>Name</th>
-                      <th>Pos</th>
-                      <th>School</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {players.map((p, idx) => (
-                      <tr key={p.id}>
-                        <td>{idx + 1}</td>
-                        <td>{p.name}</td>
-                        <td>{p.position}</td>
-                        <td>{p.school}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : <p className="muted">Roster appears after tournament data is loaded.</p>}
-          </div>
-          <div className="panel" style={{ marginTop: 10 }}>
-            <h3>Player Notes Dashboard</h3>
-            <div className="log-list" style={{ maxHeight: 220 }}>
-              {tournamentPlayerDashboard.length ? tournamentPlayerDashboard.map((entry) => (
-                <article key={entry.player.id} className="log-card">
-                  <p><strong>{entry.player.name}</strong> ({entry.player.position})</p>
-                  <p>{entry.player.school}</p>
-                  <p>Notes: {entry.notes.length}</p>
-                  {entry.notes.slice(0, 2).map((note) => (
-                    <p key={note.id} className="small">{timeLabel(note.createdAt)} - {note.transcript}</p>
-                  ))}
-                </article>
-              )) : <p className="muted">No player notes yet for this tournament.</p>}
-            </div>
-          </div>
         </div>
       </section>
       ) : null}
@@ -899,43 +893,47 @@ export default function BirdDogPage() {
       <section className="panel grid2">
         <div>
           <h2>Tournament Dashboard</h2>
-          <div className="row">
-            <label>
-              Company
-              <select value={company} onChange={(e) => setCompany(e.target.value as "PG" | "PBR")}>
-                {(companies.length ? companies : ["PG", "PBR"]).map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-            </label>
-            <button onClick={() => void loadCompanyData(company)}>{loadingHarvest ? "Harvesting..." : "Load"}</button>
-          </div>
+          {canAccessLockedPages ? (
+            <>
+              <div className="row">
+                <label>
+                  Company
+                  <select value={company} onChange={(e) => setCompany(e.target.value as "PG" | "PBR")}>
+                    {(companies.length ? companies : ["PG", "PBR"]).map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </label>
+                <button onClick={() => void loadCompanyData(company)}>{loadingHarvest ? "Harvesting..." : "Load"}</button>
+              </div>
 
-          <label>
-            Tournament
-            <select value={selectedTournamentId} onChange={(e) => void loadTournamentDetails(company, e.target.value)}>
-              {tournaments.map((t) => (
-                <option key={t.id} value={t.id}>{t.name} - {t.city} ({dateLabel(t.date)})</option>
-              ))}
-            </select>
-          </label>
+              <label>
+                Tournament
+                <select value={selectedTournamentId} onChange={(e) => void loadTournamentDetails(company, e.target.value)}>
+                  {tournaments.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name} - {t.city} ({dateLabel(t.date)})</option>
+                  ))}
+                </select>
+              </label>
 
-          <div className="row wrap">
-            <button className="secondary" onClick={cacheTournamentOffline}>Download Offline</button>
-            <button className="secondary" onClick={loadCachedTournament}>Load Offline Cache</button>
-            <button className="secondary" onClick={() => void syncNow()}>Force Sync</button>
-          </div>
+              <div className="row wrap">
+                <button className="secondary" onClick={cacheTournamentOffline}>Download Offline</button>
+                <button className="secondary" onClick={loadCachedTournament}>Load Offline Cache</button>
+                <button className="secondary" onClick={() => void syncNow()}>Force Sync</button>
+              </div>
+            </>
+          ) : null}
 
           <div className="panel" style={{ marginTop: 10 }}>
             <h3>Circuit Inventory</h3>
-            <p className="muted">{subscribed ? "Subscription active: all tournaments unlocked." : "Subscription required: tournaments are locked."}</p>
+            <p className="muted">{subscribed ? "Some tournaments are unlocked for your organization." : "All tournaments are currently locked for your organization."}</p>
             <div className="log-list" style={{ maxHeight: 220 }}>
               {inventory.length ? inventory.map((item) => (
                 <article key={item.slug} className={`log-card ${item.locked ? "locked-card" : "unlocked-card"}`}>
                   <p><strong>{item.name}</strong> ({item.season.toUpperCase()} · {item.company})</p>
                   {item.locked ? (
-                    <button className="secondary" onClick={() => redirectToSubscription()}>
-                      🔒 Subscribe to Unlock
+                    <button className="secondary" disabled={unlockingSlug === item.slug} onClick={() => void openCheckoutForTournament(item.slug)}>
+                      {unlockingSlug === item.slug ? "Opening Checkout..." : "🔒 Subscribe to Unlock"}
                     </button>
                   ) : (
                     <button className="secondary" onClick={() => void useUnlockedTournament(item)}>Open Tournament</button>
@@ -949,7 +947,7 @@ export default function BirdDogPage() {
             <h3>Harvester Queue</h3>
             <div className="row wrap">
               <input value={jobHint} onChange={(e) => setJobHint(e.target.value)} placeholder="Tournament hint (example: PG Spring Showdown)" />
-              <button className="secondary" onClick={() => void queueHarvestJob().then(fetchJobs)}>Queue Scrape Job</button>
+              <button className="secondary" disabled>Queue Scrape Job</button>
               <button className="secondary" onClick={() => void fetchJobs()}>{loadingJobs ? "Loading..." : "Refresh Jobs"}</button>
               <button className="secondary" onClick={() => void fetchInventory()}>Refresh Inventory</button>
             </div>
@@ -966,18 +964,24 @@ export default function BirdDogPage() {
 
         <div>
           <h2>Scout Cockpit</h2>
-          <label>
-            Active Game
-            <select value={selectedGameId} onChange={(e) => setSelectedGameId(e.target.value)}>
-              {games.map((g) => (
-                <option key={g.id} value={g.id}>{timeLabel(g.startTime)} - {g.field} ({g.homeTeam} vs {g.awayTeam})</option>
-              ))}
-            </select>
-          </label>
-          <div className="pulse-box">
-            <input value={pulseMessage} onChange={(e) => setPulseMessage(e.target.value)} placeholder="Pitcher change / rain delay" />
-            <button className="pulse" onClick={sendPulse}>PULSE</button>
-          </div>
+          {canAccessLockedPages ? (
+            <>
+              <label>
+                Active Game
+                <select value={selectedGameId} onChange={(e) => setSelectedGameId(e.target.value)}>
+                  {games.map((g) => (
+                    <option key={g.id} value={g.id}>{timeLabel(g.startTime)} - {g.field} ({g.homeTeam} vs {g.awayTeam})</option>
+                  ))}
+                </select>
+              </label>
+              <div className="pulse-box">
+                <input value={pulseMessage} onChange={(e) => setPulseMessage(e.target.value)} placeholder="Pitcher change / rain delay" />
+                <button className="pulse" onClick={sendPulse}>PULSE</button>
+              </div>
+            </>
+          ) : (
+            <p className="muted">Unlock and open a tournament to activate cockpit controls.</p>
+          )}
         </div>
       </section>
       ) : null}
@@ -996,6 +1000,49 @@ export default function BirdDogPage() {
               </button>
             );
           })}
+        </div>
+      </section>
+      ) : null}
+
+      {showNotes ? (
+      <section className="panel grid2">
+        <div>
+          <h2>Tournament Roster</h2>
+          {players.length ? (
+            <div className="table-wrap">
+              <table className="roster-table">
+                <thead>
+                  <tr>
+                    <th>No.</th>
+                    <th>Name</th>
+                    <th>Pos</th>
+                    <th>School</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {players.map((p, idx) => (
+                    <tr key={p.id}>
+                      <td>{idx + 1}</td>
+                      <td>{p.name}</td>
+                      <td>{p.position}</td>
+                      <td>{p.school}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <p className="muted">Roster appears after tournament data is loaded.</p>}
+        </div>
+        <div>
+          <h2>Tournament Matchups</h2>
+          <div className="log-list" style={{ maxHeight: 220 }}>
+            {games.length ? games.map((g) => (
+              <article key={g.id} className="log-card">
+                <p><strong>{timeLabel(g.startTime)}</strong> · {g.field}</p>
+                <p>{g.homeTeam} vs {g.awayTeam}</p>
+              </article>
+            )) : <p className="muted">No matchups loaded yet. Open an unlocked tournament to ingest PG/PBR details.</p>}
+          </div>
         </div>
       </section>
       ) : null}
@@ -1034,6 +1081,24 @@ export default function BirdDogPage() {
       ) : null}
 
       {showNotes ? (
+      <section className="panel">
+        <h2>Player Notes Dashboard</h2>
+        <div className="log-list" style={{ maxHeight: 260 }}>
+          {tournamentPlayerDashboard.length ? tournamentPlayerDashboard.map((entry) => (
+            <article key={entry.player.id} className="log-card">
+              <p><strong>{entry.player.name}</strong> ({entry.player.position})</p>
+              <p>{entry.player.school}</p>
+              <p>Notes: {entry.notes.length}</p>
+              {entry.notes.slice(0, 3).map((note) => (
+                <p key={note.id} className="small">{timeLabel(note.createdAt)} - {note.transcript}</p>
+              ))}
+            </article>
+          )) : <p className="muted">No player notes yet for this tournament.</p>}
+        </div>
+      </section>
+      ) : null}
+
+      {showNotes ? (
       <section className="panel grid2">
         <div>
           <h2>Audio + Transcript Archive</h2>
@@ -1064,8 +1129,8 @@ export default function BirdDogPage() {
 
       <nav className="bottom-tabs">
         <button className={activeTab === "tournaments" ? "active" : ""} onClick={() => setActiveTab("tournaments")} type="button">Tournaments</button>
-        <button className={activeTab === "schedule" ? "active" : ""} onClick={() => setActiveTab("schedule")} type="button">Schedule</button>
-        <button className={activeTab === "notes" ? "active" : ""} onClick={() => setActiveTab("notes")} type="button">Notes</button>
+        <button className={activeTab === "schedule" ? "active" : ""} onClick={() => setActiveTab("schedule")} type="button" disabled={!canAccessLockedPages}>Schedule</button>
+        <button className={activeTab === "notes" ? "active" : ""} onClick={() => setActiveTab("notes")} type="button" disabled={!canAccessLockedPages}>Notes</button>
       </nav>
     </main>
   );
