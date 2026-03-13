@@ -1179,20 +1179,6 @@ export default function BirdDogPage() {
               </table>
             </div>
           ) : <p className="muted">Participating teams appear after full tournament ingest.</p>}
-          {teamDashboard.length ? (
-            <div className="row wrap">
-              {teamDashboard.map((row) => (
-                <button
-                  key={row.team.id}
-                  className="secondary"
-                  onClick={() => setSelectedTeamName(row.team.name)}
-                  type="button"
-                >
-                  {row.team.name} ({row.teamPlayers.length})
-                </button>
-              ))}
-            </div>
-          ) : null}
         </div>
         <div>
           <h2>Team Players</h2>
