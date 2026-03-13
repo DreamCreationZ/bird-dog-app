@@ -106,6 +106,20 @@ function makeOrgKey(orgId: string, userId: string, key: string) {
   return `bird_dog:${orgId}:${userId}:${key}`;
 }
 
+function toRadians(value: number) {
+  return (value * Math.PI) / 180;
+}
+
+function distanceKm(aLat: number, aLng: number, bLat: number, bLng: number) {
+  const earthRadius = 6371;
+  const dLat = toRadians(bLat - aLat);
+  const dLng = toRadians(bLng - aLng);
+  const h =
+    Math.sin(dLat / 2) ** 2
+    + Math.cos(toRadians(aLat)) * Math.cos(toRadians(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * earthRadius * Math.asin(Math.sqrt(h));
+}
+
 function eventIdFromHint(hint?: string) {
   if (!hint) return "";
   const match = hint.match(/[?&]event=(\d+)/i);
@@ -189,7 +203,7 @@ export default function BirdDogPage() {
   const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes">("tournaments");
 
   const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
-  const [selectedScheduleId, setSelectedScheduleId] = useState("");
+  const [viewingSchedule, setViewingSchedule] = useState<CoachSchedule | null>(null);
   const [scheduleForm, setScheduleForm] = useState({
     flightSource: "",
     flightDestination: "",
@@ -467,9 +481,6 @@ export default function BirdDogPage() {
     const data = await res.json();
     const scheduleList: CoachSchedule[] = data.schedules || [];
     setSchedules(scheduleList);
-    if (scheduleList.length && !scheduleList.find((item) => item.id === selectedScheduleId)) {
-      setSelectedScheduleId(scheduleList[0].id);
-    }
     hydrateMySchedule(scheduleList);
   }
 
@@ -556,9 +567,60 @@ export default function BirdDogPage() {
 
   async function startMapForSchedule(schedule: CoachSchedule) {
     if (!schedule.hotel_name?.trim()) return;
-    const destination = encodeURIComponent(schedule.hotel_name);
-    const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`;
+
+    const openWithDestinationOnly = () => {
+      const destination = encodeURIComponent(schedule.hotel_name as string);
+      const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`;
+      window.open(mapsUrl, "_blank", "noopener,noreferrer");
+    };
+
+    if (!navigator.geolocation) {
+      openWithDestinationOnly();
+      return;
+    }
+
+    const current = await new Promise<{ lat: number; lng: number } | null>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          });
+        },
+        () => resolve(null),
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+    });
+
+    if (!current) {
+      openWithDestinationOnly();
+      return;
+    }
+
+    const geo = await fetch(`/api/maps/geocode?address=${encodeURIComponent(schedule.hotel_name)}`)
+      .then((res) => (res.ok ? res.json() : { location: null }))
+      .catch(() => ({ location: null }));
+
+    const destination = geo?.location as { lat: number; lng: number; label?: string } | null;
+    if (!destination) {
+      openWithDestinationOnly();
+      return;
+    }
+
+    const km = distanceKm(current.lat, current.lng, destination.lat, destination.lng);
+    if (km <= 0.2) {
+      window.alert("Coach is already at destination (within ~200 meters).");
+      const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${destination.lat},${destination.lng}`;
+      window.open(mapsUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    const mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${current.lat},${current.lng}&destination=${destination.lat},${destination.lng}&travelmode=driving`;
     window.open(mapsUrl, "_blank", "noopener,noreferrer");
+  }
+
+  function openScheduleView(schedule: CoachSchedule) {
+    setViewingSchedule(schedule);
   }
 
   async function openCheckoutForTournament(inventorySlug: string) {
@@ -796,10 +858,6 @@ export default function BirdDogPage() {
   }
 
   const itinerary = useMemo(() => buildPath(games, watchlistSet), [games, watchlistSet]);
-  const selectedSchedule = useMemo(
-    () => schedules.find((item) => item.id === selectedScheduleId) || null,
-    [schedules, selectedScheduleId]
-  );
   const tournamentPlayerDashboard = useMemo(() => {
     if (!games.length) return [];
     return players.map((player) => {
@@ -999,47 +1057,59 @@ export default function BirdDogPage() {
                         <td>{item.flight_arrival_time ? new Date(item.flight_arrival_time).toLocaleString() : "-"}</td>
                         <td>{item.hotel_name || "-"}</td>
                         <td>
-                          <button className="secondary" onClick={() => setSelectedScheduleId(item.id)}>View Schedule</button>
+                          <div className="row wrap">
+                            <button className="secondary" onClick={() => openScheduleView(item)}>View Schedule</button>
+                            {item.user_id === user?.userId ? (
+                              <>
+                                <button className="secondary" onClick={() => editSchedule(item)}>Edit</button>
+                                <button className="secondary" onClick={() => void startMapForSchedule(item)}>Start Map</button>
+                              </>
+                            ) : null}
+                          </div>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-              {selectedSchedule ? (
-                <div className="panel" style={{ marginTop: 10 }}>
-                  <h3>{selectedSchedule.coach_name} - Schedule Details</h3>
-                  <p>{selectedSchedule.flight_source || "-"} {"->"} {selectedSchedule.flight_destination || "-"}</p>
-                  <p>{selectedSchedule.flight_arrival_time ? new Date(selectedSchedule.flight_arrival_time).toLocaleString() : "No arrival time"}</p>
-                  <p>Hotel: {selectedSchedule.hotel_name || "-"}</p>
-                  <p>{selectedSchedule.notes || ""}</p>
-                  {selectedSchedule.desired_players?.length ? (
-                    <p>
-                      <strong>Targets:</strong> {selectedSchedule.desired_players.map((p) => `${p.name} (${p.team})`).join(", ")}
-                    </p>
-                  ) : null}
-                  {selectedSchedule.generated_plan?.length ? (
-                    <div>
-                      <p><strong>Generated Plan</strong></p>
-                      {selectedSchedule.generated_plan.map((plan, idx) => (
-                        <p key={`${plan.at}-${idx}`} className="small">{timeLabel(plan.at)} - {plan.title}: {plan.detail}</p>
-                      ))}
-                    </div>
-                  ) : null}
-                  {selectedSchedule.user_id === user?.userId ? (
-                    <div className="row wrap">
-                      <button className="secondary" onClick={() => editSchedule(selectedSchedule)}>Edit</button>
-                      <button className="secondary" onClick={() => void startMapForSchedule(selectedSchedule)}>Start Map</button>
-                    </div>
-                  ) : (
-                    <p className="muted">View only: only this coach can edit or start map for this schedule.</p>
-                  )}
-                </div>
-              ) : null}
             </>
           ) : <p className="muted">No schedules shared yet.</p>}
         </div>
       </section>
+      ) : null}
+
+      {viewingSchedule ? (
+        <section className="panel">
+          <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <h2>{viewingSchedule.coach_name} - Schedule</h2>
+            <button className="secondary" onClick={() => setViewingSchedule(null)}>Close</button>
+          </div>
+          <p>{viewingSchedule.flight_source || "-"} {"->"} {viewingSchedule.flight_destination || "-"}</p>
+          <p>{viewingSchedule.flight_arrival_time ? new Date(viewingSchedule.flight_arrival_time).toLocaleString() : "No arrival time"}</p>
+          <p>Hotel: {viewingSchedule.hotel_name || "-"}</p>
+          <p>{viewingSchedule.notes || ""}</p>
+          {viewingSchedule.desired_players?.length ? (
+            <p>
+              <strong>Targets:</strong> {viewingSchedule.desired_players.map((p) => `${p.name} (${p.team})`).join(", ")}
+            </p>
+          ) : null}
+          {viewingSchedule.generated_plan?.length ? (
+            <div className="log-list" style={{ maxHeight: 220 }}>
+              {viewingSchedule.generated_plan.map((plan, idx) => (
+                <article key={`${plan.at}-${idx}`} className="log-card">
+                  <p><strong>{timeLabel(plan.at)} - {plan.title}</strong></p>
+                  <p>{plan.detail}</p>
+                </article>
+              ))}
+            </div>
+          ) : null}
+          {viewingSchedule.user_id === user?.userId ? (
+            <div className="row wrap">
+              <button className="secondary" onClick={() => editSchedule(viewingSchedule)}>Edit</button>
+              <button className="secondary" onClick={() => void startMapForSchedule(viewingSchedule)}>Start Map</button>
+            </div>
+          ) : <p className="muted">View only schedule.</p>}
+        </section>
       ) : null}
 
       {showTournaments ? (
