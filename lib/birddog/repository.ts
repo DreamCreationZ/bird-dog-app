@@ -111,6 +111,17 @@ export async function seedCircuitInventory() {
     company: item.company
   }));
 
+  const keep = payload.map((item) => `"${item.slug}"`).join(",");
+  if (keep) {
+    await supabaseRequest("circuit_inventory", {
+      method: "DELETE",
+      query: {
+        slug: `not.in.(${keep})`
+      },
+      prefer: "return=minimal"
+    });
+  }
+
   await supabaseRequest("circuit_inventory", {
     method: "POST",
     query: { on_conflict: "slug" },
@@ -130,20 +141,20 @@ export async function listCircuitInventory(): Promise<InventoryRecord[]> {
   return rows;
 }
 
-export async function listUserUnlocks(userId: string): Promise<string[]> {
+export async function listOrgUnlocks(orgId: string): Promise<string[]> {
   const rows = (await supabaseRequest("org_tournament_unlocks", {
     query: {
-      user_id: `eq.${userId}`,
+      org_id: `eq.${orgId}`,
       select: "inventory_slug"
     }
   })) as Array<{ inventory_slug: string }>;
   return rows.map((row) => row.inventory_slug);
 }
 
-export async function hasUserSubscription(userId: string): Promise<boolean> {
+export async function hasOrgSubscription(orgId: string): Promise<boolean> {
   const rows = (await supabaseRequest("org_tournament_unlocks", {
     query: {
-      user_id: `eq.${userId}`,
+      org_id: `eq.${orgId}`,
       select: "id",
       limit: "1"
     }
@@ -151,7 +162,7 @@ export async function hasUserSubscription(userId: string): Promise<boolean> {
   return rows.length > 0;
 }
 
-export async function unlockTournamentForUser(input: {
+export async function unlockTournamentForOrg(input: {
   orgId: string;
   userId: string;
   inventorySlug: string;
@@ -159,9 +170,18 @@ export async function unlockTournamentForUser(input: {
   stripePaymentIntentId: string | null;
   amountCents: number;
 }) {
+  const existing = (await supabaseRequest("org_tournament_unlocks", {
+    query: {
+      org_id: `eq.${input.orgId}`,
+      inventory_slug: `eq.${input.inventorySlug}`,
+      select: "id",
+      limit: "1"
+    }
+  })) as Array<{ id: string }>;
+  if (existing.length) return;
+
   await supabaseRequest("org_tournament_unlocks", {
     method: "POST",
-    query: { on_conflict: "user_id,inventory_slug" },
     body: [{
       org_id: input.orgId,
       user_id: input.userId,
@@ -402,6 +422,21 @@ export async function getHarvestedTournament(orgId: string, tournamentId: string
     }
   })) as RosterRow[];
 
+  const teams = (await supabaseRequest("harvested_participating_teams", {
+    query: {
+      org_id: `eq.${orgId}`,
+      tournament_id: `eq.${tournamentId}`,
+      select: "id,external_id,name,hometown,record",
+      order: "name.asc"
+    }
+  }).catch(() => [])) as Array<{
+    id: string;
+    external_id: string;
+    name: string;
+    hometown: string | null;
+    record: string | null;
+  }>;
+
   const playerIds = Array.from(new Set(rosters.map((row) => row.player_id)));
   let playersById = new Map<string, PlayerRow>();
 
@@ -443,7 +478,13 @@ export async function getHarvestedTournament(orgId: string, tournamentId: string
         awayTeam: game.away_team,
         players: rosterPlayers
       };
-    })
+    }),
+    teams: teams.map((team) => ({
+      id: team.external_id || team.id,
+      name: team.name,
+      from: team.hometown || "",
+      record: team.record || ""
+    }))
   };
 }
 

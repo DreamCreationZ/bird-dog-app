@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHarvestJob, hasUserSubscription, listHarvestJobs } from "@/lib/birddog/repository";
+import { createHarvestJob, listHarvestJobs, listOrgUnlocks } from "@/lib/birddog/repository";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 
 export async function GET(req: NextRequest) {
@@ -25,15 +25,17 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const company = body?.company === "PBR" ? "PBR" : "PG";
   const tournamentHint = String(body?.tournamentHint || "").trim();
+  const inventorySlug = String(body?.inventorySlug || "").trim();
 
-  if (!tournamentHint) {
-    return NextResponse.json({ error: "tournamentHint is required" }, { status: 400 });
+  if (!tournamentHint || !inventorySlug) {
+    return NextResponse.json({ error: "tournamentHint and inventorySlug are required" }, { status: 400 });
   }
 
   try {
-    const subscribed = await hasUserSubscription(session.userId);
-    if (!subscribed) {
-      return NextResponse.json({ error: "Subscription required. Unlock tournaments first." }, { status: 402 });
+    const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
+    const unlocked = await listOrgUnlocks(session.orgId);
+    if (!previewUnlockAll && !unlocked.includes(inventorySlug)) {
+      return NextResponse.json({ error: "Tournament is locked for your organization." }, { status: 402 });
     }
 
     const job = await createHarvestJob({

@@ -29,6 +29,12 @@ export type Tournament = {
   city: string;
   date: string;
   games: Game[];
+  teams?: Array<{
+    id: string;
+    name: string;
+    from: string;
+    record?: string;
+  }>;
 };
 
 export type HarvesterDataset = {

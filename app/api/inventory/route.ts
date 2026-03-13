@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { hasUserSubscription, listCircuitInventory, seedCircuitInventory } from "@/lib/birddog/repository";
+import { listCircuitInventory, listOrgUnlocks, seedCircuitInventory } from "@/lib/birddog/repository";
+import { inventoryHarvestHint } from "@/lib/birddog/inventoryCatalog";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 
 export async function GET(req: NextRequest) {
@@ -9,17 +10,20 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
     await seedCircuitInventory();
-    const [inventory, subscribed] = await Promise.all([
+    const [inventory, unlockedSlugs] = await Promise.all([
       listCircuitInventory(),
-      hasUserSubscription(session.userId)
+      listOrgUnlocks(session.orgId)
     ]);
+    const unlockedSet = new Set(unlockedSlugs);
 
     return NextResponse.json({
-      subscribed,
+      subscribed: previewUnlockAll || unlockedSet.size > 0,
       inventory: inventory.map((item) => ({
         ...item,
-        locked: !subscribed
+        locked: previewUnlockAll ? false : !unlockedSet.has(item.slug),
+        harvestHint: inventoryHarvestHint(item)
       }))
     });
   } catch (error) {

@@ -29,8 +29,23 @@ create table if not exists public.org_tournament_unlocks (
   stripe_payment_intent_id text,
   amount_cents integer not null,
   created_at timestamptz not null default now(),
-  unique (user_id, inventory_slug)
+  unique (org_id, inventory_slug)
 );
+
+do $$
+begin
+  if exists (
+    select 1
+    from pg_constraint
+    where conname = 'org_tournament_unlocks_user_id_inventory_slug_key'
+  ) then
+    alter table public.org_tournament_unlocks
+      drop constraint org_tournament_unlocks_user_id_inventory_slug_key;
+  end if;
+end$$;
+
+create unique index if not exists idx_org_unlock_unique_org_slug
+  on public.org_tournament_unlocks (org_id, inventory_slug);
 
 create table if not exists public.coach_schedules (
   id uuid primary key default gen_random_uuid(),
@@ -131,6 +146,18 @@ create table if not exists public.harvested_players (
   unique (org_id, external_id)
 );
 
+create table if not exists public.harvested_participating_teams (
+  id uuid primary key default gen_random_uuid(),
+  org_id text not null,
+  tournament_id uuid not null references public.harvested_tournaments(id) on delete cascade,
+  external_id text not null,
+  name text not null,
+  hometown text,
+  record text,
+  created_at timestamptz not null default now(),
+  unique (org_id, tournament_id, external_id)
+);
+
 create table if not exists public.harvested_rosters (
   id uuid primary key default gen_random_uuid(),
   org_id text not null,
@@ -148,6 +175,7 @@ create index if not exists idx_pulse_events_org_created on public.pulse_events (
 create index if not exists idx_harvest_jobs_org_created on public.harvest_jobs (org_id, created_at desc);
 create index if not exists idx_harvested_tournaments_org_company on public.harvested_tournaments (org_id, company, event_date);
 create index if not exists idx_harvested_games_org_tournament on public.harvested_games (org_id, tournament_id, start_time);
+create index if not exists idx_harvested_teams_org_tournament on public.harvested_participating_teams (org_id, tournament_id, name);
 create index if not exists idx_harvested_rosters_org_tournament on public.harvested_rosters (org_id, tournament_id);
 
 alter table public.scout_users enable row level security;
@@ -160,6 +188,7 @@ alter table public.harvest_jobs enable row level security;
 alter table public.harvested_tournaments enable row level security;
 alter table public.harvested_games enable row level security;
 alter table public.harvested_players enable row level security;
+alter table public.harvested_participating_teams enable row level security;
 alter table public.harvested_rosters enable row level security;
 
 create policy "scout_users_org_read"
@@ -236,6 +265,14 @@ create policy "harvested_players_org_read"
 
 create policy "harvested_players_org_write"
   on public.harvested_players for insert
+  with check (org_id = coalesce(auth.jwt() ->> 'org_id', ''));
+
+create policy "harvested_participating_teams_org_read"
+  on public.harvested_participating_teams for select
+  using (org_id = coalesce(auth.jwt() ->> 'org_id', ''));
+
+create policy "harvested_participating_teams_org_write"
+  on public.harvested_participating_teams for insert
   with check (org_id = coalesce(auth.jwt() ->> 'org_id', ''));
 
 create policy "harvested_rosters_org_read"

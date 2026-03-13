@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { HARVEST_DATA } from "@/lib/birddog/mockData";
 import { getHarvestedTournament, listHarvestCompanies, listHarvestedTournaments } from "@/lib/birddog/repository";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 
@@ -14,9 +13,7 @@ export async function GET(req: NextRequest) {
 
   if (!company) {
     const dbCompanies = await listHarvestCompanies(session.orgId).catch(() => []);
-    const companies = dbCompanies.length
-      ? dbCompanies
-      : HARVEST_DATA.map((d) => d.company);
+    const companies = dbCompanies.length ? dbCompanies : ["PG", "PBR"];
 
     return NextResponse.json({
       companies,
@@ -53,18 +50,13 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const dataset = HARVEST_DATA.find((d) => d.company === company);
-  if (!dataset) {
-    return NextResponse.json({ error: "Unknown company" }, { status: 404 });
-  }
-
   return NextResponse.json({
-    dataset,
+    dataset: { company, tournaments: [] },
     antiBlock: {
       strategy: "residential_proxy_rotation",
-      status: "fallback_mock_data"
+      status: "queue_required"
     },
-    source: "mock_fallback",
+    source: "none",
     fetchedAt: new Date().toISOString()
   });
 }

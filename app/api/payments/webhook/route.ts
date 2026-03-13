@@ -1,6 +1,6 @@
 import Stripe from "stripe";
 import { NextRequest, NextResponse } from "next/server";
-import { listCircuitInventory, seedCircuitInventory, unlockTournamentForUser } from "@/lib/birddog/repository";
+import { unlockTournamentForOrg } from "@/lib/birddog/repository";
 export const runtime = "nodejs";
 
 function required(name: string): string {
@@ -26,21 +26,17 @@ export async function POST(req: NextRequest) {
       const session = event.data.object as Stripe.Checkout.Session;
       const orgId = session.metadata?.org_id || "";
       const userId = session.metadata?.user_id || "";
-      const unlockScope = session.metadata?.unlock_scope || "";
+      const inventorySlug = session.metadata?.inventory_slug || "";
 
-      if (orgId && userId && unlockScope === "all_tournaments") {
-        await seedCircuitInventory();
-        const inventory = await listCircuitInventory();
-        for (const item of inventory) {
-          await unlockTournamentForUser({
-            orgId,
-            userId,
-            inventorySlug: item.slug,
-            stripeSessionId: session.id,
-            stripePaymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : null,
-            amountCents: Number(session.amount_total || 0)
-          });
-        }
+      if (orgId && userId && inventorySlug) {
+        await unlockTournamentForOrg({
+          orgId,
+          userId,
+          inventorySlug,
+          stripeSessionId: session.id,
+          stripePaymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : null,
+          amountCents: Number(session.amount_total || 0)
+        });
       }
     }
 

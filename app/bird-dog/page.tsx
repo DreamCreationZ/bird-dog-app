@@ -96,6 +96,12 @@ function makeOrgKey(orgId: string, userId: string, key: string) {
   return `bird_dog:${orgId}:${userId}:${key}`;
 }
 
+function eventIdFromHint(hint?: string) {
+  if (!hint) return "";
+  const match = hint.match(/[?&]event=(\d+)/i);
+  return match ? `pg-${match[1]}` : "";
+}
+
 function uniquePlayers(games: Game[]): Player[] {
   const map = new Map<string, Player>();
   games.forEach((g) => g.players.forEach((p) => map.set(p.id, p)));
@@ -550,19 +556,28 @@ export default function BirdDogPage() {
     setSelectedInventorySlug(item.slug);
     setCompany(item.company);
     setJobHint(item.name);
-    await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company);
-    await loadCompanyData(item.company);
-    const res = await fetch(`/api/harvest?company=${item.company}`);
-    if (res.ok) {
-      const data = await res.json();
-      const matched = (data?.dataset?.tournaments || []).find((t: Tournament) => t.name.toLowerCase() === item.name.toLowerCase());
-      if (matched) {
-        await loadTournamentDetails(item.company, matched.id);
-        setTournamentViewTitle(matched.name);
-      } else {
-        setTournamentViewTitle(item.name);
+    const harvestHint = item.harvestHint || item.name;
+    const eventId = eventIdFromHint(harvestHint);
+    await queueHarvestJob(item.slug, harvestHint, item.company);
+
+    // Poll harvest store so event-specific tournaments (like PG event=99733) appear before navigation.
+    let matched: Tournament | null = null;
+    for (let i = 0; i < 8; i += 1) {
+      const res = await fetch(`/api/harvest?company=${item.company}`);
+      if (res.ok) {
+        const data = await res.json();
+        const list = (data?.dataset?.tournaments || []) as Tournament[];
+        matched = list.find((t) => (eventId && t.id === eventId) || t.name.toLowerCase() === item.name.toLowerCase()) || null;
+        if (matched) break;
       }
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+
+    if (matched) {
+      await loadTournamentDetails(item.company, matched.id);
+      setTournamentViewTitle(matched.name);
     } else {
+      await loadCompanyData(item.company);
       setTournamentViewTitle(item.name);
     }
     setActiveTab("schedule");
@@ -1006,6 +1021,31 @@ export default function BirdDogPage() {
 
       {showNotes ? (
       <section className="panel grid2">
+        <div>
+          <h2>Participating Teams</h2>
+          {selectedTournament?.teams?.length ? (
+            <div className="table-wrap" style={{ marginBottom: 12 }}>
+              <table className="roster-table">
+                <thead>
+                  <tr>
+                    <th>Team</th>
+                    <th>From</th>
+                    <th>Record</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedTournament.teams.map((team) => (
+                    <tr key={team.id}>
+                      <td>{team.name}</td>
+                      <td>{team.from || "-"}</td>
+                      <td>{team.record || "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <p className="muted">Participating teams appear after full tournament ingest.</p>}
+        </div>
         <div>
           <h2>Tournament Roster</h2>
           {players.length ? (

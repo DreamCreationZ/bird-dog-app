@@ -56,3 +56,9 @@ body {
   color: #9f1919;
   margin: 0;
 }
+
+.login-card .muted {
+  color: #5a5548;
+  margin: 0;
+  font-size: 0.92rem;
+}

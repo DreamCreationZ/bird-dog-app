@@ -6,13 +6,14 @@ This app includes:
 - Offline-first notes/watchlist/pulse queue with background sync
 - PG/PBR harvester queue + worker ingestion
 - Summer/Fall circuit inventory preloaded in a DB table
-- Locked tournaments that require $500 Stripe unlock per coach
+- Locked tournaments that require $500 Stripe unlock per tournament (org-wide unlock)
 - Multi-tenant storage boundaries via org_id + RLS-ready schema
 - Shared coach schedule board visible to all logged-in coaches in org
 - Editable coach schedules with generated plan output
 - Target-player list in schedule editor with team auto-fill
 - In-app `Start Map` hotel navigation panel (Google Maps Embed)
 - Bottom tabs for `Tournaments`, `Schedule`, `Notes`
+- Optional login passcode gate (`BIRD_DOG_LOGIN_PASSCODE`)
 
 ## Setup
 
@@ -50,11 +51,12 @@ npm run worker:harvest
    - `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`
    - `STRIPE_WEBHOOK_SECRET`
    - `APP_BASE_URL`
+   - `BIRD_DOG_LOGIN_PASSCODE` (optional but recommended)
 2. Add webhook endpoint in Stripe dashboard:
    - `POST https://<your-domain>/api/payments/webhook`
    - event: `checkout.session.completed`
 3. Locked tournaments from circuit inventory call `/api/payments/checkout`.
-4. Webhook writes unlock record into `org_tournament_unlocks` keyed by `user_id`.
+4. Webhook writes unlock record into `org_tournament_unlocks` keyed by `org_id + inventory_slug`.
 
 ## Data harvester flow
 
@@ -63,10 +65,13 @@ npm run worker:harvest
 3. Worker polls queue, scrapes PG/PBR using proxy rotation template URLs.
 4. Worker stores normalized rows in:
    - `harvested_tournaments`
+   - `harvested_participating_teams`
    - `harvested_games`
    - `harvested_players`
    - `harvested_rosters`
 5. Cockpit pulls tournament/game/roster data from `/api/harvest`.
+
+Note: for full PG details (participating teams + rosters), keep `npm run worker:harvest` running while you open tournaments.
 
 ## Core endpoints
 

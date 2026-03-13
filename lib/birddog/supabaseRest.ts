@@ -57,5 +57,7 @@ export async function supabaseRequest(path: string, options: RequestOptions = {}
   }
 
   if (res.status === 204) return null;
-  return res.json();
+  const text = await res.text();
+  if (!text) return null;
+  return JSON.parse(text);
 }

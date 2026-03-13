@@ -13,39 +13,36 @@ function slugify(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
-function detectCompany(name: string): DataProvider {
-  return name.toLowerCase().includes("pbr") ? "PBR" : "PG";
-}
-
 const summer = [
-  "PG WWBA 17U National Championship",
-  "PG WWBA 16U National Championship",
-  "PG Elite 17U National Championship",
-  "PG Elite 16U National Championship",
-  "PBR NPI 17U",
-  "PBR NPI 16U",
-  "USA Baseball 17U National Team Champs",
-  "USA Baseball 16U National Team Champs",
-  "UBC 17U",
-  "UBC 16U",
-  "ABC 17U National Championship",
-  "ABC 16U National Championship",
-  "MPL 17U",
-  "MPL 16U",
-  "PBR 17U National Championship",
-  "PBR 16U National Championship"
+  "2025 PG 16U WWBA National Championship",
+  "2026 PG WWBA National Championship",
+  "2026 PG 14U WWBA National Championship",
+  "2026 PG 17U WWBA National Championship",
+  "2026 PG 13U WWBA National Championship",
+  "2026 PG 13U 54/80 WWBA National Championship",
+  "2026 PG 16U WWBA National Championship",
+  "2026 PG 15U WWBA National Championship"
 ];
 
 const fall = [
-  "PG Jupiter (World Wood Bat)",
-  "PG Fall World Series 17U",
-  "PG Fall World Series 16U",
-  "PG Underclass World Championship",
-  "PBR Cup 17U",
-  "PBR Cup 16U"
+  "2026 PG WWBA Sophomore World Championship",
+  "2026 PG WWBA Underclass World Championship",
+  "2026 PG WWBA Freshman World Championship",
+  "2026 PG WWBA World Championship",
+  "2026 PG WWBA 13U & 14U World Championship"
 ];
 
 export const INVENTORY_SEED: InventorySeed[] = [
-  ...summer.map((name) => ({ slug: slugify(name), name, season: "summer" as const, company: detectCompany(name) })),
-  ...fall.map((name) => ({ slug: slugify(name), name, season: "fall" as const, company: detectCompany(name) }))
+  ...summer.map((name) => ({ slug: slugify(name), name, season: "summer" as const, company: "PG" as const })),
+  ...fall.map((name) => ({ slug: slugify(name), name, season: "fall" as const, company: "PG" as const }))
 ];
+
+export function inventoryHarvestHint(input: { slug: string; name: string; company: DataProvider }) {
+  if (input.company === "PG") {
+    if (input.slug === "2025-pg-16u-wwba-national-championship" || input.slug === "2026-pg-16u-wwba-national-championship") {
+      return "https://www.perfectgame.org/events/TournamentTeams.aspx?event=99733";
+    }
+    return `https://www.perfectgame.org/search.aspx?search=${encodeURIComponent(input.name)}`;
+  }
+  return input.name;
+}

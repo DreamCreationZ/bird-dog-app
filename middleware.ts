@@ -6,7 +6,7 @@ export function middleware(req: NextRequest) {
   const token = req.cookies.get(SESSION_COOKIE)?.value;
   const path = req.nextUrl.pathname;
 
-  if (path.startsWith("/bird-dog") && !token) {
+  if ((path.startsWith("/bird-dog") || path.startsWith("/subscribe")) && !token) {
     return NextResponse.redirect(new URL("/login", req.url));
   }
 
@@ -18,5 +18,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/bird-dog/:path*", "/login"]
+  matcher: ["/bird-dog/:path*", "/subscribe", "/login"]
 };

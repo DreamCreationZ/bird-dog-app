@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
-import { hasUserSubscription } from "@/lib/birddog/repository";
+import { listCircuitInventory, listOrgUnlocks, seedCircuitInventory } from "@/lib/birddog/repository";
 
 const AMOUNT_CENTS = 50000;
 export const runtime = "nodejs";
@@ -20,11 +20,23 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   const returnTo = String(body?.returnTo || "/bird-dog").trim() || "/bird-dog";
+  const inventorySlug = String(body?.inventorySlug || "").trim();
+  if (!inventorySlug) {
+    return NextResponse.json({ error: "inventorySlug required" }, { status: 400 });
+  }
 
   try {
-    const alreadySubscribed = await hasUserSubscription(session.userId);
-    if (alreadySubscribed) {
-      return NextResponse.json({ alreadySubscribed: true, redirectTo: "/bird-dog?subscription=active" });
+    await seedCircuitInventory();
+    const [inventory, unlocked] = await Promise.all([
+      listCircuitInventory(),
+      listOrgUnlocks(session.orgId)
+    ]);
+    const selected = inventory.find((item) => item.slug === inventorySlug);
+    if (!selected) {
+      return NextResponse.json({ error: "Tournament not found" }, { status: 404 });
+    }
+    if (unlocked.includes(inventorySlug)) {
+      return NextResponse.json({ alreadyUnlocked: true, redirectTo: "/bird-dog?subscription=active" });
     }
 
     const stripe = new Stripe(required("STRIPE_SECRET_KEY"));
@@ -37,7 +49,7 @@ export async function POST(req: NextRequest) {
       metadata: {
         org_id: session.orgId,
         user_id: session.userId,
-        unlock_scope: "all_tournaments"
+        inventory_slug: inventorySlug
       },
       line_items: [
         {
@@ -46,8 +58,8 @@ export async function POST(req: NextRequest) {
             currency: "usd",
             unit_amount: AMOUNT_CENTS,
             product_data: {
-              name: "Bird Dog Tournament Subscription",
-              description: "Unlock all tournaments for this coach"
+              name: "Bird Dog Tournament Unlock",
+              description: `Unlock ${selected.name} for this organization`
             }
           }
         }

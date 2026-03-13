@@ -237,6 +237,11 @@
   border-color: var(--org-primary);
 }
 
+.bd-root .bottom-tabs button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 @media (min-width: 920px) {
   .bd-root .grid2 {
     grid-template-columns: 1fr 1fr;

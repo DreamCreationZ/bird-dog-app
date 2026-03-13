@@ -7,6 +7,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [name, setName] = useState("Scout User");
   const [email, setEmail] = useState("scout@lsu.edu");
+  const [accessCode, setAccessCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -18,7 +19,7 @@ export default function LoginPage() {
     const res = await fetch("/api/session/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, email })
+      body: JSON.stringify({ name, email, accessCode })
     });
 
     if (!res.ok) {
@@ -35,7 +36,7 @@ export default function LoginPage() {
     <main className="login-shell">
       <section className="login-card">
         <h1>Project Bird Dog</h1>
-        <p>Sign up or sign in with your scouting email. Org branding and vault partitioning are based on your domain.</p>
+        <p>Sign up or sign in with your scouting email and access code. Org branding and vault partitioning are based on your domain.</p>
         <form onSubmit={onSubmit}>
           <label>
             Full Name
@@ -45,6 +46,11 @@ export default function LoginPage() {
             Email
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </label>
+          <label>
+            Access Code
+            <input type="password" value={accessCode} onChange={(e) => setAccessCode(e.target.value)} required />
+          </label>
+          <p className="muted">Use your organization access code provided by admin.</p>
           {error ? <p className="error-text">{error}</p> : null}
           <button type="submit" disabled={loading}>{loading ? "Authenticating..." : "Continue to Dashboard"}</button>
         </form>
