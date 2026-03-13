@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 220">
+  <rect x="16" y="16" width="188" height="188" rx="26" fill="#111"/>
+  <rect x="26" y="26" width="168" height="168" rx="20" fill="#1976d2"/>
+  <text x="110" y="92" font-family="Arial, sans-serif" font-size="22" font-weight="700" fill="#fff" text-anchor="middle">WWBA</text>
+  <text x="110" y="128" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#fff" text-anchor="middle">REGIONAL</text>
+  <text x="110" y="156" font-family="Arial, sans-serif" font-size="16" fill="#fff" text-anchor="middle">CHAMPIONSHIP</text>
+</svg>

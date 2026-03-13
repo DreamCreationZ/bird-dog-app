@@ -127,6 +127,15 @@ function eventIdFromHint(hint?: string) {
   return match ? `pg-${match[1]}` : "";
 }
 
+function tournamentIconByName(name: string) {
+  const low = name.toLowerCase();
+  if (low.includes("wwba")) return "/tournament-icons/wwba.svg";
+  if (low.includes("world")) return "/tournament-icons/world.svg";
+  if (low.includes("regional")) return "/tournament-icons/regional.svg";
+  if (low.includes("showcase")) return "/tournament-icons/showcase.svg";
+  return "/tournament-icons/default.svg";
+}
+
 function uniquePlayers(games: Game[]): Player[] {
   const map = new Map<string, Player>();
   games.forEach((g) => g.players.forEach((p) => map.set(p.id, p)));
@@ -1125,26 +1134,28 @@ export default function BirdDogPage() {
           <button className="secondary" onClick={() => void fetchInventory()}>Refresh List</button>
         </div>
         {openError ? <p className="muted">{openError}</p> : null}
-        <div className="log-list" style={{ maxHeight: 520, marginTop: 12 }}>
+        <div className="tournament-grid" style={{ marginTop: 12 }}>
           {inventory.length ? inventory.map((item) => {
             const locked = item.locked && !PREVIEW_UNLOCK_ALL;
             const opened = selectedInventorySlug === item.slug;
             return (
-              <article key={item.slug} className={`log-card ${locked ? "locked-card" : "unlocked-card"}`}>
-                <p><strong>{item.name}</strong></p>
+              <article
+                key={item.slug}
+                className={`tile-card ${locked ? "locked-card" : "unlocked-card"} ${opened ? "opened-card" : ""}`}
+                onClick={() => {
+                  if (locked) {
+                    void openCheckoutForTournament(item.slug);
+                    return;
+                  }
+                  void useUnlockedTournament(item);
+                }}
+              >
+                <img className="tile-icon" src={tournamentIconByName(item.name)} alt={item.name} />
+                <p className="tile-title"><strong>{item.name}</strong></p>
                 <p className="muted">{item.season.toUpperCase()} · {item.company}</p>
-                <div className="row wrap">
-                  {locked ? (
-                    <button className="secondary" disabled={unlockingSlug === item.slug} onClick={() => void openCheckoutForTournament(item.slug)}>
-                      {unlockingSlug === item.slug ? "Opening Checkout..." : "🔒 Subscribe to Unlock"}
-                    </button>
-                  ) : (
-                    <button className="secondary" disabled={openingSlug === item.slug} onClick={() => void useUnlockedTournament(item)}>
-                      {openingSlug === item.slug ? "Opening..." : opened ? "Open Tournament Again" : "Open Tournament"}
-                    </button>
-                  )}
-                  {opened ? <span className="small">Opened</span> : null}
-                </div>
+                {locked ? <p className="small">🔒 Subscribe to Unlock</p> : null}
+                {openingSlug === item.slug ? <p className="small">Opening...</p> : null}
+                {unlockingSlug === item.slug ? <p className="small">Opening Checkout...</p> : null}
               </article>
             );
           }) : <p className="muted">No tournaments found.</p>}
