@@ -114,6 +114,18 @@ function toInputDateTime(iso: string | null) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function localInputToOffsetIso(localInput: string) {
+  if (!localInput) return "";
+  const date = new Date(localInput);
+  if (Number.isNaN(date.getTime())) return localInput;
+  const tzMin = -date.getTimezoneOffset();
+  const sign = tzMin >= 0 ? "+" : "-";
+  const abs = Math.abs(tzMin);
+  const hh = String(Math.floor(abs / 60)).padStart(2, "0");
+  const mm = String(abs % 60).padStart(2, "0");
+  return `${localInput}:00${sign}${hh}:${mm}`;
+}
+
 function makeOrgKey(orgId: string, userId: string, key: string) {
   return `bird_dog:${orgId}:${userId}:${key}`;
 }
@@ -742,8 +754,12 @@ export default function BirdDogPage() {
   }
 
   async function saveSchedule(generatedPlan?: PlanItem[]) {
+    const normalizedFlightArrival = scheduleForm.flightArrivalTime
+      ? localInputToOffsetIso(scheduleForm.flightArrivalTime)
+      : "";
     const payload = {
       ...scheduleForm,
+      flightArrivalTime: normalizedFlightArrival,
       desiredPlayers,
       generatedPlan: generatedPlan ?? myGeneratedPlan
     };
@@ -769,6 +785,8 @@ export default function BirdDogPage() {
   }
 
   function editSchedule(item: CoachSchedule) {
+    setActiveTab("schedule");
+    setViewingSchedule(null);
     setScheduleForm({
       flightSource: item.flight_source || "",
       flightDestination: item.flight_destination || "",
@@ -778,6 +796,7 @@ export default function BirdDogPage() {
     });
     setDesiredPlayers(item.desired_players || []);
     setMyGeneratedPlan(item.generated_plan || []);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   async function startMapForSchedule(schedule: CoachSchedule) {
