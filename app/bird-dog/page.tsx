@@ -63,6 +63,7 @@ type CoachSchedule = {
   id: string;
   user_id: string;
   coach_name: string;
+  coach_email?: string | null;
   flight_source: string | null;
   flight_destination: string | null;
   flight_arrival_time: string | null;
@@ -547,10 +548,11 @@ export default function BirdDogPage() {
     hydrateMySchedule(scheduleList);
   }
 
-  async function generateAndSaveSchedule() {
-    const generatedPlan = createGeneratedPlan();
-    setMyGeneratedPlan(generatedPlan);
-    await saveSchedule(generatedPlan);
+  async function addSchedule() {
+    const nextPlan = createGeneratedPlan();
+    const mergedPlan = [...myGeneratedPlan, ...nextPlan];
+    setMyGeneratedPlan(mergedPlan);
+    await saveSchedule(mergedPlan);
   }
 
   function editSchedule(item: CoachSchedule) {
@@ -1017,20 +1019,9 @@ export default function BirdDogPage() {
           ) : <p className="muted">Add players to guide schedule generation.</p>}
           <div className="row wrap">
             <button onClick={() => void saveSchedule()}>Save My Schedule</button>
-            <button className="secondary" onClick={() => void generateAndSaveSchedule()}>Generate Schedule</button>
+            <button className="secondary" onClick={() => void addSchedule()}>Add Schedule</button>
             <button className="secondary" onClick={() => void fetchSchedules()}>Refresh</button>
           </div>
-          {myGeneratedPlan.length ? (
-            <div className="log-list" style={{ maxHeight: 200, marginTop: 10 }}>
-              {myGeneratedPlan.map((item, idx) => (
-                <article key={`${item.at}-${idx}`} className="log-card">
-                  <p><strong>{dateLabel(item.at)} {timeLabel(item.at)}</strong></p>
-                  <p>{item.title}</p>
-                  <p>{item.detail}</p>
-                </article>
-              ))}
-            </div>
-          ) : null}
         </div>
 
         <div>
@@ -1043,9 +1034,7 @@ export default function BirdDogPage() {
                   <thead>
                     <tr>
                       <th>Coach</th>
-                      <th>Route</th>
-                      <th>Arrival</th>
-                      <th>Hotel</th>
+                      <th>Email</th>
                       <th>Action</th>
                     </tr>
                   </thead>
@@ -1053,17 +1042,10 @@ export default function BirdDogPage() {
                     {schedules.map((item) => (
                       <tr key={item.id}>
                         <td>{item.coach_name}</td>
-                        <td>{item.flight_source || "-"} {"->"} {item.flight_destination || "-"}</td>
-                        <td>{item.flight_arrival_time ? new Date(item.flight_arrival_time).toLocaleString() : "-"}</td>
-                        <td>{item.hotel_name || "-"}</td>
+                        <td>{item.coach_email || "-"}</td>
                         <td>
                           <div className="row wrap">
                             <button className="secondary" onClick={() => openScheduleView(item)}>View Schedules</button>
-                            {item.user_id === user?.userId ? (
-                              <>
-                                <button className="secondary" onClick={() => editSchedule(item)}>Edit</button>
-                              </>
-                            ) : null}
                           </div>
                         </td>
                       </tr>
@@ -1096,7 +1078,7 @@ export default function BirdDogPage() {
             <div className="log-list" style={{ maxHeight: 220 }}>
               {viewingSchedule.generated_plan.map((plan, idx) => (
                 <article key={`${plan.at}-${idx}`} className="log-card">
-                  <p><strong>{timeLabel(plan.at)} - {plan.title}</strong></p>
+                  <p><strong>{dateLabel(plan.at)} {timeLabel(plan.at)} - {plan.title}</strong></p>
                   <p>{plan.detail}</p>
                 </article>
               ))}

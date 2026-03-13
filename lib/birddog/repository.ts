@@ -199,6 +199,7 @@ export type CoachSchedule = {
   org_id: string;
   user_id: string;
   coach_name: string;
+  coach_email?: string | null;
   flight_source: string | null;
   flight_destination: string | null;
   flight_arrival_time: string | null;
@@ -265,7 +266,18 @@ export async function listCoachSchedules(orgId: string): Promise<CoachSchedule[]
       order: "updated_at.desc"
     }
   })) as CoachSchedule[];
-  return rows;
+  const users = (await supabaseRequest("scout_users", {
+    query: {
+      org_id: `eq.${orgId}`,
+      select: "id,email"
+    }
+  }).catch(() => [])) as Array<{ id: string; email: string }>;
+
+  const emailById = new Map(users.map((u) => [u.id, u.email]));
+  return rows.map((row) => ({
+    ...row,
+    coach_email: emailById.get(row.user_id) || null
+  }));
 }
 
 export async function cleanupPastCoachSchedules(orgId: string) {
