@@ -1,5 +1,21 @@
 import { Tournament } from "@/lib/birddog/types";
 
+type ParsedTeam = {
+  id: string;
+  name: string;
+  from: string;
+  record?: string;
+  href?: string | null;
+};
+
+const defaultUserAgents = [
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"
+];
+
+let proxyIndex = 0;
+let uaIndex = 0;
+
 function cleanText(input: string) {
   return input
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -78,12 +94,20 @@ function parseGames(html: string) {
   return games.slice(0, 40);
 }
 
-function findFirstEventUrl(html: string) {
-  const link = html.match(/href=["']([^"']*TournamentTeams\.aspx\?event=\d+)["']/i);
-  if (!link) return null;
-  const href = link[1];
+function toAbsolutePgUrl(href: string) {
   if (/^https?:\/\//i.test(href)) return href;
   return `https://www.perfectgame.org${href.startsWith("/") ? "" : "/"}${href}`;
+}
+
+function findFirstEventUrl(html: string) {
+  const links = [...html.matchAll(/href=["']([^"']+)["']/gi)].map((m) => m[1]);
+  const eventHref = links.find((href) =>
+    /TournamentTeams\.aspx\?event=\d+/i.test(href)
+    || /TournamentSchedule\.aspx\?event=\d+/i.test(href)
+    || /events\/default\.aspx\?event=\d+/i.test(href)
+  );
+  if (!eventHref) return null;
+  return toAbsolutePgUrl(eventHref);
 }
 
 function getParticipatingTeamsTableHtml(html: string) {
@@ -94,7 +118,7 @@ function getParticipatingTeamsTableHtml(html: string) {
 }
 
 function parseParticipatingTeams(html: string) {
-  const teams: NonNullable<Tournament["teams"]> = [];
+  const teams: ParsedTeam[] = [];
   const blockedTokens = [
     "sign in",
     "create account",
@@ -123,19 +147,22 @@ function parseParticipatingTeams(html: string) {
     const normalized = teamCol.replace(/\(\d+-\d+-\d+.*?\)/g, "").trim();
     const record = (teamCol.match(/\(([^)]+)\)/)?.[1] || "").trim();
     if (!normalized || normalized.length < 3) continue;
+    const hrefMatch = colsRaw[teamIndex >= 0 ? teamIndex : 0]?.match(/href=["']([^"']+)["']/i);
+    const href = hrefMatch?.[1] ? toAbsolutePgUrl(hrefMatch[1]) : null;
     if (!teams.find((t) => t.name === normalized && t.from === fromCol)) {
       teams.push({
         id: `pg-team-${teams.length + 1}`,
         name: normalized,
         from: fromCol,
-        record
+        record,
+        href
       });
     }
   }
   return teams.slice(0, 120);
 }
 
-function gamesFromTeams(teams: NonNullable<Tournament["teams"]>, date: string): Tournament["games"] {
+function gamesFromTeams(teams: ParsedTeam[], date: string): Tournament["games"] {
   const out: Tournament["games"] = [];
   for (let i = 0; i < teams.length; i += 2) {
     const home = teams[i];
@@ -156,9 +183,21 @@ function gamesFromTeams(teams: NonNullable<Tournament["teams"]>, date: string): 
 }
 
 async function fetchHtml(target: string) {
-  const response = await fetch(target, {
+  const raw = process.env.RESIDENTIAL_PROXY_TEMPLATE_URLS || "";
+  const proxies = raw.split(",").map((item) => item.trim()).filter(Boolean);
+  const template = proxies.length ? proxies[proxyIndex % proxies.length] : null;
+  if (template) proxyIndex += 1;
+  const url = template ? template.replace("{url}", encodeURIComponent(target)) : target;
+
+  const customUa = process.env.SCRAPER_USER_AGENTS
+    ? process.env.SCRAPER_USER_AGENTS.split("||").map((item) => item.trim()).filter(Boolean)
+    : defaultUserAgents;
+  const ua = (customUa.length ? customUa : defaultUserAgents)[uaIndex % (customUa.length ? customUa.length : defaultUserAgents.length)];
+  uaIndex += 1;
+
+  const response = await fetch(url, {
     headers: {
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      "User-Agent": ua,
       Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Cache-Control": "no-cache"
     },
@@ -169,6 +208,55 @@ async function fetchHtml(target: string) {
     throw new Error(`PG fetch failed (${response.status})`);
   }
   return { html, target };
+}
+
+function parseRosterFromTeamHtml(html: string, teamName: string, offset = 0) {
+  const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => m[1]);
+  const players: Tournament["games"][number]["players"] = [];
+  for (const row of rows) {
+    const links = [...row.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/gi)].map((m) => cleanText(m[1]));
+    if (!links.length) continue;
+    const name = links[0];
+    if (!name || name.length < 4 || /visit team page/i.test(name)) continue;
+    const rowText = cleanText(row);
+    const position = (rowText.match(/\b(RHP|LHP|SS|CF|OF|C|1B|2B|3B|INF|MIF|P)\b/i)?.[1] || "").toUpperCase();
+    if (/sign in|create account|forgot password/i.test(name.toLowerCase())) continue;
+    players.push({
+      id: `pg-team-player-${offset + players.length + 1}`,
+      name,
+      school: teamName,
+      position,
+      mustSee: false
+    });
+  }
+  return players.slice(0, 80);
+}
+
+async function enrichPlayersFromTeamPages(teams: ParsedTeam[]) {
+  const out: Tournament["games"][number]["players"] = [];
+  const limited = teams.slice(0, 20);
+  for (let i = 0; i < limited.length; i += 1) {
+    const team = limited[i];
+    if (!team.href) continue;
+    try {
+      const { html } = await fetchHtml(team.href);
+      out.push(...parseRosterFromTeamHtml(html, team.name, i * 100));
+    } catch {
+      // Continue when a team page fails to load.
+    }
+  }
+  return out;
+}
+
+function attachPlayersToGamesByTeam(games: Tournament["games"], players: Tournament["games"][number]["players"]) {
+  if (!games.length || !players.length) return games;
+  return games.map((game) => {
+    const assigned = players.filter((p) => p.school === game.homeTeam || p.school === game.awayTeam);
+    if (assigned.length) {
+      return { ...game, players: assigned };
+    }
+    return game;
+  });
 }
 
 function targetFromHint(hint: string) {
@@ -196,6 +284,7 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
   const date = parseDate(html);
   let games = parseGames(html);
   const teams = parseParticipatingTeams(html);
+  const teamPlayers = await enrichPlayersFromTeamPages(teams);
 
   if (!games.length) {
     const eventNum = numericEventId(target);
@@ -211,6 +300,7 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
   if (!games.length && teams.length) {
     games = gamesFromTeams(teams, date);
   }
+  games = attachPlayersToGamesByTeam(games, teamPlayers);
 
   return {
     id,
@@ -218,6 +308,11 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
     city: "Unknown",
     date,
     games,
-    teams
+    teams: teams.map((team) => ({
+      id: team.id,
+      name: team.name,
+      from: team.from,
+      record: team.record
+    }))
   };
 }

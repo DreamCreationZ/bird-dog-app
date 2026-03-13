@@ -215,6 +215,7 @@ export default function BirdDogPage() {
   const [sourceSuggestions, setSourceSuggestions] = useState<PlaceSuggestion[]>([]);
   const [destinationSuggestions, setDestinationSuggestions] = useState<PlaceSuggestion[]>([]);
   const [hotelSuggestions, setHotelSuggestions] = useState<HotelSuggestion[]>([]);
+  const [selectedTeamName, setSelectedTeamName] = useState("");
   const [desiredPlayers, setDesiredPlayers] = useState<DesiredPlayer[]>([]);
   const [desiredPlayerId, setDesiredPlayerId] = useState("");
   const [myGeneratedPlan, setMyGeneratedPlan] = useState<PlanItem[]>([]);
@@ -318,6 +319,11 @@ export default function BirdDogPage() {
       setDesiredPlayerId(players[0].id);
     }
   }, [players, playersById, desiredPlayerId]);
+
+  useEffect(() => {
+    const firstTeam = selectedTournament?.teams?.[0]?.name || "";
+    setSelectedTeamName(firstTeam);
+  }, [selectedTournament?.id, selectedTournament?.teams]);
 
   useEffect(() => {
     if (!canAccessLockedPages) {
@@ -871,6 +877,22 @@ export default function BirdDogPage() {
       };
     });
   }, [games, players, notes]);
+  const teamDashboard = useMemo(() => {
+    const teams = selectedTournament?.teams || [];
+    return teams.map((team) => {
+      const teamPlayers = players.filter((p) => p.school === team.name);
+      const bestPlayer = teamPlayers[0] || null;
+      return {
+        team,
+        teamPlayers,
+        bestPlayer
+      };
+    });
+  }, [selectedTournament?.teams, players]);
+  const selectedTeamDashboard = useMemo(
+    () => teamDashboard.find((row) => row.team.name === selectedTeamName) || null,
+    [teamDashboard, selectedTeamName]
+  );
   const showTournaments = activeTab === "tournaments";
   const showSchedule = activeTab === "schedule" && canAccessLockedPages;
   const showNotes = activeTab === "notes" && canAccessLockedPages;
@@ -1134,6 +1156,7 @@ export default function BirdDogPage() {
       <section className="panel grid2">
         <div>
           <h2>Participating Teams</h2>
+          <p className="muted">Teams in tournament: {selectedTournament?.teams?.length || 0}</p>
           {selectedTournament?.teams?.length ? (
             <div className="table-wrap" style={{ marginBottom: 12 }}>
               <table className="roster-table">
@@ -1146,7 +1169,7 @@ export default function BirdDogPage() {
                 </thead>
                 <tbody>
                   {selectedTournament.teams.map((team) => (
-                    <tr key={team.id}>
+                    <tr key={team.id} style={{ cursor: "pointer" }} onClick={() => setSelectedTeamName(team.name)}>
                       <td>{team.name}</td>
                       <td>{team.from || "-"}</td>
                       <td>{team.record || "-"}</td>
@@ -1156,11 +1179,27 @@ export default function BirdDogPage() {
               </table>
             </div>
           ) : <p className="muted">Participating teams appear after full tournament ingest.</p>}
+          {teamDashboard.length ? (
+            <div className="row wrap">
+              {teamDashboard.map((row) => (
+                <button
+                  key={row.team.id}
+                  className="secondary"
+                  onClick={() => setSelectedTeamName(row.team.name)}
+                  type="button"
+                >
+                  {row.team.name} ({row.teamPlayers.length})
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
         <div>
-          <h2>Tournament Roster</h2>
-          {players.length ? (
+          <h2>Team Players</h2>
+          {selectedTeamDashboard ? (
             <div className="table-wrap">
+              <p className="muted"><strong>Team:</strong> {selectedTeamDashboard.team.name}</p>
+              <p className="muted"><strong>Best Player:</strong> {selectedTeamDashboard.bestPlayer?.name || "N/A"}</p>
               <table className="roster-table">
                 <thead>
                   <tr>
@@ -1171,7 +1210,7 @@ export default function BirdDogPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {players.map((p, idx) => (
+                  {selectedTeamDashboard.teamPlayers.map((p, idx) => (
                     <tr key={p.id}>
                       <td>{idx + 1}</td>
                       <td>{p.name}</td>
@@ -1182,7 +1221,7 @@ export default function BirdDogPage() {
                 </tbody>
               </table>
             </div>
-          ) : <p className="muted">Roster appears after tournament data is loaded.</p>}
+          ) : <p className="muted">Click a team to view player roster.</p>}
         </div>
         <div>
           <h2>Tournament Matchups</h2>
