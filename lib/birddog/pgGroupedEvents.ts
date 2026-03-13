@@ -20,8 +20,24 @@ function normalizeName(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+const genericTokens = new Set([
+  "2025",
+  "2026",
+  "pg",
+  "wwba",
+  "national",
+  "world",
+  "championship",
+  "championships"
+]);
+
 function tokenSet(value: string) {
   return new Set(normalizeName(value).split(" ").filter(Boolean));
+}
+
+function significantTokens(value: string) {
+  const tokens = Array.from(tokenSet(value));
+  return tokens.filter((t) => !genericTokens.has(t));
 }
 
 function similarity(a: string, b: string) {
@@ -62,15 +78,34 @@ export async function fetchPgGroupedEvents(gid = "23065"): Promise<PgGroupedEven
 }
 
 export function bestGroupedEventMatch(targetName: string, events: PgGroupedEvent[]) {
+  const targetNorm = normalizeName(targetName);
+  const targetSignificant = significantTokens(targetName);
+
+  // Prefer exact/near-exact phrase containment first.
+  const exactish = events.find((event) => {
+    const eventNorm = normalizeName(event.name);
+    return eventNorm.includes(targetNorm) || targetNorm.includes(eventNorm);
+  });
+  if (exactish) return exactish;
+
+  // Then require all significant tokens to exist in the candidate name.
+  const strictCandidates = events.filter((event) => {
+    const eventTokens = tokenSet(event.name);
+    if (!targetSignificant.length) return false;
+    return targetSignificant.every((token) => eventTokens.has(token));
+  });
+
+  const pool = strictCandidates.length ? strictCandidates : events;
   let best: PgGroupedEvent | null = null;
   let score = 0;
-  for (const event of events) {
+  for (const event of pool) {
     const s = similarity(targetName, event.name);
     if (s > score) {
       score = s;
       best = event;
     }
   }
-  if (score < 0.32) return null;
+  if (strictCandidates.length && best) return best;
+  if (score < 0.55) return null;
   return best;
 }
