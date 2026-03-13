@@ -1100,8 +1100,6 @@ export default function BirdDogPage() {
           Scroll all tournaments below. Open one tournament to load its details, then move to Schedule or Notes.
         </p>
         <div className="row wrap">
-          <button className="secondary" onClick={() => setActiveTab("schedule")} disabled={!canAccessLockedPages}>Schedule</button>
-          <button className="secondary" onClick={() => setActiveTab("notes")} disabled={!canAccessLockedPages}>Notes</button>
           <button className="secondary" onClick={() => void fetchInventory()}>Refresh List</button>
         </div>
         {openError ? <p className="muted">{openError}</p> : null}

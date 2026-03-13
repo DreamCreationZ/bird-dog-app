@@ -6,11 +6,12 @@
   --bd-ink: #0f0f0f;
   --bd-line: #d8d2c4;
   --bd-danger: #b10f0f;
-  max-width: 1200px;
+  max-width: 1080px;
   margin: 0 auto;
-  padding: 14px 14px 84px;
+  padding: 10px 10px 78px;
   color: var(--bd-ink);
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-size: 15px;
 }
 
 .bd-root h1,
@@ -47,9 +48,9 @@
 .bd-root .panel {
   background: var(--bd-panel);
   border: 1px solid var(--bd-line);
-  border-radius: 14px;
-  padding: 14px;
-  margin-top: 12px;
+  border-radius: 12px;
+  padding: 10px;
+  margin-top: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.07);
 }
 
@@ -60,7 +61,7 @@
 
 .bd-root .row {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: end;
 }
 
@@ -70,8 +71,8 @@
 
 .bd-root label {
   display: grid;
-  gap: 6px;
-  margin-bottom: 10px;
+  gap: 4px;
+  margin-bottom: 8px;
   font-weight: 700;
   color: var(--bd-ink);
 }
@@ -90,14 +91,14 @@
   border: 1px solid #bbb39f;
   background: #fff;
   color: #0f0f0f;
-  padding: 10px;
-  border-radius: 10px;
+  padding: 8px;
+  border-radius: 8px;
 }
 
 .bd-root button {
   border: 0;
-  border-radius: 10px;
-  padding: 10px 14px;
+  border-radius: 8px;
+  padding: 8px 12px;
   font-weight: 700;
   background: var(--org-primary);
   color: #fff;
@@ -159,16 +160,20 @@
 
 .bd-root .log-list {
   display: grid;
-  gap: 8px;
-  max-height: 320px;
+  gap: 6px;
+  max-height: 360px;
   overflow: auto;
 }
 
 .bd-root .log-card {
   border: 1px solid #c8bfad;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #fffcf5;
-  padding: 10px;
+  padding: 8px;
+}
+
+.bd-root .log-card p {
+  margin: 4px 0;
 }
 
 .bd-root .log-card.locked-card {
@@ -199,7 +204,7 @@
 .bd-root .roster-table td {
   text-align: left;
   border-bottom: 1px solid #cdc3b0;
-  padding: 8px;
+  padding: 6px;
   white-space: nowrap;
 }
 
@@ -208,7 +213,7 @@
 }
 
 .bd-root .small {
-  font-size: 0.86rem;
+  font-size: 0.8rem;
 }
 
 .bd-root .bottom-tabs {
