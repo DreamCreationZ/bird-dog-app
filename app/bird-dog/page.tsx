@@ -98,6 +98,25 @@ type OptimizedStop = ItineraryStop & {
 
 const CACHE_KEY = "bird_dog_tournament_cache";
 const PREVIEW_UNLOCK_ALL = process.env.NEXT_PUBLIC_BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
+const THEME_KEY = "bird_dog_theme";
+
+type ThemePreset = {
+  id: string;
+  label: string;
+  primary: string;
+  accent: string;
+  bg: string;
+  panel: string;
+  ink: string;
+  line: string;
+};
+
+const THEME_PRESETS: ThemePreset[] = [
+  { id: "field", label: "Field", primary: "#1f3a5f", accent: "#d7a316", bg: "#f3f0e7", panel: "#fffdf8", ink: "#0f0f0f", line: "#d8d2c4" },
+  { id: "mint", label: "Mint", primary: "#0f4f4f", accent: "#2ca77f", bg: "#eef7f3", panel: "#fcfffd", ink: "#0f1f1c", line: "#c8ddd4" },
+  { id: "sunset", label: "Sunset", primary: "#5a2f1f", accent: "#e17f32", bg: "#f8efe8", panel: "#fffaf6", ink: "#1d130f", line: "#ddc9ba" },
+  { id: "night", label: "Night", primary: "#1d2f5e", accent: "#6aa8ff", bg: "#eef2fb", panel: "#f9fbff", ink: "#101621", line: "#ccd7ef" }
+];
 
 function timeLabel(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -308,6 +327,11 @@ export default function BirdDogPage() {
   const [authLoading, setAuthLoading] = useState(true);
 
   const brand = useMemo(() => getOrgByEmail(user?.email || ""), [user?.email]);
+  const [themeId, setThemeId] = useState("field");
+  const activeTheme = useMemo(
+    () => THEME_PRESETS.find((theme) => theme.id === themeId) || THEME_PRESETS[0],
+    [themeId]
+  );
 
   const [online, setOnline] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -507,16 +531,26 @@ export default function BirdDogPage() {
 
   useEffect(() => {
     if (!user) return;
+    const rawTheme = localStorage.getItem(`${THEME_KEY}:${user.orgId}:${user.userId}`) || localStorage.getItem(THEME_KEY);
     const rawWatch = localStorage.getItem(makeOrgKey(user.orgId, user.userId, "watchlist"));
     const rawNotes = localStorage.getItem(makeOrgKey(user.orgId, user.userId, "notes"));
     const rawPulses = localStorage.getItem(makeOrgKey(user.orgId, user.userId, "pulses"));
     const rawSync = localStorage.getItem(makeOrgKey(user.orgId, user.userId, "lastSyncAt"));
 
+    if (rawTheme && THEME_PRESETS.some((theme) => theme.id === rawTheme)) {
+      setThemeId(rawTheme);
+    }
     setWatchlist(rawWatch ? JSON.parse(rawWatch) : []);
     setNotes(rawNotes ? JSON.parse(rawNotes) : []);
     setPulses(rawPulses ? JSON.parse(rawPulses) : []);
     setLastSyncAt(rawSync || null);
   }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    localStorage.setItem(`${THEME_KEY}:${user.orgId}:${user.userId}`, themeId);
+    localStorage.setItem(THEME_KEY, themeId);
+  }, [user, themeId]);
 
   useEffect(() => {
     if (!user) return;
@@ -1130,7 +1164,14 @@ export default function BirdDogPage() {
   return (
     <main
       className="bd-root"
-      style={{ ["--org-primary" as string]: brand.primary, ["--org-accent" as string]: brand.accent }}
+      style={{
+        ["--org-primary" as string]: activeTheme.primary || brand.primary,
+        ["--org-accent" as string]: activeTheme.accent || brand.accent,
+        ["--bd-bg" as string]: activeTheme.bg,
+        ["--bd-panel" as string]: activeTheme.panel,
+        ["--bd-ink" as string]: activeTheme.ink,
+        ["--bd-line" as string]: activeTheme.line
+      }}
       onTouchStart={onPullStart}
       onTouchMove={onPullMove}
       onTouchEnd={onPullEnd}
@@ -1178,6 +1219,21 @@ export default function BirdDogPage() {
             >
               Notes
             </button>
+            <div className="menu-section-title">Themes</div>
+            <div className="theme-grid">
+              {THEME_PRESETS.map((theme) => (
+                <button
+                  key={theme.id}
+                  type="button"
+                  className={`theme-pill ${themeId === theme.id ? "active" : ""}`}
+                  onClick={() => setThemeId(theme.id)}
+                  title={theme.label}
+                >
+                  <span className="theme-dot" style={{ backgroundColor: theme.primary }} />
+                  <span>{theme.label}</span>
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               className="danger"
