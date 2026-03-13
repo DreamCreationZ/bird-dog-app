@@ -1024,15 +1024,6 @@ export default function BirdDogPage() {
       onTouchMove={onPullMove}
       onTouchEnd={onPullEnd}
     >
-      <section className="bd-header">
-        <div>
-          <h1>Project Bird Dog</h1>
-          <p className="muted">{user?.name} ({user?.email}) - {user?.orgName}</p>
-          <p className="muted">Status: {online ? "Online" : "Offline"} {syncing ? "| Syncing..." : ""} {lastSyncAt ? `| Last sync ${timeLabel(lastSyncAt)}` : ""}</p>
-          {syncError ? <p className="muted">{syncError}</p> : null}
-        </div>
-      </section>
-
       <div className="top-menu">
         <button
           type="button"
