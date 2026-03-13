@@ -45,6 +45,9 @@ type InventoryTournament = {
   company: "PG" | "PBR";
   locked: boolean;
   harvestHint?: string;
+  displayDate?: string;
+  displayTeams?: string;
+  displayCity?: string;
 };
 
 type PlanItem = {
@@ -138,7 +141,8 @@ function tournamentIconByName(name: string) {
   return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupEventLogo_PG_LOGO_EVENT.png";
 }
 
-function tournamentDateBadge(name: string) {
+function tournamentDateBadge(name: string, liveDate?: string) {
+  if (liveDate) return liveDate;
   const low = name.toLowerCase();
   if (low.includes("underclass world")) return "Oct 1-5";
   if (low.includes("freshman world")) return "Oct 8-12";
@@ -1162,10 +1166,12 @@ export default function BirdDogPage() {
                   void useUnlockedTournament(item);
                 }}
               >
-                {tournamentDateBadge(item.name) ? <p className="tile-date">{tournamentDateBadge(item.name)}</p> : null}
+                {tournamentDateBadge(item.name, item.displayDate) ? <p className="tile-date">{tournamentDateBadge(item.name, item.displayDate)}</p> : null}
                 <img className="tile-icon" src={tournamentIconByName(item.name)} alt={item.name} />
                 <p className="tile-title"><strong>{item.name}</strong></p>
                 <p className="muted">{item.season.toUpperCase()} · {item.company}</p>
+                {item.displayCity ? <p className="small">{item.displayCity}</p> : null}
+                {item.displayTeams ? <p className="small">{item.displayTeams}</p> : null}
                 {locked ? <p className="small">🔒 Subscribe to Unlock</p> : null}
                 {openingSlug === item.slug ? <p className="small">Opening...</p> : null}
                 {unlockingSlug === item.slug ? <p className="small">Opening Checkout...</p> : null}
