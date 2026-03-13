@@ -1031,11 +1031,6 @@ export default function BirdDogPage() {
           <p className="muted">Status: {online ? "Online" : "Offline"} {syncing ? "| Syncing..." : ""} {lastSyncAt ? `| Last sync ${timeLabel(lastSyncAt)}` : ""}</p>
           {syncError ? <p className="muted">{syncError}</p> : null}
         </div>
-        <div className="org-chip">
-          <strong>{brand.logoText}</strong>
-          <span>{brand.name}</span>
-          <button className="secondary" onClick={() => void logout()}>Log Out</button>
-        </div>
       </section>
 
       <div className="top-menu">
@@ -1080,6 +1075,16 @@ export default function BirdDogPage() {
               }}
             >
               Notes
+            </button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() => {
+                setMenuOpen(false);
+                void logout();
+              }}
+            >
+              Log Out
             </button>
           </div>
         ) : null}
