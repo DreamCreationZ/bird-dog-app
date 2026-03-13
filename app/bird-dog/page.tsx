@@ -866,30 +866,54 @@ export default function BirdDogPage() {
           <label>
             Flight Source
             <input
-              list="flight-source-suggestions"
               value={scheduleForm.flightSource}
               onChange={(e) => setScheduleForm((p) => ({ ...p, flightSource: e.target.value }))}
               placeholder="Type city or airport (example: Rotterdam)"
             />
-            <datalist id="flight-source-suggestions">
-              {sourceSuggestions.map((option) => (
-                <option key={option.placeId || option.label} value={option.label} />
-              ))}
-            </datalist>
+            {sourceSuggestions.length ? (
+              <div className="log-list" style={{ maxHeight: 130, marginTop: 6 }}>
+                {sourceSuggestions.map((option) => (
+                  <button
+                    key={option.placeId || option.label}
+                    type="button"
+                    className="secondary"
+                    style={{ textAlign: "left", width: "100%" }}
+                    onClick={() => {
+                      setScheduleForm((p) => ({ ...p, flightSource: option.label }));
+                      setSourceSuggestions([]);
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </label>
           <label>
             Flight Destination
             <input
-              list="flight-destination-suggestions"
               value={scheduleForm.flightDestination}
               onChange={(e) => setScheduleForm((p) => ({ ...p, flightDestination: e.target.value }))}
               placeholder="Type city or airport (example: Bangalore)"
             />
-            <datalist id="flight-destination-suggestions">
-              {destinationSuggestions.map((option) => (
-                <option key={option.placeId || option.label} value={option.label} />
-              ))}
-            </datalist>
+            {destinationSuggestions.length ? (
+              <div className="log-list" style={{ maxHeight: 130, marginTop: 6 }}>
+                {destinationSuggestions.map((option) => (
+                  <button
+                    key={option.placeId || option.label}
+                    type="button"
+                    className="secondary"
+                    style={{ textAlign: "left", width: "100%" }}
+                    onClick={() => {
+                      setScheduleForm((p) => ({ ...p, flightDestination: option.label }));
+                      setDestinationSuggestions([]);
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </label>
           <label>
             Flight Arrival Time
@@ -898,16 +922,10 @@ export default function BirdDogPage() {
           <label>
             Hotel
             <input
-              list="hotel-suggestions"
               value={scheduleForm.hotelName}
               onChange={(e) => setScheduleForm((p) => ({ ...p, hotelName: e.target.value }))}
               placeholder="Select hotel or type custom name"
             />
-            <datalist id="hotel-suggestions">
-              {hotelSuggestions.map((hotel) => (
-                <option key={hotel.placeId || `${hotel.name}-${hotel.address}`} value={hotel.name} />
-              ))}
-            </datalist>
           </label>
           {hotelSuggestions.length ? (
             <div className="panel" style={{ padding: 10 }}>
