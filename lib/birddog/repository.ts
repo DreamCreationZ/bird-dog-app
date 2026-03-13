@@ -268,6 +268,18 @@ export async function listCoachSchedules(orgId: string): Promise<CoachSchedule[]
   return rows;
 }
 
+export async function cleanupPastCoachSchedules(orgId: string) {
+  const nowIso = new Date().toISOString();
+  await supabaseRequest("coach_schedules", {
+    method: "DELETE",
+    query: {
+      org_id: `eq.${orgId}`,
+      flight_arrival_time: `lt.${nowIso}`
+    },
+    prefer: "return=minimal"
+  }).catch(() => undefined);
+}
+
 export async function insertSyncBatch(input: {
   orgId: string;
   userId: string;

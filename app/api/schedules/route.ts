@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listCoachSchedules, upsertCoachSchedule } from "@/lib/birddog/repository";
+import { cleanupPastCoachSchedules, listCoachSchedules, upsertCoachSchedule } from "@/lib/birddog/repository";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 
 export async function GET(req: NextRequest) {
@@ -9,6 +9,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    await cleanupPastCoachSchedules(session.orgId);
     const schedules = await listCoachSchedules(session.orgId);
     return NextResponse.json({ schedules });
   } catch (error) {
@@ -25,6 +26,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
 
   try {
+    await cleanupPastCoachSchedules(session.orgId);
     await upsertCoachSchedule({
       orgId: session.orgId,
       userId: session.userId,

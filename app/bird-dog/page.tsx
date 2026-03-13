@@ -1058,11 +1058,10 @@ export default function BirdDogPage() {
                         <td>{item.hotel_name || "-"}</td>
                         <td>
                           <div className="row wrap">
-                            <button className="secondary" onClick={() => openScheduleView(item)}>View Schedule</button>
+                            <button className="secondary" onClick={() => openScheduleView(item)}>View Schedules</button>
                             {item.user_id === user?.userId ? (
                               <>
                                 <button className="secondary" onClick={() => editSchedule(item)}>Edit</button>
-                                <button className="secondary" onClick={() => void startMapForSchedule(item)}>Start Map</button>
                               </>
                             ) : null}
                           </div>
@@ -1103,12 +1102,12 @@ export default function BirdDogPage() {
               ))}
             </div>
           ) : null}
-          {viewingSchedule.user_id === user?.userId ? (
-            <div className="row wrap">
+          <div className="row wrap">
+            <button className="secondary" onClick={() => void startMapForSchedule(viewingSchedule)}>Start Map</button>
+            {viewingSchedule.user_id === user?.userId ? (
               <button className="secondary" onClick={() => editSchedule(viewingSchedule)}>Edit</button>
-              <button className="secondary" onClick={() => void startMapForSchedule(viewingSchedule)}>Start Map</button>
-            </div>
-          ) : <p className="muted">View only schedule.</p>}
+            ) : null}
+          </div>
         </section>
       ) : null}
 
