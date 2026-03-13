@@ -173,6 +173,8 @@ export default function BirdDogPage() {
   const [inventory, setInventory] = useState<InventoryTournament[]>([]);
   const [subscribed, setSubscribed] = useState(false);
   const [unlockingSlug, setUnlockingSlug] = useState("");
+  const [openingSlug, setOpeningSlug] = useState("");
+  const [openError, setOpenError] = useState("");
   const [selectedInventorySlug, setSelectedInventorySlug] = useState("");
   const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes">("tournaments");
 
@@ -553,35 +555,46 @@ export default function BirdDogPage() {
   }
 
   async function useUnlockedTournament(item: InventoryTournament) {
+    setOpenError("");
+    setOpeningSlug(item.slug);
     setSelectedInventorySlug(item.slug);
     setCompany(item.company);
     setJobHint(item.name);
-    const harvestHint = item.harvestHint || item.name;
-    const eventId = eventIdFromHint(harvestHint);
-    await queueHarvestJob(item.slug, harvestHint, item.company);
-
-    // Poll harvest store so event-specific tournaments (like PG event=99733) appear before navigation.
-    let matched: Tournament | null = null;
-    for (let i = 0; i < 8; i += 1) {
-      const res = await fetch(`/api/harvest?company=${item.company}`);
-      if (res.ok) {
-        const data = await res.json();
-        const list = (data?.dataset?.tournaments || []) as Tournament[];
-        matched = list.find((t) => (eventId && t.id === eventId) || t.name.toLowerCase() === item.name.toLowerCase()) || null;
-        if (matched) break;
+    try {
+      const harvestHint = item.harvestHint || item.name;
+      const liveOpen = await fetch("/api/harvest/open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company: item.company,
+          inventorySlug: item.slug,
+          tournamentHint: harvestHint
+        })
+      });
+      if (!liveOpen.ok) {
+        const data = await liveOpen.json().catch(() => ({}));
+        throw new Error(data?.error || "Unable to load tournament details");
       }
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-    }
-
-    if (matched) {
-      await loadTournamentDetails(item.company, matched.id);
-      setTournamentViewTitle(matched.name);
-    } else {
+      const data = await liveOpen.json();
+      const openedTournament = data?.tournament as Tournament | undefined;
+      if (!openedTournament) {
+        throw new Error("Tournament data was empty.");
+      }
+      setTournaments((prev) => {
+        const filtered = prev.filter((t) => t.id !== openedTournament.id);
+        return [openedTournament, ...filtered];
+      });
+      setSelectedTournamentId(openedTournament.id);
+      setSelectedGameId(openedTournament.games?.[0]?.id || "");
+      setTournamentViewTitle(openedTournament.name);
+      setActiveTab("notes");
+    } catch (error) {
+      setOpenError(error instanceof Error ? error.message : "Failed to open tournament.");
+      await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
       await loadCompanyData(item.company);
-      setTournamentViewTitle(item.name);
+    } finally {
+      setOpeningSlug("");
     }
-    setActiveTab("schedule");
-    await fetchJobs();
   }
 
   function cacheTournamentOffline() {
@@ -915,6 +928,7 @@ export default function BirdDogPage() {
           <button className="secondary" onClick={() => setActiveTab("notes")} disabled={!canAccessLockedPages}>Notes</button>
           <button className="secondary" onClick={() => void fetchInventory()}>Refresh List</button>
         </div>
+        {openError ? <p className="muted">{openError}</p> : null}
         <div className="log-list" style={{ maxHeight: 520, marginTop: 12 }}>
           {inventory.length ? inventory.map((item) => {
             const locked = item.locked && !PREVIEW_UNLOCK_ALL;
@@ -929,8 +943,8 @@ export default function BirdDogPage() {
                       {unlockingSlug === item.slug ? "Opening Checkout..." : "🔒 Subscribe to Unlock"}
                     </button>
                   ) : (
-                    <button className="secondary" onClick={() => void useUnlockedTournament(item)}>
-                      {opened ? "Open Tournament Again" : "Open Tournament"}
+                    <button className="secondary" disabled={openingSlug === item.slug} onClick={() => void useUnlockedTournament(item)}>
+                      {openingSlug === item.slug ? "Opening..." : opened ? "Open Tournament Again" : "Open Tournament"}
                     </button>
                   )}
                   {opened ? <span className="small">Opened</span> : null}

@@ -501,6 +501,23 @@ export async function upsertHarvestedTournament(input: {
   })) as TournamentRow[];
 
   const tournamentId = insertedTournaments[0].id;
+
+  if (Array.isArray(input.tournament.teams) && input.tournament.teams.length) {
+    await supabaseRequest("harvested_participating_teams", {
+      method: "POST",
+      query: { on_conflict: "org_id,tournament_id,external_id" },
+      body: input.tournament.teams.map((team) => ({
+        org_id: input.orgId,
+        tournament_id: tournamentId,
+        external_id: team.id,
+        name: team.name,
+        hometown: team.from || "",
+        record: team.record || null
+      })),
+      prefer: "resolution=merge-duplicates,return=minimal"
+    });
+  }
+
   const gamesPayload = toGameRows(tournamentId, input.orgId, input.tournament.games);
 
   const insertedGames = gamesPayload.length
