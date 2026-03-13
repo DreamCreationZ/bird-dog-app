@@ -1,12 +1,18 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export default function SubscribePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [inventorySlug, setInventorySlug] = useState("");
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setInventorySlug(params.get("inventorySlug") || "");
+  }, []);
 
   async function startSubscription() {
     setLoading(true);
@@ -15,7 +21,10 @@ export default function SubscribePage() {
       const res = await fetch("/api/payments/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ returnTo: "/bird-dog" })
+        body: JSON.stringify({
+          returnTo: "/bird-dog",
+          inventorySlug
+        })
       });
 
       const data = await res.json().catch(() => ({}));
@@ -24,7 +33,7 @@ export default function SubscribePage() {
         return;
       }
 
-      if (data?.alreadySubscribed) {
+      if (data?.alreadyUnlocked) {
         router.replace("/bird-dog?subscription=active");
         return;
       }
@@ -44,8 +53,8 @@ export default function SubscribePage() {
     <main className="login-shell">
       <section className="login-card">
         <h1>Bird Dog Subscription</h1>
-        <p>Unlock all tournament access for this coach account.</p>
-        <p><strong>$500</strong> one-time unlock in test mode.</p>
+        <p>Unlock one tournament for your entire organization.</p>
+        <p><strong>$500</strong> per tournament in test mode.</p>
         {error ? <p className="error-text">{error}</p> : null}
         <button type="button" onClick={() => void startSubscription()} disabled={loading}>
           {loading ? "Redirecting..." : "Subscribe & Unlock"}
