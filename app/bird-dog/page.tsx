@@ -905,116 +905,39 @@ export default function BirdDogPage() {
       ) : null}
 
       {showTournaments ? (
-      <section className="panel grid2">
-        <div>
-          <h2>Tournament Dashboard</h2>
-          {canAccessLockedPages ? (
-            <>
-              <div className="row">
-                <label>
-                  Company
-                  <select value={company} onChange={(e) => setCompany(e.target.value as "PG" | "PBR")}>
-                    {(companies.length ? companies : ["PG", "PBR"]).map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </label>
-                <button onClick={() => void loadCompanyData(company)}>{loadingHarvest ? "Harvesting..." : "Load"}</button>
-              </div>
-
-              <label>
-                Tournament
-                <select value={selectedTournamentId} onChange={(e) => void loadTournamentDetails(company, e.target.value)}>
-                  {tournaments.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name} - {t.city} ({dateLabel(t.date)})</option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="row wrap">
-                <button className="secondary" onClick={cacheTournamentOffline}>Download Offline</button>
-                <button className="secondary" onClick={loadCachedTournament}>Load Offline Cache</button>
-                <button className="secondary" onClick={() => void syncNow()}>Force Sync</button>
-              </div>
-            </>
-          ) : null}
-
-          <div className="panel" style={{ marginTop: 10 }}>
-            <h3>Circuit Inventory</h3>
-            <p className="muted">{subscribed ? "Some tournaments are unlocked for your organization." : "All tournaments are currently locked for your organization."}</p>
-            <div className="log-list" style={{ maxHeight: 220 }}>
-              {inventory.length ? inventory.map((item) => (
-                <article key={item.slug} className={`log-card ${item.locked ? "locked-card" : "unlocked-card"}`}>
-                  <p><strong>{item.name}</strong> ({item.season.toUpperCase()} · {item.company})</p>
-                  {item.locked ? (
+      <section className="panel">
+        <h2>Tournament Dashboard</h2>
+        <p className="muted">
+          Scroll all tournaments below. Open one tournament to load its details, then move to Schedule or Notes.
+        </p>
+        <div className="row wrap">
+          <button className="secondary" onClick={() => setActiveTab("schedule")} disabled={!canAccessLockedPages}>Schedule</button>
+          <button className="secondary" onClick={() => setActiveTab("notes")} disabled={!canAccessLockedPages}>Notes</button>
+          <button className="secondary" onClick={() => void fetchInventory()}>Refresh List</button>
+        </div>
+        <div className="log-list" style={{ maxHeight: 520, marginTop: 12 }}>
+          {inventory.length ? inventory.map((item) => {
+            const locked = item.locked && !PREVIEW_UNLOCK_ALL;
+            const opened = selectedInventorySlug === item.slug;
+            return (
+              <article key={item.slug} className={`log-card ${locked ? "locked-card" : "unlocked-card"}`}>
+                <p><strong>{item.name}</strong></p>
+                <p className="muted">{item.season.toUpperCase()} · {item.company}</p>
+                <div className="row wrap">
+                  {locked ? (
                     <button className="secondary" disabled={unlockingSlug === item.slug} onClick={() => void openCheckoutForTournament(item.slug)}>
                       {unlockingSlug === item.slug ? "Opening Checkout..." : "🔒 Subscribe to Unlock"}
                     </button>
                   ) : (
-                    <button className="secondary" onClick={() => void useUnlockedTournament(item)}>Open Tournament</button>
+                    <button className="secondary" onClick={() => void useUnlockedTournament(item)}>
+                      {opened ? "Open Tournament Again" : "Open Tournament"}
+                    </button>
                   )}
-                </article>
-              )) : <p className="muted">No inventory items found.</p>}
-            </div>
-          </div>
-
-          <div className="panel" style={{ marginTop: 10 }}>
-            <h3>Harvester Queue</h3>
-            <div className="row wrap">
-              <input value={jobHint} onChange={(e) => setJobHint(e.target.value)} placeholder="Tournament hint (example: PG Spring Showdown)" />
-              <button className="secondary" disabled>Queue Scrape Job</button>
-              <button className="secondary" onClick={() => void fetchJobs()}>{loadingJobs ? "Loading..." : "Refresh Jobs"}</button>
-              <button className="secondary" onClick={() => void fetchInventory()}>Refresh Inventory</button>
-            </div>
-            <div className="log-list" style={{ maxHeight: 180 }}>
-              {jobs.length ? jobs.map((job) => (
-                <article key={job.id} className="log-card">
-                  <p><strong>{job.company}</strong> - {job.tournament_hint}</p>
-                  <p>{job.status} at {dateLabel(job.created_at)} {timeLabel(job.created_at)}</p>
-                </article>
-              )) : <p className="muted">No harvest jobs yet.</p>}
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <h2>Scout Cockpit</h2>
-          {canAccessLockedPages ? (
-            <>
-              <label>
-                Active Game
-                <select value={selectedGameId} onChange={(e) => setSelectedGameId(e.target.value)}>
-                  {games.map((g) => (
-                    <option key={g.id} value={g.id}>{timeLabel(g.startTime)} - {g.field} ({g.homeTeam} vs {g.awayTeam})</option>
-                  ))}
-                </select>
-              </label>
-              <div className="pulse-box">
-                <input value={pulseMessage} onChange={(e) => setPulseMessage(e.target.value)} placeholder="Pitcher change / rain delay" />
-                <button className="pulse" onClick={sendPulse}>PULSE</button>
-              </div>
-            </>
-          ) : (
-            <p className="muted">Unlock and open a tournament to activate cockpit controls.</p>
-          )}
-        </div>
-      </section>
-      ) : null}
-
-      {showTournaments ? (
-      <section className="panel">
-        <h2>Active Watchlist</h2>
-        <div className="player-grid">
-          {players.map((p) => {
-            const active = watchlistSet.has(p.id) || Boolean(p.mustSee);
-            return (
-              <button key={p.id} className={`player-card ${active ? "active" : ""}`} onClick={() => toggleWatch(p.id)} type="button">
-                <strong>{p.name}</strong>
-                <span>{p.position}</span>
-                <small>{p.school}</small>
-              </button>
+                  {opened ? <span className="small">Opened</span> : null}
+                </div>
+              </article>
             );
-          })}
+          }) : <p className="muted">No tournaments found.</p>}
         </div>
       </section>
       ) : null}

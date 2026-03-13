@@ -75,6 +75,17 @@ function findFirstEventUrl(html) {
 
 function parseParticipatingTeams(html) {
   const teams = [];
+  const blockedTokens = [
+    "sign in",
+    "create account",
+    "valid email format",
+    "forgot password",
+    "not a member yet",
+    "players",
+    "teams",
+    "events"
+  ];
+  const looksLikeFromCell = (value) => /^[A-Za-z .'-]+,\s*[A-Z]{2}$/.test(value.trim());
   const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => m[1]);
   for (const row of rows) {
     const colsRaw = [...row.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((m) => m[1]);
@@ -85,6 +96,9 @@ function parseParticipatingTeams(html) {
     if (!teamCol) continue;
     const fromCol = cols[cols.length - 1];
     if (!fromCol || /^from$/i.test(fromCol)) continue;
+    const loweredRow = `${teamCol} ${fromCol}`.toLowerCase();
+    if (blockedTokens.some((token) => loweredRow.includes(token))) continue;
+    if (!looksLikeFromCell(fromCol)) continue;
     const normalized = teamCol.replace(/\(\d+-\d+-\d+.*?\)/g, "").trim();
     const record = (teamCol.match(/\(([^)]+)\)/)?.[1] || "").trim();
     const hrefMatch = colsRaw[teamIndex >= 0 ? teamIndex : 0]?.match(/href=["']([^"']+)["']/i);
