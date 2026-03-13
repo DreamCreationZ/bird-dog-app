@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { TouchEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getOrgByEmail } from "@/lib/birddog/mockData";
 import { Game, ItineraryStop, Player, PulseEvent, ScoutNote, SessionUser, Tournament } from "@/lib/birddog/types";
@@ -224,9 +224,11 @@ export default function BirdDogPage() {
   const [subscribed, setSubscribed] = useState(false);
   const [unlockingSlug, setUnlockingSlug] = useState("");
   const [openingSlug, setOpeningSlug] = useState("");
+  const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
   const [openError, setOpenError] = useState("");
   const [selectedInventorySlug, setSelectedInventorySlug] = useState("");
   const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes">("tournaments");
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
   const [viewingSchedule, setViewingSchedule] = useState<CoachSchedule | null>(null);
@@ -276,6 +278,8 @@ export default function BirdDogPage() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const pullStartYRef = useRef<number | null>(null);
+  const pullTriggeredRef = useRef(false);
 
   useEffect(() => {
     let mounted = true;
@@ -486,10 +490,96 @@ export default function BirdDogPage() {
 
   async function fetchInventory() {
     const res = await fetch("/api/inventory");
-    if (!res.ok) return;
+    if (!res.ok) return [] as InventoryTournament[];
     const data = await res.json();
+    const nextInventory: InventoryTournament[] = data.inventory || [];
     setSubscribed(Boolean(data.subscribed));
-    setInventory(data.inventory || []);
+    setInventory(nextInventory);
+    return nextInventory;
+  }
+
+  async function refreshTournamentByInventory(item: InventoryTournament) {
+    const harvestHint = item.harvestHint || item.name;
+    const liveOpen = await fetch("/api/harvest/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        company: item.company,
+        inventorySlug: item.slug,
+        tournamentHint: harvestHint
+      })
+    });
+    if (!liveOpen.ok) return;
+    const data = await liveOpen.json();
+    const openedTournament = data?.tournament as Tournament | undefined;
+    if (!openedTournament) return;
+    setTournaments((prev) => {
+      const filtered = prev.filter((t) => t.id !== openedTournament.id);
+      return [openedTournament, ...filtered];
+    });
+    setSelectedTournamentId(openedTournament.id);
+    setSelectedGameId(openedTournament.games?.[0]?.id || "");
+    setTournamentViewTitle(openedTournament.name);
+  }
+
+  async function refreshFromPerfectGame(includeOpenedTournament: boolean) {
+    if (inventoryRefreshing) return;
+    setInventoryRefreshing(true);
+    try {
+      const nextInventory = await fetchInventory();
+      if (!includeOpenedTournament) return;
+      const selectedSlug = selectedInventorySlug;
+      if (!selectedSlug) return;
+      const selectedItem = nextInventory.find((item) => item.slug === selectedSlug);
+      if (!selectedItem) return;
+      if (selectedItem.locked && !PREVIEW_UNLOCK_ALL) return;
+      await refreshTournamentByInventory(selectedItem);
+    } finally {
+      setInventoryRefreshing(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!online || !user) return;
+    const tick = () => {
+      const shouldRefreshOpenedTournament = activeTab !== "tournaments";
+      void refreshFromPerfectGame(shouldRefreshOpenedTournament);
+    };
+    const onFocus = () => tick();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    const id = window.setInterval(tick, 90000);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [online, user, activeTab, selectedInventorySlug]);
+
+  function onPullStart(event: TouchEvent<HTMLElement>) {
+    if (activeTab !== "tournaments" || window.scrollY > 0) return;
+    pullStartYRef.current = event.touches[0]?.clientY ?? null;
+    pullTriggeredRef.current = false;
+  }
+
+  function onPullMove(event: TouchEvent<HTMLElement>) {
+    if (activeTab !== "tournaments") return;
+    if (pullTriggeredRef.current) return;
+    const startY = pullStartYRef.current;
+    if (startY == null || window.scrollY > 0) return;
+    const delta = (event.touches[0]?.clientY ?? startY) - startY;
+    if (delta >= 84) {
+      pullTriggeredRef.current = true;
+      void refreshFromPerfectGame(true);
+    }
+  }
+
+  function onPullEnd() {
+    pullStartYRef.current = null;
+    pullTriggeredRef.current = false;
   }
 
   function hydrateMySchedule(data: CoachSchedule[]) {
@@ -927,7 +1017,13 @@ export default function BirdDogPage() {
   }
 
   return (
-    <main className="bd-root" style={{ ["--org-primary" as string]: brand.primary, ["--org-accent" as string]: brand.accent }}>
+    <main
+      className="bd-root"
+      style={{ ["--org-primary" as string]: brand.primary, ["--org-accent" as string]: brand.accent }}
+      onTouchStart={onPullStart}
+      onTouchMove={onPullMove}
+      onTouchEnd={onPullEnd}
+    >
       <section className="bd-header">
         <div>
           <h1>Project Bird Dog</h1>
@@ -941,6 +1037,53 @@ export default function BirdDogPage() {
           <button className="secondary" onClick={() => void logout()}>Log Out</button>
         </div>
       </section>
+
+      <div className="top-menu">
+        <button
+          type="button"
+          className="menu-trigger secondary"
+          aria-label="Open navigation menu"
+          onClick={() => setMenuOpen((prev) => !prev)}
+        >
+          ☰
+        </button>
+        {menuOpen ? (
+          <div className="menu-dropdown">
+            <button
+              className={activeTab === "tournaments" ? "active" : ""}
+              type="button"
+              onClick={() => {
+                setActiveTab("tournaments");
+                setMenuOpen(false);
+              }}
+            >
+              Tournaments
+            </button>
+            <button
+              className={activeTab === "schedule" ? "active" : ""}
+              type="button"
+              disabled={!canAccessLockedPages}
+              onClick={() => {
+                setActiveTab("schedule");
+                setMenuOpen(false);
+              }}
+            >
+              Schedule
+            </button>
+            <button
+              className={activeTab === "notes" ? "active" : ""}
+              type="button"
+              disabled={!canAccessLockedPages}
+              onClick={() => {
+                setActiveTab("notes");
+                setMenuOpen(false);
+              }}
+            >
+              Notes
+            </button>
+          </div>
+        ) : null}
+      </div>
 
       {!canAccessLockedPages && (activeTab === "schedule" || activeTab === "notes") ? (
         <section className="panel">
@@ -1146,9 +1289,7 @@ export default function BirdDogPage() {
         <p className="muted">
           Scroll all tournaments below. Open one tournament to load its details, then move to Schedule or Notes.
         </p>
-        <div className="row wrap">
-          <button className="secondary" onClick={() => void fetchInventory()}>Refresh List</button>
-        </div>
+        <p className="muted small">{inventoryRefreshing ? "Syncing latest data from Perfect Game..." : "Pull down to refresh from Perfect Game."}</p>
         {openError ? <p className="muted">{openError}</p> : null}
         <div className="tournament-grid" style={{ marginTop: 12 }}>
           {inventory.length ? inventory.map((item) => {
@@ -1333,11 +1474,6 @@ export default function BirdDogPage() {
       </section>
       ) : null}
 
-      <nav className="bottom-tabs">
-        <button className={activeTab === "tournaments" ? "active" : ""} onClick={() => setActiveTab("tournaments")} type="button">Tournaments</button>
-        <button className={activeTab === "schedule" ? "active" : ""} onClick={() => setActiveTab("schedule")} type="button" disabled={!canAccessLockedPages}>Schedule</button>
-        <button className={activeTab === "notes" ? "active" : ""} onClick={() => setActiveTab("notes")} type="button" disabled={!canAccessLockedPages}>Notes</button>
-      </nav>
     </main>
   );
 }
