@@ -190,6 +190,7 @@ export default function BirdDogPage() {
   const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes">("tournaments");
 
   const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
+  const [selectedScheduleId, setSelectedScheduleId] = useState("");
   const [scheduleForm, setScheduleForm] = useState({
     flightSource: "",
     flightDestination: "",
@@ -469,6 +470,9 @@ export default function BirdDogPage() {
     const data = await res.json();
     const scheduleList: CoachSchedule[] = data.schedules || [];
     setSchedules(scheduleList);
+    if (scheduleList.length && !scheduleList.find((item) => item.id === selectedScheduleId)) {
+      setSelectedScheduleId(scheduleList[0].id);
+    }
     hydrateMySchedule(scheduleList);
   }
 
@@ -816,6 +820,10 @@ export default function BirdDogPage() {
   }
 
   const itinerary = useMemo(() => buildPath(games, watchlistSet), [games, watchlistSet]);
+  const selectedSchedule = useMemo(
+    () => schedules.find((item) => item.id === selectedScheduleId) || null,
+    [schedules, selectedScheduleId]
+  );
   const tournamentPlayerDashboard = useMemo(() => {
     if (!games.length) return [];
     return players.map((player) => {
@@ -994,36 +1002,64 @@ export default function BirdDogPage() {
         <div>
           <h2>Team Schedule Board</h2>
           <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
-          <div className="log-list" style={{ maxHeight: 360 }}>
-            {schedules.length ? schedules.map((item) => (
-              <article key={item.id} className="log-card">
-                <p><strong>{item.coach_name}</strong></p>
-                <p>{item.flight_source || "-"} {"->"} {item.flight_destination || "-"}</p>
-                <p>{item.flight_arrival_time ? new Date(item.flight_arrival_time).toLocaleString() : "No arrival time"}</p>
-                <p>Hotel: {item.hotel_name || "-"}</p>
-                <p>{item.notes || ""}</p>
-                {item.desired_players?.length ? (
-                  <p>
-                    <strong>Targets:</strong> {item.desired_players.map((p) => `${p.name} (${p.team})`).join(", ")}
-                  </p>
-                ) : null}
-                {item.generated_plan?.length ? (
-                  <div>
-                    <p><strong>Generated Plan</strong></p>
-                    {item.generated_plan.map((plan, idx) => (
-                      <p key={`${plan.at}-${idx}`} className="small">{timeLabel(plan.at)} - {plan.title}: {plan.detail}</p>
+          {schedules.length ? (
+            <>
+              <div className="table-wrap">
+                <table className="roster-table">
+                  <thead>
+                    <tr>
+                      <th>Coach</th>
+                      <th>Route</th>
+                      <th>Arrival</th>
+                      <th>Hotel</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {schedules.map((item) => (
+                      <tr key={item.id}>
+                        <td>{item.coach_name}</td>
+                        <td>{item.flight_source || "-"} {"->"} {item.flight_destination || "-"}</td>
+                        <td>{item.flight_arrival_time ? new Date(item.flight_arrival_time).toLocaleString() : "-"}</td>
+                        <td>{item.hotel_name || "-"}</td>
+                        <td>
+                          <button className="secondary" onClick={() => setSelectedScheduleId(item.id)}>View Schedule</button>
+                        </td>
+                      </tr>
                     ))}
-                  </div>
-                ) : null}
-                <div className="row wrap">
-                  {item.user_id === user?.userId ? (
-                    <button className="secondary" onClick={() => editSchedule(item)}>Edit</button>
+                  </tbody>
+                </table>
+              </div>
+              {selectedSchedule ? (
+                <div className="panel" style={{ marginTop: 10 }}>
+                  <h3>{selectedSchedule.coach_name} - Schedule Details</h3>
+                  <p>{selectedSchedule.flight_source || "-"} {"->"} {selectedSchedule.flight_destination || "-"}</p>
+                  <p>{selectedSchedule.flight_arrival_time ? new Date(selectedSchedule.flight_arrival_time).toLocaleString() : "No arrival time"}</p>
+                  <p>Hotel: {selectedSchedule.hotel_name || "-"}</p>
+                  <p>{selectedSchedule.notes || ""}</p>
+                  {selectedSchedule.desired_players?.length ? (
+                    <p>
+                      <strong>Targets:</strong> {selectedSchedule.desired_players.map((p) => `${p.name} (${p.team})`).join(", ")}
+                    </p>
                   ) : null}
-                  <button className="secondary" onClick={() => void startMapForSchedule(item)}>Start Map</button>
+                  {selectedSchedule.generated_plan?.length ? (
+                    <div>
+                      <p><strong>Generated Plan</strong></p>
+                      {selectedSchedule.generated_plan.map((plan, idx) => (
+                        <p key={`${plan.at}-${idx}`} className="small">{timeLabel(plan.at)} - {plan.title}: {plan.detail}</p>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="row wrap">
+                    {selectedSchedule.user_id === user?.userId ? (
+                      <button className="secondary" onClick={() => editSchedule(selectedSchedule)}>Edit</button>
+                    ) : null}
+                    <button className="secondary" onClick={() => void startMapForSchedule(selectedSchedule)}>Start Map</button>
+                  </div>
                 </div>
-              </article>
-            )) : <p className="muted">No schedules shared yet.</p>}
-          </div>
+              ) : null}
+            </>
+          ) : <p className="muted">No schedules shared yet.</p>}
         </div>
       </section>
       ) : null}
