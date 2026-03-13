@@ -7,18 +7,17 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const name = String(body?.name || "").trim();
   const email = String(body?.email || "").trim().toLowerCase();
-  const accessCode = String(body?.accessCode || "").trim();
+  const password = String(body?.password ?? body?.accessCode ?? "").trim();
 
   if (!name || !email.includes("@")) {
     return NextResponse.json({ error: "Valid name and email are required." }, { status: 400 });
   }
 
-  const requiredCode = String(process.env.BIRD_DOG_LOGIN_PASSCODE || "").trim();
-  if (!requiredCode) {
-    return NextResponse.json({ error: "Authentication not configured. Set BIRD_DOG_LOGIN_PASSCODE." }, { status: 500 });
-  }
-  if (accessCode !== requiredCode) {
-    return NextResponse.json({ error: "Invalid access code." }, { status: 401 });
+  const requiredPassword = String(
+    process.env.BIRD_DOG_LOGIN_PASSWORD || process.env.BIRD_DOG_LOGIN_PASSCODE || ""
+  ).trim();
+  if (requiredPassword && password !== requiredPassword) {
+    return NextResponse.json({ error: "Invalid password." }, { status: 401 });
   }
 
   const org = getOrgByEmail(email);
