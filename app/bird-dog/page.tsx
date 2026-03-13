@@ -85,7 +85,6 @@ type HotelSuggestion = {
 };
 
 const CACHE_KEY = "bird_dog_tournament_cache";
-const MAP_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
 const PREVIEW_UNLOCK_ALL = process.env.NEXT_PUBLIC_BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
 
 function timeLabel(iso: string) {
@@ -204,8 +203,6 @@ export default function BirdDogPage() {
   const [desiredPlayers, setDesiredPlayers] = useState<DesiredPlayer[]>([]);
   const [desiredPlayerId, setDesiredPlayerId] = useState("");
   const [myGeneratedPlan, setMyGeneratedPlan] = useState<PlanItem[]>([]);
-  const [activeMapSchedule, setActiveMapSchedule] = useState<CoachSchedule | null>(null);
-  const [mapOrigin, setMapOrigin] = useState<{ lat: number; lng: number } | null>(null);
 
   const selectedTournament = useMemo(
     () => tournaments.find((t) => t.id === selectedTournamentId) || null,
@@ -558,32 +555,11 @@ export default function BirdDogPage() {
   }
 
   async function startMapForSchedule(schedule: CoachSchedule) {
-    setActiveTab("schedule");
-    setActiveMapSchedule(schedule);
-
-    if (!navigator.geolocation) {
-      setMapOrigin(null);
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        setMapOrigin({
-          lat: position.coords.latitude,
-          lng: position.coords.longitude
-        });
-      },
-      () => setMapOrigin(null),
-      { enableHighAccuracy: true, timeout: 8000 }
-    );
+    if (!schedule.hotel_name?.trim()) return;
+    const destination = encodeURIComponent(schedule.hotel_name);
+    const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`;
+    window.open(mapsUrl, "_blank", "noopener,noreferrer");
   }
-
-  const mapEmbedSrc = useMemo(() => {
-    if (!MAP_KEY || !activeMapSchedule?.hotel_name) return "";
-    const destination = encodeURIComponent(activeMapSchedule.hotel_name);
-    const origin = mapOrigin ? `${mapOrigin.lat},${mapOrigin.lng}` : "Current+Location";
-    return `https://www.google.com/maps/embed/v1/directions?key=${MAP_KEY}&origin=${origin}&destination=${destination}&mode=driving`;
-  }, [activeMapSchedule, mapOrigin]);
 
   async function openCheckoutForTournament(inventorySlug: string) {
     setUnlockingSlug(inventorySlug);
@@ -1050,36 +1026,20 @@ export default function BirdDogPage() {
                       ))}
                     </div>
                   ) : null}
-                  <div className="row wrap">
-                    {selectedSchedule.user_id === user?.userId ? (
+                  {selectedSchedule.user_id === user?.userId ? (
+                    <div className="row wrap">
                       <button className="secondary" onClick={() => editSchedule(selectedSchedule)}>Edit</button>
-                    ) : null}
-                    <button className="secondary" onClick={() => void startMapForSchedule(selectedSchedule)}>Start Map</button>
-                  </div>
+                      <button className="secondary" onClick={() => void startMapForSchedule(selectedSchedule)}>Start Map</button>
+                    </div>
+                  ) : (
+                    <p className="muted">View only: only this coach can edit or start map for this schedule.</p>
+                  )}
                 </div>
               ) : null}
             </>
           ) : <p className="muted">No schedules shared yet.</p>}
         </div>
       </section>
-      ) : null}
-
-      {showSchedule && activeMapSchedule ? (
-        <section className="panel">
-          <h2>Navigation Map</h2>
-          <p className="muted">Routing to hotel: {activeMapSchedule.hotel_name || "No hotel set"}</p>
-          {!MAP_KEY ? <p className="muted">Set `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` to enable map embed.</p> : null}
-          {MAP_KEY && activeMapSchedule.hotel_name ? (
-            <iframe
-              title="Directions"
-              src={mapEmbedSrc}
-              style={{ width: "100%", height: 320, border: 0, borderRadius: 10 }}
-              loading="lazy"
-              allowFullScreen
-              referrerPolicy="no-referrer-when-downgrade"
-            />
-          ) : null}
-        </section>
       ) : null}
 
       {showTournaments ? (
