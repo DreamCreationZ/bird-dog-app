@@ -129,11 +129,13 @@ function eventIdFromHint(hint?: string) {
 
 function tournamentIconByName(name: string) {
   const low = name.toLowerCase();
-  if (low.includes("wwba")) return "/tournament-icons/wwba.svg";
-  if (low.includes("world")) return "/tournament-icons/world.svg";
-  if (low.includes("regional")) return "/tournament-icons/regional.svg";
-  if (low.includes("showcase")) return "/tournament-icons/showcase.svg";
-  return "/tournament-icons/default.svg";
+  if (low.includes("wwba")) return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupeEventLogo_wwba_national_event_page_logo.png";
+  if (low.includes("regional")) return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupeEventLogo_wwba_regional_event_page_logo.png";
+  if (low.includes("world")) return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupeEventLogo_PG%20National%20World%20Series.png";
+  if (low.includes("showcase")) return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupEventLogo_PG_SHOWCASE_LOGO.png";
+  if (low.includes("elite")) return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupEventLogo_necMk2.png";
+  if (low.includes("select")) return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupEventLogo_nscmk2.png";
+  return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupEventLogo_PG_LOGO_EVENT.png";
 }
 
 function uniquePlayers(games: Game[]): Player[] {
