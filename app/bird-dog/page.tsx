@@ -932,14 +932,15 @@ export default function BirdDogPage() {
   function pgTeamUrl(team: NonNullable<Tournament["teams"]>[number]) {
     if (team.href && /^https?:\/\//i.test(team.href)) return team.href;
     const teamIdFromTeamField = team.id.match(/(\d+)/)?.[1] || "";
-    if (teamIdFromTeamField) {
+    // PG team ids are large numeric ids. Avoid opening placeholder ids like 1,2,3 that cause 404.
+    if (teamIdFromTeamField && Number(teamIdFromTeamField) >= 10000) {
       return `https://www.perfectgame.org/Tournaments/Teams/?team=${teamIdFromTeamField}`;
     }
     const eventNum = activeEventNumber();
     if (eventNum) {
-      return `https://www.perfectgame.org/events/TournamentTeams.aspx?event=${eventNum}`;
+      return `https://www.perfectgame.org/search.aspx?search=${encodeURIComponent(`${team.name} event ${eventNum}`)}`;
     }
-    return "";
+    return `https://www.perfectgame.org/search.aspx?search=${encodeURIComponent(team.name)}`;
   }
 
   function openTeamScheduleAndRoster(team: NonNullable<Tournament["teams"]>[number]) {
