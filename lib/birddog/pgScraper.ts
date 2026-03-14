@@ -149,9 +149,11 @@ function parseParticipatingTeams(html: string) {
     if (!normalized || normalized.length < 3) continue;
     const hrefMatch = colsRaw[teamIndex >= 0 ? teamIndex : 0]?.match(/href=["']([^"']+)["']/i);
     const href = hrefMatch?.[1] ? toAbsolutePgUrl(hrefMatch[1]) : null;
+    const teamNum = href ? (href.match(/[?&]team=(\d+)/i)?.[1] || "") : "";
+    const externalId = teamNum ? `pg-team-${teamNum}` : `pg-team-${teams.length + 1}`;
     if (!teams.find((t) => t.name === normalized && t.from === fromCol)) {
       teams.push({
-        id: `pg-team-${teams.length + 1}`,
+        id: externalId,
         name: normalized,
         from: fromCol,
         record,
@@ -312,7 +314,8 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
       id: team.id,
       name: team.name,
       from: team.from,
-      record: team.record
+      record: team.record,
+      href: team.href || undefined
     }))
   };
 }

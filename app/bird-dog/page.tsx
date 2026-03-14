@@ -921,6 +921,84 @@ export default function BirdDogPage() {
     setViewingSchedule(schedule);
   }
 
+  function activeEventNumber() {
+    const fromTournament = selectedTournament?.id?.match(/(\d+)/)?.[1] || "";
+    if (fromTournament && Number(fromTournament) > 10000) return fromTournament;
+    const fromHint = selectedInventory?.harvestHint?.match(/[?&]event=(\d+)/i)?.[1] || "";
+    if (fromHint) return fromHint;
+    return "";
+  }
+
+  function pgTeamUrl(team: NonNullable<Tournament["teams"]>[number]) {
+    if (team.href && /^https?:\/\//i.test(team.href)) return team.href;
+    const teamIdFromTeamField = team.id.match(/(\d+)/)?.[1] || "";
+    if (teamIdFromTeamField) {
+      return `https://www.perfectgame.org/Tournaments/Teams/?team=${teamIdFromTeamField}`;
+    }
+    const eventNum = activeEventNumber();
+    if (eventNum) {
+      return `https://www.perfectgame.org/events/TournamentTeams.aspx?event=${eventNum}`;
+    }
+    return "";
+  }
+
+  function openTeamScheduleAndRoster(team: NonNullable<Tournament["teams"]>[number]) {
+    setSelectedTeamName(team.name);
+    const url = pgTeamUrl(team);
+    if (!url) {
+      window.alert("Team URL is not available yet. Open tournament once again to refresh PG links.");
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  function openPgTournamentPage(kind: "teams" | "schedule") {
+    const eventNum = activeEventNumber();
+    if (!eventNum) {
+      window.alert("Tournament event id missing. Open tournament again from dashboard.");
+      return;
+    }
+    const url = kind === "teams"
+      ? `https://www.perfectgame.org/events/TournamentTeams.aspx?event=${eventNum}`
+      : `https://www.perfectgame.org/events/TournamentSchedule.aspx?event=${eventNum}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  function downloadPdfLikeReport(title: string, headers: string[], rows: string[][]) {
+    const popup = window.open("", "_blank", "noopener,noreferrer,width=1200,height=900");
+    if (!popup) {
+      window.alert("Popup blocked. Please allow popups to download PDF.");
+      return;
+    }
+    const tableHeader = headers.map((h) => `<th>${h}</th>`).join("");
+    const tableRows = rows.map((row) => `<tr>${row.map((c) => `<td>${c || "-"}</td>`).join("")}</tr>`).join("");
+    popup.document.write(`
+      <html>
+        <head>
+          <title>${title}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 20px; color: #111; }
+            h1 { margin: 0 0 12px; }
+            p { margin: 0 0 12px; }
+            table { width: 100%; border-collapse: collapse; }
+            th, td { border: 1px solid #bbb; padding: 8px; text-align: left; vertical-align: top; }
+            th { background: #f2f2f2; }
+          </style>
+        </head>
+        <body>
+          <h1>${title}</h1>
+          <p>Use browser print and choose "Save as PDF".</p>
+          <table>
+            <thead><tr>${tableHeader}</tr></thead>
+            <tbody>${tableRows}</tbody>
+          </table>
+          <script>window.focus();</script>
+        </body>
+      </html>
+    `);
+    popup.document.close();
+  }
+
   async function openCheckoutForTournament(inventorySlug: string) {
     setUnlockingSlug(inventorySlug);
     try {
@@ -1522,6 +1600,27 @@ export default function BirdDogPage() {
         <div>
           <h2>Participating Teams</h2>
           <p className="muted">Teams in tournament: {selectedTournament?.teams?.length || 0}</p>
+          <div className="row wrap" style={{ marginBottom: 8 }}>
+            <button className="secondary" type="button" onClick={() => openPgTournamentPage("teams")}>Open PG Teams Page</button>
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => {
+                const rows = (selectedTournament?.teams || []).map((team) => [
+                  team.name,
+                  team.from || "-",
+                  team.record || "-"
+                ]);
+                downloadPdfLikeReport(
+                  `Participating Teams - ${selectedTournament?.name || "Tournament"}`,
+                  ["Team", "From", "Record"],
+                  rows
+                );
+              }}
+            >
+              Download Teams PDF
+            </button>
+          </div>
           {selectedTournament?.teams?.length ? (
             <div className="table-wrap" style={{ marginBottom: 12 }}>
               <table className="roster-table">
@@ -1530,14 +1629,20 @@ export default function BirdDogPage() {
                     <th>Team</th>
                     <th>From</th>
                     <th>Record</th>
+                    <th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {selectedTournament.teams.map((team) => (
-                    <tr key={team.id} style={{ cursor: "pointer" }} onClick={() => setSelectedTeamName(team.name)}>
+                    <tr key={team.id} style={{ cursor: "pointer" }} onClick={() => openTeamScheduleAndRoster(team)}>
                       <td>{team.name}</td>
                       <td>{team.from || "-"}</td>
                       <td>{team.record || "-"}</td>
+                      <td>
+                        <button className="secondary" type="button" onClick={(e) => { e.stopPropagation(); openTeamScheduleAndRoster(team); }}>
+                          View Schedule + Roster
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1547,6 +1652,40 @@ export default function BirdDogPage() {
         </div>
         <div>
           <h2>Team Players</h2>
+          <div className="row wrap" style={{ marginBottom: 8 }}>
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => {
+                if (!selectedTeamDashboard) return;
+                openTeamScheduleAndRoster(selectedTeamDashboard.team);
+              }}
+              disabled={!selectedTeamDashboard}
+            >
+              Open Selected Team on PG
+            </button>
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => {
+                if (!selectedTeamDashboard) return;
+                const rows = selectedTeamDashboard.teamPlayers.map((p, idx) => [
+                  String(idx + 1),
+                  p.name,
+                  p.position || "-",
+                  p.school || "-"
+                ]);
+                downloadPdfLikeReport(
+                  `Tournament Roster - ${selectedTeamDashboard.team.name}`,
+                  ["No.", "Name", "Pos", "School"],
+                  rows
+                );
+              }}
+              disabled={!selectedTeamDashboard}
+            >
+              Download Roster PDF
+            </button>
+          </div>
           {selectedTeamDashboard ? (
             <div className="table-wrap">
               <p className="muted"><strong>Team:</strong> {selectedTeamDashboard.team.name}</p>
@@ -1576,6 +1715,23 @@ export default function BirdDogPage() {
         </div>
         <div>
           <h2>Tournament Matchups</h2>
+          <div className="row wrap" style={{ marginBottom: 8 }}>
+            <button className="secondary" type="button" onClick={() => openPgTournamentPage("schedule")}>Open PG Schedule Page</button>
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => {
+                const rows = games.map((g) => [timeLabel(g.startTime), g.field, `${g.homeTeam} vs ${g.awayTeam}`]);
+                downloadPdfLikeReport(
+                  `Tournament Schedule - ${selectedTournament?.name || "Tournament"}`,
+                  ["Time", "Field", "Matchup"],
+                  rows
+                );
+              }}
+            >
+              Download Schedule PDF
+            </button>
+          </div>
           <div className="log-list" style={{ maxHeight: 220 }}>
             {games.length ? games.map((g) => (
               <article key={g.id} className="log-card">

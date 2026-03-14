@@ -34,6 +34,7 @@ export type Tournament = {
     name: string;
     from: string;
     record?: string;
+    href?: string;
   }>;
 };
 
