@@ -99,75 +99,6 @@ type OptimizedStop = ItineraryStop & {
 
 const CACHE_KEY = "bird_dog_tournament_cache";
 const PREVIEW_UNLOCK_ALL = process.env.NEXT_PUBLIC_BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
-const THEME_KEY = "bird_dog_theme";
-
-type ThemePreset = {
-  id: string;
-  label: string;
-  primary: string;
-  accent: string;
-  bg: string;
-  bgImage?: string;
-  panel: string;
-  ink: string;
-  line: string;
-  cardInk?: string;
-  cardMuted?: string;
-};
-
-const THEME_PRESETS: ThemePreset[] = [
-  {
-    id: "org",
-    label: "University",
-    primary: "#1f3a5f",
-    accent: "#d7a316",
-    bg: "#f8f6ef",
-    panel: "#fffdf8",
-    ink: "#111111",
-    line: "#d8d2c4",
-    cardInk: "#161616",
-    cardMuted: "#4c4638"
-  },
-  {
-    id: "light",
-    label: "Light",
-    primary: "#1f3a5f",
-    accent: "#d7a316",
-    bg: "#f8f6ef",
-    bgImage: "linear-gradient(180deg, #fffef8 0%, #f3efe3 100%)",
-    panel: "#fffdf8",
-    ink: "#111111",
-    line: "#d8d2c4",
-    cardInk: "#161616",
-    cardMuted: "#4c4638"
-  },
-  {
-    id: "flower",
-    label: "Flower",
-    primary: "#8f2d68",
-    accent: "#ff7aa2",
-    bg: "#fff1f7",
-    bgImage: "radial-gradient(circle at 12% 18%, rgba(255,170,204,0.45) 0%, transparent 28%), radial-gradient(circle at 82% 26%, rgba(255,214,153,0.35) 0%, transparent 22%), radial-gradient(circle at 24% 82%, rgba(204,153,255,0.30) 0%, transparent 24%), linear-gradient(180deg, #fff6fb 0%, #ffeef6 100%)",
-    panel: "#fff9fc",
-    ink: "#2b0f1f",
-    line: "#e8bfd3",
-    cardInk: "#2b0f1f",
-    cardMuted: "#6b3a57"
-  },
-  {
-    id: "dark",
-    label: "Dark",
-    primary: "#0f172a",
-    accent: "#38bdf8",
-    bg: "#0b1020",
-    bgImage: "linear-gradient(180deg, #111827 0%, #020617 100%)",
-    panel: "#111827",
-    ink: "#e5e7eb",
-    line: "#334155",
-    cardInk: "#0f0f0f",
-    cardMuted: "#3f3f3f"
-  }
-];
 
 function timeLabel(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -394,12 +325,6 @@ export default function BirdDogPage() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
-  const [themeId, setThemeId] = useState("org");
-  const activeTheme = useMemo(
-    () => THEME_PRESETS.find((theme) => theme.id === themeId) || THEME_PRESETS[0],
-    [themeId]
-  );
-
   const [online, setOnline] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
@@ -614,28 +539,16 @@ export default function BirdDogPage() {
 
   useEffect(() => {
     if (!user) return;
-    const rawTheme = localStorage.getItem(`${THEME_KEY}:${user.orgId}:${user.userId}`) || localStorage.getItem(THEME_KEY);
     const rawWatch = localStorage.getItem(makeOrgKey(user.orgId, user.userId, "watchlist"));
     const rawNotes = localStorage.getItem(makeOrgKey(user.orgId, user.userId, "notes"));
     const rawPulses = localStorage.getItem(makeOrgKey(user.orgId, user.userId, "pulses"));
     const rawSync = localStorage.getItem(makeOrgKey(user.orgId, user.userId, "lastSyncAt"));
 
-    if (rawTheme && THEME_PRESETS.some((theme) => theme.id === rawTheme)) {
-      setThemeId(rawTheme);
-    } else {
-      setThemeId("org");
-    }
     setWatchlist(rawWatch ? JSON.parse(rawWatch) : []);
     setNotes(rawNotes ? JSON.parse(rawNotes) : []);
     setPulses(rawPulses ? JSON.parse(rawPulses) : []);
     setLastSyncAt(rawSync || null);
   }, [user]);
-
-  useEffect(() => {
-    if (!user) return;
-    localStorage.setItem(`${THEME_KEY}:${user.orgId}:${user.userId}`, themeId);
-    localStorage.setItem(THEME_KEY, themeId);
-  }, [user, themeId]);
 
   useEffect(() => {
     if (!user) return;
@@ -1320,18 +1233,15 @@ export default function BirdDogPage() {
   const showTournaments = activeTab === "tournaments";
   const showSchedule = activeTab === "schedule" && canAccessLockedPages;
   const showNotes = activeTab === "notes" && canAccessLockedPages;
-  const orgPrimary = user?.orgPrimary || activeTheme.primary;
-  const orgAccent = user?.orgAccent || activeTheme.accent;
-  const isOrgTheme = themeId === "org";
-  const bgValue = isOrgTheme ? "#f9f8f4" : activeTheme.bg;
-  const bgImageValue = isOrgTheme
-    ? `radial-gradient(circle at 10% 14%, ${alphaColor(orgPrimary, 0.14)} 0%, transparent 30%), radial-gradient(circle at 86% 22%, ${alphaColor(orgAccent, 0.18)} 0%, transparent 28%), linear-gradient(180deg, #fffef9 0%, #f3efe3 100%)`
-    : (activeTheme.bgImage || "none");
-  const panelValue = isOrgTheme ? "#fffdf8" : activeTheme.panel;
-  const inkValue = isOrgTheme ? "#111111" : activeTheme.ink;
-  const lineValue = isOrgTheme ? "#d8d2c4" : activeTheme.line;
-  const cardInkValue = isOrgTheme ? "#161616" : (activeTheme.cardInk || "#161616");
-  const cardMutedValue = isOrgTheme ? "#4c4638" : (activeTheme.cardMuted || "#4c4638");
+  const orgPrimary = user?.orgPrimary || "#1f3a5f";
+  const orgAccent = user?.orgAccent || "#d7a316";
+  const bgValue = "#f9f8f4";
+  const bgImageValue = `radial-gradient(circle at 10% 14%, ${alphaColor(orgPrimary, 0.14)} 0%, transparent 30%), radial-gradient(circle at 86% 22%, ${alphaColor(orgAccent, 0.18)} 0%, transparent 28%), linear-gradient(180deg, #fffef9 0%, #f3efe3 100%)`;
+  const panelValue = "#fffdf8";
+  const inkValue = "#111111";
+  const lineValue = "#d8d2c4";
+  const cardInkValue = "#161616";
+  const cardMutedValue = "#4c4638";
 
   if (authLoading) {
     return <main className="bd-root"><p>Loading session...</p></main>;
@@ -1403,21 +1313,6 @@ export default function BirdDogPage() {
             >
               Notes
             </button>
-            <div className="menu-section-title">Themes</div>
-            <div className="theme-grid">
-              {THEME_PRESETS.map((theme) => (
-                <button
-                  key={theme.id}
-                  type="button"
-                  className={`theme-pill ${themeId === theme.id ? "active" : ""}`}
-                  onClick={() => setThemeId(theme.id)}
-                  title={theme.label}
-                >
-                  <span className="theme-dot" style={{ backgroundColor: theme.id === "org" ? orgPrimary : theme.primary }} />
-                  <span>{theme.label}</span>
-                </button>
-              ))}
-            </div>
             <button
               type="button"
               className="danger"

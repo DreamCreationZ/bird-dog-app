@@ -97,36 +97,6 @@
   object-fit: contain;
 }
 
-.bd-root .menu-section-title {
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: #5b5344;
-  padding: 2px 4px 0;
-}
-
-.bd-root .theme-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-}
-
-.bd-root .theme-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  text-align: left;
-  font-size: 0.88rem;
-  padding: 7px 8px;
-}
-
-.bd-root .theme-dot {
-  width: 11px;
-  height: 11px;
-  border-radius: 999px;
-  display: inline-block;
-  border: 1px solid rgba(0, 0, 0, 0.2);
-}
-
 .org-chip {
   border: 2px solid var(--org-primary);
   background: linear-gradient(135deg, var(--org-primary), #122437);
