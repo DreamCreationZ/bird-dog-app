@@ -7,17 +7,9 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const name = String(body?.name || "").trim();
   const email = String(body?.email || "").trim().toLowerCase();
-  const password = String(body?.password ?? body?.accessCode ?? "").trim();
 
   if (!name || !email.includes("@")) {
     return NextResponse.json({ error: "Valid name and email are required." }, { status: 400 });
-  }
-
-  const requiredPassword = String(
-    process.env.BIRD_DOG_LOGIN_PASSWORD || process.env.BIRD_DOG_LOGIN_PASSCODE || ""
-  ).trim();
-  if (requiredPassword && password !== requiredPassword) {
-    return NextResponse.json({ error: "Invalid password." }, { status: 401 });
   }
 
   const org = getOrgByEmail(email);
@@ -26,7 +18,10 @@ export async function POST(req: NextRequest) {
     name,
     email,
     orgId: org.orgId,
-    orgName: org.name
+    orgName: org.name,
+    orgPrimary: org.primary,
+    orgAccent: org.accent,
+    orgLogoUrl: org.logoUrl || ""
   };
 
   try {

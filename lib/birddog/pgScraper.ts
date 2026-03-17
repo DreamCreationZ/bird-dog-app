@@ -8,6 +8,34 @@ type ParsedTeam = {
   href?: string | null;
 };
 
+export type PgTeamScheduleRow = {
+  gameNo: string;
+  date: string;
+  time: string;
+  field: string;
+  homeTeam: string;
+  awayTeam: string;
+};
+
+export type PgTeamRosterRow = {
+  no: string;
+  name: string;
+  position: string;
+  school: string;
+};
+
+type EventScoreboardRow = {
+  gameNo: string;
+  field: string;
+  homeTeam: string;
+  awayTeam: string;
+  recapUrl: string;
+};
+
+type ParsedTeamScheduleRow = PgTeamScheduleRow & {
+  recapUrl?: string;
+};
+
 const defaultUserAgents = [
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"
@@ -25,6 +53,10 @@ function cleanText(input: string) {
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function cleanCellWithBreaks(input: string) {
+  return cleanText(input.replace(/<br\s*\/?>/gi, "\n"));
 }
 
 function readTitle(html: string) {
@@ -97,6 +129,22 @@ function parseGames(html: string) {
 function toAbsolutePgUrl(href: string) {
   if (/^https?:\/\//i.test(href)) return href;
   return `https://www.perfectgame.org${href.startsWith("/") ? "" : "/"}${href}`;
+}
+
+function normalizeTeamPageUrl(url: string) {
+  const teamMatch = url.match(/[?&]team=(\d+)/i);
+  if (!teamMatch) return url;
+  return `https://www.perfectgame.org/Events/Tournaments/Teams/Default.aspx?team=${teamMatch[1]}`;
+}
+
+function normalizeTeam(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function teamNameMatches(a: string, b: string) {
+  const na = normalizeTeam(a);
+  const nb = normalizeTeam(b);
+  return na === nb || na.includes(nb) || nb.includes(na);
 }
 
 function findFirstEventUrl(html: string) {
@@ -318,4 +366,471 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
       href: team.href || undefined
     }))
   };
+}
+
+function parseTeamScheduleFromHtml(html: string): ParsedTeamScheduleRow[] {
+  const out: ParsedTeamScheduleRow[] = [];
+  const blocks = html.split(/(?=Gm#\s*\d+)/gi).slice(0, 80);
+
+  for (const block of blocks) {
+    const gm = block.match(/Gm#\s*(\d+)/i)?.[1] || "";
+    if (!gm) continue;
+    const date = block.match(/\b(\d{1,2}\/\d{1,2}\/\d{4})\b/i)?.[1] || "";
+    const time = block.match(/\b(\d{1,2}:\d{2}\s*(?:AM|PM))\b/i)?.[1] || "";
+    const field = cleanText(block.match(/(?:Field\s+\d+\s*@\s*|Baseball\s*@\s*)([^<\n]+)/i)?.[0] || "");
+    const teamNames = [...block.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/gi)]
+      .map((m) => cleanText(m[1]))
+      .filter((name) =>
+        name
+        && name.length > 2
+        && !/visit team page|game recap|probable pitchers|diamondkast|final/i.test(name)
+      );
+    const uniqueTeams: string[] = [];
+    for (const name of teamNames) {
+      if (!uniqueTeams.includes(name)) uniqueTeams.push(name);
+      if (uniqueTeams.length >= 2) break;
+    }
+
+    const recapUrl = block.match(/href=["']([^"']*GameRecap\.aspx[^"']*)["']/i)?.[1];
+    out.push({
+      gameNo: gm,
+      date,
+      time,
+      field: field || "Field TBD",
+      homeTeam: uniqueTeams[0] || "Team A",
+      awayTeam: uniqueTeams[1] || "Team B",
+      recapUrl: recapUrl ? toAbsolutePgUrl(recapUrl) : ""
+    });
+  }
+
+  return out;
+}
+
+function monthToNumber(month: string) {
+  const map: Record<string, string> = {
+    jan: "01",
+    feb: "02",
+    mar: "03",
+    apr: "04",
+    may: "05",
+    jun: "06",
+    jul: "07",
+    aug: "08",
+    sep: "09",
+    oct: "10",
+    nov: "11",
+    dec: "12"
+  };
+  return map[month.toLowerCase().slice(0, 3)] || "";
+}
+
+function inferEventYear(html: string, eventId?: string) {
+  if (!eventId) return "";
+  const match = html.match(new RegExp(`hfTournamentID"[^>]*value="${eventId}"[\\s\\S]{0,320}?hfStartDate"[^>]*value="\\d{1,2}\\/\\d{1,2}\\/(\\d{4})"`, "i"));
+  if (match?.[1]) return match[1];
+  const global = html.match(/hfStartDate"[^>]*value="\d{1,2}\/\d{1,2}\/(\d{4})"/i);
+  return global?.[1] || "";
+}
+
+function parseNestedTeamScheduleFromHtml(
+  html: string,
+  options?: { teamName?: string; eventId?: string }
+): ParsedTeamScheduleRow[] {
+  const out: ParsedTeamScheduleRow[] = [];
+  const teamName = options?.teamName?.trim() || "";
+  const eventId = (options?.eventId || "").replace(/^pg-/i, "");
+  const year = inferEventYear(html, eventId);
+  const rowMatches = [...html.matchAll(/<td class="nestedscheduleGridRow">([\s\S]*?)<\/td>\s*<\/tr>/gi)];
+
+  for (const rowMatch of rowMatches) {
+    const row = rowMatch[1];
+    const monthDay = cleanText(row.match(/lblMonthDay"[^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
+    if (!monthDay) continue;
+    const monthDayParts = monthDay.match(/([A-Za-z]{3})\s*(\d{1,2})/);
+    const month = monthDayParts?.[1] || "";
+    const day = monthDayParts?.[2] || "";
+    const mm = monthToNumber(month);
+    const date = mm && day && year ? `${mm}/${String(Number(day))}/${year}` : monthDay;
+
+    const homeAway = cleanText(row.match(/lblHomeAway"[^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
+    const opponent = cleanText(row.match(/hlOpponentName"[^>]*>([\s\S]*?)<\/a>/i)?.[1] || "");
+    const fieldPrefix = cleanText(row.match(/lblField"[^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
+    const ballpark = cleanText(
+      row.match(/(?:hlBallpark|hlBallPark|hlFacility|hlLocation)"[^>]*>([\s\S]*?)<\/a>/i)?.[1]
+      || row.match(/(?:lblBallpark|lblBallPark|lblFacility|lblLocation)"[^>]*>([\s\S]*?)<\/span>/i)?.[1]
+      || ""
+    );
+    const gameNo = cleanText(row.match(/hfTournamentGameID"[^>]*value="([^"]+)"/i)?.[1] || "");
+    const recapRaw = row.match(/href=["']([^"']*GameRecap\.aspx[^"']*)["']/i)?.[1] || "";
+    const time = cleanText(row.match(/(?:\b\d{1,2}:\d{2}\s*(?:AM|PM)\b)/i)?.[0] || "");
+
+    if (!opponent && !gameNo) continue;
+    const homeTeam = homeAway.includes("@") ? (opponent || "Team A") : (teamName || "Team A");
+    const awayTeam = homeAway.includes("@") ? (teamName || "Team B") : (opponent || "Team B");
+    const linkTexts = [...row.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/gi)]
+      .map((m) => cleanText(m[1]))
+      .filter(Boolean);
+    const fallbackVenue = linkTexts.find((txt) =>
+      !teamNameMatches(txt, teamName || "")
+      && !/probable pitchers|standings|roster|results|bracket|schedule|leaders|top performers|game recap|diamondkast/i.test(txt)
+      && /high school|complex|park|facility|stadium|academy|field|, [A-Z]{2}\b| - [A-Z]{2}\b/i.test(txt)
+    ) || "";
+    const venue = ballpark || fallbackVenue;
+    let field = "Field TBD";
+    if (fieldPrefix && venue) {
+      if (/@\s*$/.test(fieldPrefix)) {
+        field = cleanText(`${fieldPrefix} ${venue}`);
+      } else if (/^field\s+\d+$/i.test(fieldPrefix) || /^baseball$/i.test(fieldPrefix) || /^stadium$/i.test(fieldPrefix)) {
+        field = cleanText(`${fieldPrefix} @ ${venue}`);
+      } else {
+        field = cleanText(`${fieldPrefix} ${venue}`);
+      }
+    } else if (fieldPrefix) {
+      field = fieldPrefix;
+    } else if (venue) {
+      field = venue;
+    }
+
+    out.push({
+      gameNo: gameNo || String(out.length + 1),
+      date,
+      time,
+      field,
+      homeTeam,
+      awayTeam,
+      recapUrl: recapRaw ? toAbsolutePgUrl(recapRaw) : ""
+    });
+  }
+
+  return out;
+}
+
+function parseTeamRosterFromHtml(html: string): PgTeamRosterRow[] {
+  const teamGridTable = html.match(/id="[^"]*radgridOrgTeamPlayers[^"]*"[\s\S]*?<table[^>]*>([\s\S]*?)<\/table>/i)?.[1];
+  const rosterSection = html.match(/TOURNAMENT ROSTER[\s\S]*?<table[\s\S]*?<\/table>/i)?.[0] || "";
+  const source = teamGridTable || rosterSection || html;
+  const table = source.match(/<table[^>]*>([\s\S]*?)<\/table>/i)?.[1] || source;
+  if (!table) return [];
+
+  const rows = [...table.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => m[1]);
+  if (!rows.length) return [];
+
+  const headers = [...rows[0].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)].map((m) => cleanText(m[1]).toLowerCase());
+  const nameIdx = headers.findIndex((h) => h.includes("name"));
+  const schoolIdx = headers.findIndex((h) => h.includes("school") || h === "hs");
+  const noIdx = headers.findIndex((h) => h === "no." || h === "no");
+  const out: PgTeamRosterRow[] = [];
+  const seen = new Set<string>();
+
+  for (const row of rows.slice(1)) {
+    const cellsRaw = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => m[1]);
+    if (!cellsRaw.length) continue;
+    const cells = cellsRaw.map((cell) => cleanCellWithBreaks(cell));
+    const rawNo = cells[noIdx >= 0 ? noIdx : 0] || "";
+    if (!/^\d+$/.test(rawNo.trim())) continue;
+    const nameCell = cells[nameIdx >= 0 ? nameIdx : 1] || "";
+    const nameParts = nameCell.split("\n").map((p) => p.trim()).filter(Boolean);
+    const name = nameParts[0] || "";
+    if (
+      !name
+      || !/[A-Za-z]/.test(name)
+      || /sign in|create account|forgot password|pitch by pitch|tournament|game recap|diamondkast|final|perfect game/i.test(name.toLowerCase())
+    ) continue;
+    const school = (cells[schoolIdx >= 0 ? schoolIdx : 6] || "").trim();
+    const key = `${name.toLowerCase()}|${school.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      no: rawNo,
+      name,
+      position: nameParts[1] || "",
+      school
+    });
+  }
+
+  return out;
+}
+
+function inferEventIdFromTeamHtml(html: string) {
+  const byHiddenField = html.match(/hfTournamentID"[^>]*value="(\d+)"/i)?.[1];
+  if (byHiddenField) return byHiddenField;
+  const byLink = html.match(/[?&]event=(\d+)/i)?.[1];
+  return byLink || "";
+}
+
+function parseEventScoreboardRows(html: string): EventScoreboardRow[] {
+  const out: EventScoreboardRow[] = [];
+  const visitorMatches = [...html.matchAll(/id="[^"]*lblVisitorName_(\d+)"[^>]*>([\s\S]*?)<\/span>/gi)];
+
+  for (const match of visitorMatches) {
+    const idx = match[1];
+    const awayTeam = cleanText(match[2]);
+    if (!awayTeam) continue;
+
+    const homeMatch = html.match(new RegExp(`id="[^"]*lblHomeTeamName_${idx}"[^>]*>([\\s\\S]*?)<\\/span>`, "i"));
+    const fieldMatch = html.match(new RegExp(`id="[^"]*lblTournamentName_${idx}"[^>]*>([\\s\\S]*?)<\\/span>`, "i"));
+    const recapMatch = html.match(new RegExp(`id="[^"]*hlDiamondKastRecap_${idx}"[^>]*href="([^"]+)"`, "i"));
+
+    const homeTeam = cleanText(homeMatch?.[1] || "");
+    const field = cleanText(fieldMatch?.[1] || "Field TBD");
+    const recapUrl = recapMatch?.[1] ? toAbsolutePgUrl(recapMatch[1]) : "";
+    if (!homeTeam || !recapUrl) continue;
+
+    const gameNo = recapUrl.match(/gameid=(\d+)/i)?.[1] || idx;
+    out.push({
+      gameNo,
+      field: field || "Field TBD",
+      homeTeam,
+      awayTeam,
+      recapUrl
+    });
+  }
+
+  return out;
+}
+
+function extractScheduleDatesFromHtml(html: string): string[] {
+  const selectBlock = html.match(/id="[^"]*ddlActiveDates"[\s\S]*?<\/select>/i)?.[0] || "";
+  const optionMatches = [...selectBlock.matchAll(/<option[^>]*value="([^"]+)"[^>]*>/gi)];
+  const values = optionMatches
+    .map((m) => cleanText(m[1]))
+    .filter((value) => /\d{1,2}\/\d{1,2}\/\d{4}/.test(value));
+  return Array.from(new Set(values));
+}
+
+function parseScheduleFromRecapHtml(html: string, fallback: EventScoreboardRow): PgTeamScheduleRow {
+  const dateTime = cleanText(html.match(/id="[^"]*lblGameDateTime"[^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
+  const date = dateTime.match(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/)?.[0] || "";
+  const time = dateTime.match(/\b\d{1,2}:\d{2}\s*(?:AM|PM)\b/i)?.[0] || "";
+  const recapField = cleanText(html.match(/id="[^"]*lblField"[^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
+  const recapBallpark = cleanText(
+    html.match(/id="[^"]*(?:hlBallpark|hlBallPark|hlFacility|hlLocation)[^"]*"[^>]*>([\s\S]*?)<\/a>/i)?.[1]
+    || ""
+  );
+  let field = recapField;
+  if (recapField && /@\s*$/.test(recapField) && recapBallpark) {
+    field = cleanText(`${recapField} ${recapBallpark}`);
+  } else if (recapField && /@\s*$/.test(recapField) && fallback.field && /@\s*\S+/.test(fallback.field)) {
+    field = fallback.field;
+  } else if (recapField && !/@/.test(recapField) && fallback.field && /@\s*\S+/.test(fallback.field)) {
+    field = fallback.field;
+  } else if (!recapField) {
+    field = fallback.field;
+  }
+  const awayTeam = cleanText(html.match(/id="[^"]*hlVisitorTeamNameTop"[^>]*>([\s\S]*?)<\/a>/i)?.[1] || fallback.awayTeam);
+  const homeTeam = cleanText(html.match(/id="[^"]*hlHomeTeamNameTop"[^>]*>([\s\S]*?)<\/a>/i)?.[1] || fallback.homeTeam);
+
+  return {
+    gameNo: fallback.gameNo,
+    date,
+    time,
+    field: field || fallback.field || "Field TBD",
+    homeTeam: homeTeam || fallback.homeTeam,
+    awayTeam: awayTeam || fallback.awayTeam
+  };
+}
+
+function parseRosterFromRecapHtml(html: string, teamName: string): PgTeamRosterRow[] {
+  const out: PgTeamRosterRow[] = [];
+  const seen = new Set<string>();
+  const links = [...html.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/gi)];
+
+  for (const match of links) {
+    const name = cleanText(match[1]);
+    if (!name || name.length < 4) continue;
+    if (/visit team page|game recap|perfect game|sign in|create account|players|teams|events|diamondkast|final/i.test(name)) continue;
+    if (!/[A-Za-z]/.test(name)) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    out.push({
+      no: "",
+      name,
+      position: "",
+      school: teamName
+    });
+    if (out.length >= 60) break;
+  }
+
+  return out;
+}
+
+export async function scrapePgTeamLive(
+  teamUrl: string,
+  options?: { teamName?: string; eventId?: string }
+) {
+  const resolved = /^https?:\/\//i.test(teamUrl) ? teamUrl : toAbsolutePgUrl(teamUrl);
+  const candidates = Array.from(new Set([resolved, normalizeTeamPageUrl(resolved)]));
+  let bestSchedule: PgTeamScheduleRow[] = [];
+  let bestRoster: PgTeamRosterRow[] = [];
+  let numericEvent = (options?.eventId || "").replace(/^pg-/i, "");
+
+  for (const candidate of candidates) {
+    try {
+      const { html } = await fetchHtml(candidate);
+      if (!numericEvent) {
+        numericEvent = inferEventIdFromTeamHtml(html);
+      }
+      const nestedSchedule = parseNestedTeamScheduleFromHtml(html, options);
+      const classicSchedule = parseTeamScheduleFromHtml(html);
+      const schedule = nestedSchedule.length ? nestedSchedule : classicSchedule;
+      const roster = parseTeamRosterFromHtml(html);
+      if (schedule.length > bestSchedule.length) {
+        bestSchedule = schedule.map((row) => ({
+          gameNo: row.gameNo,
+          date: row.date,
+          time: row.time,
+          field: row.field,
+          homeTeam: row.homeTeam,
+          awayTeam: row.awayTeam
+        }));
+      }
+      if (roster.length > bestRoster.length) bestRoster = roster;
+
+      const missingTimes = schedule.filter((row) => !row.time && row.recapUrl).slice(0, 24);
+      if (missingTimes.length) {
+        const withTimes: PgTeamScheduleRow[] = [];
+        for (const row of missingTimes) {
+          try {
+            const recap = await fetchHtml(row.recapUrl as string);
+            const enriched = parseScheduleFromRecapHtml(recap.html, {
+              gameNo: row.gameNo,
+              field: row.field,
+              homeTeam: row.homeTeam,
+              awayTeam: row.awayTeam,
+              recapUrl: row.recapUrl as string
+            });
+            withTimes.push(enriched);
+          } catch {
+            withTimes.push({
+              gameNo: row.gameNo,
+              date: row.date,
+              time: row.time,
+              field: row.field,
+              homeTeam: row.homeTeam,
+              awayTeam: row.awayTeam
+            });
+          }
+        }
+        if (withTimes.length) {
+          const byGame = new Map(withTimes.map((row) => [row.gameNo, row]));
+          bestSchedule = bestSchedule.map((row) => byGame.get(row.gameNo) || row);
+        }
+      }
+      if (bestSchedule.length && bestRoster.length) break;
+    } catch {
+      // Try next candidate URL.
+    }
+  }
+
+  if (numericEvent && options?.teamName) {
+    try {
+      const eventUrl = `https://www.perfectgame.org/events/TournamentSchedule.aspx?event=${numericEvent}`;
+      const firstSchedulePage = await fetchHtml(eventUrl);
+      const scheduleDates = extractScheduleDatesFromHtml(firstSchedulePage.html);
+      const schedulePages = [firstSchedulePage.html];
+
+      for (const dateValue of scheduleDates) {
+        const dateUrl = `${eventUrl}&Date=${encodeURIComponent(dateValue)}`;
+        try {
+          const page = await fetchHtml(dateUrl);
+          schedulePages.push(page.html);
+        } catch {
+          // Continue with available schedule pages.
+        }
+      }
+
+      const scoreboardRows = schedulePages
+        .flatMap((pageHtml) => parseEventScoreboardRows(pageHtml))
+        .filter((row) =>
+          teamNameMatches(row.homeTeam, options.teamName as string) || teamNameMatches(row.awayTeam, options.teamName as string)
+        );
+
+      const uniqueRows = Array.from(
+        new Map(scoreboardRows.map((row) => [row.recapUrl, row])).values()
+      );
+
+      const scheduleRows: PgTeamScheduleRow[] = [];
+      const rosterRows: PgTeamRosterRow[] = [];
+      const rosterSeen = new Set<string>();
+
+      for (const row of uniqueRows.slice(0, 40)) {
+        try {
+          const recap = await fetchHtml(row.recapUrl);
+          const parsed = parseScheduleFromRecapHtml(recap.html, row);
+          const target = options.teamName || "";
+          const parsedHasHome = teamNameMatches(parsed.homeTeam, target);
+          const parsedHasAway = teamNameMatches(parsed.awayTeam, target);
+          const rowHasHome = teamNameMatches(row.homeTeam, target);
+          const rowHasAway = teamNameMatches(row.awayTeam, target);
+          const shouldUseScoreboardTeams =
+            !target
+            || (parsedHasHome && parsedHasAway)
+            || (!parsedHasHome && !parsedHasAway)
+            || parsedHasHome !== rowHasHome
+            || parsedHasAway !== rowHasAway;
+
+          scheduleRows.push(
+            shouldUseScoreboardTeams
+              ? {
+                ...parsed,
+                homeTeam: row.homeTeam || parsed.homeTeam,
+                awayTeam: row.awayTeam || parsed.awayTeam
+              }
+              : parsed
+          );
+          for (const player of parseRosterFromRecapHtml(recap.html, options.teamName)) {
+            const key = `${player.name.toLowerCase()}|${player.school.toLowerCase()}`;
+            if (rosterSeen.has(key)) continue;
+            rosterSeen.add(key);
+            rosterRows.push(player);
+          }
+        } catch {
+          scheduleRows.push({
+            gameNo: row.gameNo,
+            date: "",
+            time: "",
+            field: row.field,
+            homeTeam: row.homeTeam,
+            awayTeam: row.awayTeam
+          });
+        }
+      }
+
+      if (scheduleRows.length > bestSchedule.length) {
+        bestSchedule = scheduleRows.sort((a, b) => {
+          const aKey = `${a.date} ${a.time}`.trim();
+          const bKey = `${b.date} ${b.time}`.trim();
+          const aTs = Date.parse(aKey);
+          const bTs = Date.parse(bKey);
+          if (!Number.isNaN(aTs) && !Number.isNaN(bTs)) return aTs - bTs;
+          return a.gameNo.localeCompare(b.gameNo, undefined, { numeric: true });
+        });
+      }
+      if (rosterRows.length > bestRoster.length) {
+        bestRoster = rosterRows;
+      }
+    } catch {
+      // Keep prior best rows if fallback fails.
+    }
+  }
+
+  return { schedule: bestSchedule, roster: bestRoster };
+}
+
+export async function resolvePgTeamUrl(teamName: string, eventId: string) {
+  if (!eventId) return "";
+  const teamsUrl = `https://www.perfectgame.org/events/TournamentTeams.aspx?event=${eventId}`;
+  const { html } = await fetchHtml(teamsUrl);
+  const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => m[1]);
+  const needle = teamName.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  for (const row of rows) {
+    const href = row.match(/href=["']([^"']+)["']/i)?.[1];
+    if (!href) continue;
+    const text = cleanText(row).toLowerCase().replace(/[^a-z0-9]+/g, "");
+    if (!text.includes(needle)) continue;
+    return normalizeTeamPageUrl(toAbsolutePgUrl(href));
+  }
+  return "";
 }

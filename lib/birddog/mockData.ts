@@ -2,12 +2,157 @@ import { HarvesterDataset, OrgBrand } from "@/lib/birddog/types";
 
 export const ORGS: OrgBrand[] = [
   {
+    orgId: "arkansas",
+    name: "Arkansas Razorbacks",
+    domain: "uark.edu",
+    primary: "#9d2235",
+    accent: "#ffffff",
+    logoText: "ARK",
+    logoUrl: "https://arkansasrazorbacks.com/wp-content/themes/razorbacks/images/arkansas-razorbacks-logo.png"
+  },
+  {
+    orgId: "arizona",
+    name: "Arizona Wildcats",
+    domain: "arizona.edu",
+    primary: "#003366",
+    accent: "#cc0033",
+    logoText: "UAZ",
+    logoUrl: "https://arizonawildcats.com/images/logos/site/site.png"
+  },
+  {
+    orgId: "asu",
+    name: "Arizona State Sun Devils",
+    domain: "asu.edu",
+    primary: "#8c1d40",
+    accent: "#ffc627",
+    logoText: "ASU",
+    logoUrl: "https://thesundevils.com/images/logos/site/site.png"
+  },
+  {
+    orgId: "clemson",
+    name: "Clemson Tigers",
+    domain: "clemson.edu",
+    primary: "#f56600",
+    accent: "#522d80",
+    logoText: "CLEM",
+    logoUrl: "https://clemsontigers.com/wp-content/themes/clemson/images/logo.png"
+  },
+  {
+    orgId: "duke",
+    name: "Duke Blue Devils",
+    domain: "duke.edu",
+    primary: "#003087",
+    accent: "#ffffff",
+    logoText: "DUKE",
+    logoUrl: "https://goduke.com/images/logos/site/site.png"
+  },
+  {
+    orgId: "florida",
+    name: "Florida Gators",
+    domain: "ufl.edu",
+    primary: "#0021a5",
+    accent: "#fa4616",
+    logoText: "UF",
+    logoUrl: "https://floridagators.com/images/logos/site/site.png"
+  },
+  {
+    orgId: "fsu",
+    name: "Florida State Seminoles",
+    domain: "fsu.edu",
+    primary: "#782f40",
+    accent: "#ceb888",
+    logoText: "FSU",
+    logoUrl: "https://seminoles.com/wp-content/themes/fsu/images/logo.png"
+  },
+  {
+    orgId: "georgia",
+    name: "Georgia Bulldogs",
+    domain: "uga.edu",
+    primary: "#ba0c2f",
+    accent: "#000000",
+    logoText: "UGA",
+    logoUrl: "https://georgiadogs.com/images/logos/site/site.png"
+  },
+  {
+    orgId: "kentucky",
+    name: "Kentucky Wildcats",
+    domain: "uky.edu",
+    primary: "#0033a0",
+    accent: "#ffffff",
+    logoText: "UK",
+    logoUrl: "https://ukathletics.com/wp-content/themes/ukathletics/images/logo.png"
+  },
+  {
     orgId: "lsu",
     name: "LSU Baseball",
     domain: "lsu.edu",
     primary: "#461D7C",
     accent: "#FDD023",
-    logoText: "LSU"
+    logoText: "LSU",
+    logoUrl: "https://storage.googleapis.com/lsusports-com/2021/07/70691764-lsu-logo-2021.png"
+  },
+  {
+    orgId: "louisville",
+    name: "Louisville Cardinals",
+    domain: "louisville.edu",
+    primary: "#ad0000",
+    accent: "#000000",
+    logoText: "UL",
+    logoUrl: "https://gocards.com/images/logos/site/site.png"
+  },
+  {
+    orgId: "miami",
+    name: "Miami Hurricanes",
+    domain: "miami.edu",
+    primary: "#f47321",
+    accent: "#005030",
+    logoText: "UM",
+    logoUrl: "https://miamihurricanes.com/wp-content/themes/hurricanes/images/logo.svg"
+  },
+  {
+    orgId: "msstate",
+    name: "Mississippi State Bulldogs",
+    domain: "msstate.edu",
+    primary: "#660000",
+    accent: "#ffffff",
+    logoText: "MSU",
+    logoUrl: "https://hailstate.com/images/logos/site/site.png"
+  },
+  {
+    orgId: "ncsu",
+    name: "NC State Wolfpack",
+    domain: "ncsu.edu",
+    primary: "#cc0000",
+    accent: "#000000",
+    logoText: "NCSU",
+    logoUrl: "https://gopack.com/images/logos/site/site.png"
+  },
+  {
+    orgId: "unc",
+    name: "North Carolina Tar Heels",
+    domain: "unc.edu",
+    primary: "#7bafd4",
+    accent: "#13294b",
+    logoText: "UNC",
+    logoUrl: "https://goheels.com/images/logos/site/site.png"
+  },
+  {
+    orgId: "ou",
+    name: "Oklahoma Sooners",
+    domain: "ou.edu",
+    primary: "#841617",
+    accent: "#fdf9d8",
+    logoText: "OU",
+    logoUrl: "https://soonersports.com/images/logos/site/site.png"
+  },
+  {
+    orgId: "okstate",
+    name: "Oklahoma State Cowboys",
+    domain: "okstate.edu",
+    primary: "#ff7300",
+    accent: "#000000",
+    logoText: "OSU",
+    logoUrl: "https://okstate.com/images/logos/site/site.png"
   },
   {
     orgId: "odu",
@@ -23,7 +168,8 @@ export const ORGS: OrgBrand[] = [
     domain: "",
     primary: "#1f3a5f",
     accent: "#d7a316",
-    logoText: "ORG"
+    logoText: "ORG",
+    logoUrl: ""
   }
 ];
 

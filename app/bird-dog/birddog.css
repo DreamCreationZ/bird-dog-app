@@ -6,8 +6,9 @@
   --bd-ink: #0f0f0f;
   --bd-line: #d8d2c4;
   --bd-danger: #b10f0f;
-  max-width: 1080px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
   padding: 10px 10px 78px;
   background: var(--bd-bg);
   background-image: var(--bd-bg-image, none);
@@ -77,6 +78,23 @@
 .bd-root .menu-dropdown button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.bd-root .menu-brand {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #fff;
+  border: 1px solid #d8d2c4;
+  border-radius: 8px;
+  padding: 6px;
+}
+
+.bd-root .menu-brand img {
+  max-height: 44px;
+  width: auto;
+  max-width: 150px;
+  object-fit: contain;
 }
 
 .bd-root .menu-section-title {
@@ -281,6 +299,7 @@
   border-radius: 10px;
   background: #fffcf5;
   padding: 8px;
+  color: var(--bd-card-ink, #161616);
   text-align: center;
   cursor: pointer;
   transition: transform 0.12s ease, box-shadow 0.12s ease;
@@ -314,12 +333,21 @@
   margin: 0 0 4px;
 }
 
+.bd-root .tile-card .muted,
+.bd-root .tile-card .small {
+  color: var(--bd-card-muted, #4c4638);
+}
+
 .bd-root .muted {
   color: #4f4a3d;
 }
 
 .bd-root .table-wrap {
   overflow: auto;
+}
+
+.bd-root .full-span {
+  grid-column: 1 / -1;
 }
 
 .bd-root .roster-table {
@@ -333,11 +361,20 @@
   text-align: left;
   border-bottom: 1px solid #cdc3b0;
   padding: 6px;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .bd-root .roster-table th {
   background: #efeadc;
+}
+
+.bd-root .roster-table td.action-cell {
+  min-width: 170px;
+}
+
+.bd-root .roster-table td.action-cell .secondary {
+  width: 100%;
 }
 
 .bd-root .small {

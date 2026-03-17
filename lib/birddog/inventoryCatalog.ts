@@ -7,6 +7,9 @@ export type InventorySeed = {
   name: string;
   season: CircuitSeason;
   company: DataProvider;
+  displayDate?: string;
+  displayCity?: string;
+  displayTeams?: string;
 };
 
 function slugify(name: string) {
@@ -32,9 +35,48 @@ const fall = [
   "2026 PG WWBA 13U & 14U World Championship"
 ];
 
+const presetMeta: Record<string, { date?: string; city?: string; teams?: string }> = {
+  "2026-pg-wwba-national-championship": { date: "Jun 16-21", city: "Marietta, GA", teams: "34 TEAMS" },
+  "2026-pg-14u-wwba-national-championship": { date: "Jun 20-25", city: "Hoover, AL", teams: "171 TEAMS" },
+  "2026-pg-17u-wwba-national-championship": { date: "Jun 23-30", city: "Marietta, GA", teams: "374 TEAMS" },
+  "2026-pg-13u-wwba-national-championship": { date: "Jun 27-Jul 1", city: "West Palm Beach, FL", teams: "50 TEAMS" },
+  "2026-pg-13u-54-80-wwba-national-championship": { date: "Jun 27-Jul 1", city: "Atlanta, GA", teams: "31 TEAMS" },
+  "2026-pg-16u-wwba-national-championship": { date: "Jul 6-13", city: "Marietta, GA", teams: "383 TEAMS" },
+  "2026-pg-15u-wwba-national-championship": { date: "Jul 17-24", city: "Marietta, GA", teams: "288 TEAMS" },
+  "2026-pg-wwba-sophomore-world-championship": { date: "Sep 24-28", city: "Fort Myers, FL", teams: "8 TEAMS" },
+  "2026-pg-wwba-underclass-world-championship": { date: "Oct 1-5", city: "Fort Myers, FL", teams: "15 TEAMS" },
+  "2026-pg-wwba-freshman-world-championship": { date: "Oct 8-12", city: "West Palm Beach, FL", teams: "6 TEAMS" },
+  "2026-pg-wwba-world-championship": { date: "Oct 8-12", city: "Jupiter, FL" },
+  "2026-pg-wwba-13u-14u-world-championship": { date: "Oct 16-19", city: "West Palm Beach, FL", teams: "9 TEAMS" }
+};
+
 export const INVENTORY_SEED: InventorySeed[] = [
-  ...summer.map((name) => ({ slug: slugify(name), name, season: "summer" as const, company: "PG" as const })),
-  ...fall.map((name) => ({ slug: slugify(name), name, season: "fall" as const, company: "PG" as const }))
+  ...summer.map((name) => {
+    const slug = slugify(name);
+    const meta = presetMeta[slug] || {};
+    return {
+      slug,
+      name,
+      season: "summer" as const,
+      company: "PG" as const,
+      displayDate: meta.date,
+      displayCity: meta.city,
+      displayTeams: meta.teams
+    };
+  }),
+  ...fall.map((name) => {
+    const slug = slugify(name);
+    const meta = presetMeta[slug] || {};
+    return {
+      slug,
+      name,
+      season: "fall" as const,
+      company: "PG" as const,
+      displayDate: meta.date,
+      displayCity: meta.city,
+      displayTeams: meta.teams
+    };
+  })
 ];
 
 export function inventoryHarvestHint(input: { slug: string; name: string; company: DataProvider }) {

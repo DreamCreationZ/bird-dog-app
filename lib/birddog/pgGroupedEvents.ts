@@ -106,6 +106,6 @@ export function bestGroupedEventMatch(targetName: string, events: PgGroupedEvent
     }
   }
   if (strictCandidates.length && best) return best;
-  if (score < 0.55) return null;
-  return best;
+  // Avoid weak fuzzy fallback that can pin many tournaments to one shared date.
+  return null;
 }

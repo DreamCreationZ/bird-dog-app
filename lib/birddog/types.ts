@@ -50,6 +50,7 @@ export type OrgBrand = {
   primary: string;
   accent: string;
   logoText: string;
+  logoUrl?: string;
 };
 
 export type SessionUser = {
@@ -58,6 +59,9 @@ export type SessionUser = {
   email: string;
   orgId: string;
   orgName: string;
+  orgPrimary?: string;
+  orgAccent?: string;
+  orgLogoUrl?: string;
 };
 
 export type ScoutNote = {

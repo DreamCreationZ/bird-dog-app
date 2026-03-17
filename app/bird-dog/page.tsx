@@ -2,7 +2,6 @@
 
 import { TouchEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getOrgByEmail } from "@/lib/birddog/mockData";
 import { Game, ItineraryStop, Player, PulseEvent, ScoutNote, SessionUser, Tournament } from "@/lib/birddog/types";
 
 type RecorderState = "idle" | "recording";
@@ -88,6 +87,8 @@ type HotelSuggestion = {
   placeId: string;
 };
 
+type TeamRef = NonNullable<Tournament["teams"]>[number];
+
 type OptimizedStop = ItineraryStop & {
   gameStartAt: string;
   gameEndAt: string;
@@ -110,9 +111,23 @@ type ThemePreset = {
   panel: string;
   ink: string;
   line: string;
+  cardInk?: string;
+  cardMuted?: string;
 };
 
 const THEME_PRESETS: ThemePreset[] = [
+  {
+    id: "org",
+    label: "University",
+    primary: "#1f3a5f",
+    accent: "#d7a316",
+    bg: "#f8f6ef",
+    panel: "#fffdf8",
+    ink: "#111111",
+    line: "#d8d2c4",
+    cardInk: "#161616",
+    cardMuted: "#4c4638"
+  },
   {
     id: "light",
     label: "Light",
@@ -122,7 +137,9 @@ const THEME_PRESETS: ThemePreset[] = [
     bgImage: "linear-gradient(180deg, #fffef8 0%, #f3efe3 100%)",
     panel: "#fffdf8",
     ink: "#111111",
-    line: "#d8d2c4"
+    line: "#d8d2c4",
+    cardInk: "#161616",
+    cardMuted: "#4c4638"
   },
   {
     id: "flower",
@@ -133,7 +150,9 @@ const THEME_PRESETS: ThemePreset[] = [
     bgImage: "radial-gradient(circle at 12% 18%, rgba(255,170,204,0.45) 0%, transparent 28%), radial-gradient(circle at 82% 26%, rgba(255,214,153,0.35) 0%, transparent 22%), radial-gradient(circle at 24% 82%, rgba(204,153,255,0.30) 0%, transparent 24%), linear-gradient(180deg, #fff6fb 0%, #ffeef6 100%)",
     panel: "#fff9fc",
     ink: "#2b0f1f",
-    line: "#e8bfd3"
+    line: "#e8bfd3",
+    cardInk: "#2b0f1f",
+    cardMuted: "#6b3a57"
   },
   {
     id: "dark",
@@ -144,7 +163,9 @@ const THEME_PRESETS: ThemePreset[] = [
     bgImage: "linear-gradient(180deg, #111827 0%, #020617 100%)",
     panel: "#111827",
     ink: "#e5e7eb",
-    line: "#334155"
+    line: "#334155",
+    cardInk: "#0f0f0f",
+    cardMuted: "#3f3f3f"
   }
 ];
 
@@ -181,6 +202,23 @@ function makeOrgKey(orgId: string, userId: string, key: string) {
 
 function toRadians(value: number) {
   return (value * Math.PI) / 180;
+}
+
+function hexToRgb(hex: string) {
+  const raw = hex.replace("#", "").trim();
+  const full = raw.length === 3 ? raw.split("").map((ch) => `${ch}${ch}`).join("") : raw;
+  if (!/^[\da-f]{6}$/i.test(full)) return null;
+  return {
+    r: Number.parseInt(full.slice(0, 2), 16),
+    g: Number.parseInt(full.slice(2, 4), 16),
+    b: Number.parseInt(full.slice(4, 6), 16)
+  };
+}
+
+function alphaColor(hex: string, alpha: number) {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return `rgba(31,58,95,${alpha})`;
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
 }
 
 function distanceKm(aLat: number, aLng: number, bLat: number, bLng: number) {
@@ -356,8 +394,7 @@ export default function BirdDogPage() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
-  const brand = useMemo(() => getOrgByEmail(user?.email || ""), [user?.email]);
-  const [themeId, setThemeId] = useState("light");
+  const [themeId, setThemeId] = useState("org");
   const activeTheme = useMemo(
     () => THEME_PRESETS.find((theme) => theme.id === themeId) || THEME_PRESETS[0],
     [themeId]
@@ -387,6 +424,7 @@ export default function BirdDogPage() {
   const [selectedInventorySlug, setSelectedInventorySlug] = useState("");
   const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes">("tournaments");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [queryStateApplied, setQueryStateApplied] = useState(false);
 
   const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
   const [viewingSchedule, setViewingSchedule] = useState<CoachSchedule | null>(null);
@@ -400,7 +438,7 @@ export default function BirdDogPage() {
   const [sourceSuggestions, setSourceSuggestions] = useState<PlaceSuggestion[]>([]);
   const [destinationSuggestions, setDestinationSuggestions] = useState<PlaceSuggestion[]>([]);
   const [hotelSuggestions, setHotelSuggestions] = useState<HotelSuggestion[]>([]);
-  const [selectedTeamName, setSelectedTeamName] = useState("");
+  const [teamsSearchQuery, setTeamsSearchQuery] = useState("");
   const [desiredPlayers, setDesiredPlayers] = useState<DesiredPlayer[]>([]);
   const [desiredPlayerId, setDesiredPlayerId] = useState("");
   const [myGeneratedPlan, setMyGeneratedPlan] = useState<PlanItem[]>([]);
@@ -438,6 +476,7 @@ export default function BirdDogPage() {
   const audioChunksRef = useRef<Blob[]>([]);
   const pullStartYRef = useRef<number | null>(null);
   const pullTriggeredRef = useRef(false);
+  const bottomRefreshAtRef = useRef(0);
 
   useEffect(() => {
     let mounted = true;
@@ -492,6 +531,25 @@ export default function BirdDogPage() {
   }, [user]);
 
   useEffect(() => {
+    if (queryStateApplied) return;
+    if (!user) return;
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab");
+    const inventorySlug = params.get("inventorySlug");
+    const tournamentId = params.get("tournamentId");
+    if (tab === "tournaments" || tab === "schedule" || tab === "notes") {
+      setActiveTab(tab);
+    }
+    if (inventorySlug) {
+      setSelectedInventorySlug(inventorySlug);
+    }
+    if (tournamentId) {
+      setSelectedTournamentId(tournamentId);
+    }
+    setQueryStateApplied(true);
+  }, [queryStateApplied, user]);
+
+  useEffect(() => {
     const ctor = (window as unknown as { SpeechRecognition?: BrowserSpeechConstructor; webkitSpeechRecognition?: BrowserSpeechConstructor }).SpeechRecognition
       || (window as unknown as { webkitSpeechRecognition?: BrowserSpeechConstructor }).webkitSpeechRecognition;
     setSpeechSupported(Boolean(ctor));
@@ -506,11 +564,6 @@ export default function BirdDogPage() {
       setDesiredPlayerId(players[0].id);
     }
   }, [players, playersById, desiredPlayerId]);
-
-  useEffect(() => {
-    const firstTeam = selectedTournament?.teams?.[0]?.name || "";
-    setSelectedTeamName(firstTeam);
-  }, [selectedTournament?.id, selectedTournament?.teams]);
 
   useEffect(() => {
     if (!canAccessLockedPages) {
@@ -569,6 +622,8 @@ export default function BirdDogPage() {
 
     if (rawTheme && THEME_PRESETS.some((theme) => theme.id === rawTheme)) {
       setThemeId(rawTheme);
+    } else {
+      setThemeId("org");
     }
     setWatchlist(rawWatch ? JSON.parse(rawWatch) : []);
     setNotes(rawNotes ? JSON.parse(rawNotes) : []);
@@ -667,27 +722,31 @@ export default function BirdDogPage() {
   }
 
   async function refreshTournamentByInventory(item: InventoryTournament) {
-    const harvestHint = item.harvestHint || item.name;
-    const liveOpen = await fetch("/api/harvest/open", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        company: item.company,
-        inventorySlug: item.slug,
-        tournamentHint: harvestHint
-      })
-    });
-    if (!liveOpen.ok) return;
-    const data = await liveOpen.json();
-    const openedTournament = data?.tournament as Tournament | undefined;
-    if (!openedTournament) return;
-    setTournaments((prev) => {
-      const filtered = prev.filter((t) => t.id !== openedTournament.id);
-      return [openedTournament, ...filtered];
-    });
-    setSelectedTournamentId(openedTournament.id);
-    setSelectedGameId(openedTournament.games?.[0]?.id || "");
-    setTournamentViewTitle(openedTournament.name);
+    try {
+      const harvestHint = item.harvestHint || item.name;
+      const liveOpen = await fetch("/api/harvest/open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company: item.company,
+          inventorySlug: item.slug,
+          tournamentHint: harvestHint
+        })
+      });
+      if (!liveOpen.ok) return;
+      const data = await liveOpen.json();
+      const openedTournament = data?.tournament as Tournament | undefined;
+      if (!openedTournament) return;
+      setTournaments((prev) => {
+        const filtered = prev.filter((t) => t.id !== openedTournament.id);
+        return [openedTournament, ...filtered];
+      });
+      setSelectedTournamentId(openedTournament.id);
+      setSelectedGameId(openedTournament.games?.[0]?.id || "");
+      setTournamentViewTitle(openedTournament.name);
+    } catch (error) {
+      setOpenError(String(error));
+    }
   }
 
   async function refreshFromPerfectGame(includeOpenedTournament: boolean) {
@@ -749,6 +808,21 @@ export default function BirdDogPage() {
     pullStartYRef.current = null;
     pullTriggeredRef.current = false;
   }
+
+  useEffect(() => {
+    if (!online || !user || activeTab !== "tournaments") return;
+    function onScroll() {
+      const doc = document.documentElement;
+      const nearBottom = window.innerHeight + window.scrollY >= doc.scrollHeight - 56;
+      if (!nearBottom) return;
+      const now = Date.now();
+      if (now - bottomRefreshAtRef.current < 30000) return;
+      bottomRefreshAtRef.current = now;
+      void refreshFromPerfectGame(false);
+    }
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [activeTab, online, user, selectedInventorySlug]);
 
   function hydrateMySchedule(data: CoachSchedule[]) {
     const mine = data.find((item) => item.user_id === user?.userId);
@@ -921,62 +995,44 @@ export default function BirdDogPage() {
     setViewingSchedule(schedule);
   }
 
-  function activeEventNumber() {
+  function currentEventNumber() {
     const fromTournament = selectedTournament?.id?.match(/(\d+)/)?.[1] || "";
     if (fromTournament && Number(fromTournament) > 10000) return fromTournament;
     const fromHint = selectedInventory?.harvestHint?.match(/[?&]event=(\d+)/i)?.[1] || "";
-    if (fromHint) return fromHint;
-    return "";
+    return fromHint || "";
   }
 
-  function pgTeamUrl(team: NonNullable<Tournament["teams"]>[number]) {
-    if (team.href && /^https?:\/\//i.test(team.href)) return team.href;
-    const teamIdFromTeamField = team.id.match(/(\d+)/)?.[1] || "";
-    // PG team ids are large numeric ids. Avoid opening placeholder ids like 1,2,3 that cause 404.
-    if (teamIdFromTeamField && Number(teamIdFromTeamField) >= 10000) {
-      return `https://www.perfectgame.org/Tournaments/Teams/?team=${teamIdFromTeamField}`;
+  function viewTeamScheduleAndRoster(team: TeamRef) {
+    const params = new URLSearchParams();
+    params.set("inventorySlug", selectedInventorySlug);
+    params.set("teamId", team.id);
+    params.set("teamName", team.name);
+    params.set("teamUrl", team.href || "");
+    params.set("eventId", currentEventNumber());
+    params.set("tournamentName", selectedTournament?.name || tournamentViewTitle || "");
+    params.set("tournamentIcon", tournamentIconByName(selectedTournament?.name || tournamentViewTitle || team.name));
+    params.set("returnTab", "notes");
+    params.set("returnInventorySlug", selectedInventorySlug);
+    params.set("returnTournamentId", selectedTournamentId);
+    const opened = window.open(`/bird-dog/team?${params.toString()}`, "_blank", "noopener,noreferrer");
+    if (!opened) {
+      router.push(`/bird-dog/team?${params.toString()}`);
     }
-    const eventNum = activeEventNumber();
-    if (eventNum) {
-      return `https://www.perfectgame.org/search.aspx?search=${encodeURIComponent(`${team.name} event ${eventNum}`)}`;
-    }
-    return `https://www.perfectgame.org/search.aspx?search=${encodeURIComponent(team.name)}`;
-  }
-
-  function openTeamScheduleAndRoster(team: NonNullable<Tournament["teams"]>[number]) {
-    setSelectedTeamName(team.name);
-    const url = pgTeamUrl(team);
-    if (!url) {
-      window.alert("Team URL is not available yet. Open tournament once again to refresh PG links.");
-      return;
-    }
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
-
-  function openPgTournamentPage(kind: "teams" | "schedule") {
-    const eventNum = activeEventNumber();
-    if (!eventNum) {
-      window.alert("Tournament event id missing. Open tournament again from dashboard.");
-      return;
-    }
-    const url = kind === "teams"
-      ? `https://www.perfectgame.org/events/TournamentTeams.aspx?event=${eventNum}`
-      : `https://www.perfectgame.org/events/TournamentSchedule.aspx?event=${eventNum}`;
-    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   function downloadPdfLikeReport(title: string, headers: string[], rows: string[][]) {
-    const popup = window.open("", "_blank", "noopener,noreferrer,width=1200,height=900");
-    if (!popup) {
-      window.alert("Popup blocked. Please allow popups to download PDF.");
-      return;
-    }
-    const tableHeader = headers.map((h) => `<th>${h}</th>`).join("");
-    const tableRows = rows.map((row) => `<tr>${row.map((c) => `<td>${c || "-"}</td>`).join("")}</tr>`).join("");
-    popup.document.write(`
+    const safe = (value: string) =>
+      String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;");
+    const tableHeader = headers.map((h) => `<th>${safe(h)}</th>`).join("");
+    const tableRows = rows.map((row) => `<tr>${row.map((c) => `<td>${safe(c || "-")}</td>`).join("")}</tr>`).join("");
+    const html = `
       <html>
         <head>
-          <title>${title}</title>
+          <title>${safe(title)}</title>
           <style>
             body { font-family: Arial, sans-serif; margin: 20px; color: #111; }
             h1 { margin: 0 0 12px; }
@@ -987,17 +1043,24 @@ export default function BirdDogPage() {
           </style>
         </head>
         <body>
-          <h1>${title}</h1>
-          <p>Use browser print and choose "Save as PDF".</p>
+          <h1>${safe(title)}</h1>
+          <p>Press Cmd/Ctrl + P and choose "Save as PDF".</p>
           <table>
             <thead><tr>${tableHeader}</tr></thead>
             <tbody>${tableRows}</tbody>
           </table>
-          <script>window.focus();</script>
         </body>
       </html>
-    `);
-    popup.document.close();
+    `;
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const blobUrl = URL.createObjectURL(blob);
+    const popup = window.open(blobUrl, "_blank");
+    if (!popup) {
+      URL.revokeObjectURL(blobUrl);
+      window.alert("Popup blocked. Please allow popups to open report.");
+      return;
+    }
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
   }
 
   async function openCheckoutForTournament(inventorySlug: string) {
@@ -1246,25 +1309,29 @@ export default function BirdDogPage() {
       };
     });
   }, [games, players, notes]);
-  const teamDashboard = useMemo(() => {
+  const filteredTeams = useMemo(() => {
+    const query = teamsSearchQuery.trim().toLowerCase();
     const teams = selectedTournament?.teams || [];
-    return teams.map((team) => {
-      const teamPlayers = players.filter((p) => p.school === team.name);
-      const bestPlayer = teamPlayers[0] || null;
-      return {
-        team,
-        teamPlayers,
-        bestPlayer
-      };
-    });
-  }, [selectedTournament?.teams, players]);
-  const selectedTeamDashboard = useMemo(
-    () => teamDashboard.find((row) => row.team.name === selectedTeamName) || null,
-    [teamDashboard, selectedTeamName]
-  );
+    if (!query) return teams;
+    return teams.filter((team) =>
+      `${team.name} ${team.from || ""} ${team.record || ""}`.toLowerCase().includes(query)
+    );
+  }, [selectedTournament?.teams, teamsSearchQuery]);
   const showTournaments = activeTab === "tournaments";
   const showSchedule = activeTab === "schedule" && canAccessLockedPages;
   const showNotes = activeTab === "notes" && canAccessLockedPages;
+  const orgPrimary = user?.orgPrimary || activeTheme.primary;
+  const orgAccent = user?.orgAccent || activeTheme.accent;
+  const isOrgTheme = themeId === "org";
+  const bgValue = isOrgTheme ? "#f9f8f4" : activeTheme.bg;
+  const bgImageValue = isOrgTheme
+    ? `radial-gradient(circle at 10% 14%, ${alphaColor(orgPrimary, 0.14)} 0%, transparent 30%), radial-gradient(circle at 86% 22%, ${alphaColor(orgAccent, 0.18)} 0%, transparent 28%), linear-gradient(180deg, #fffef9 0%, #f3efe3 100%)`
+    : (activeTheme.bgImage || "none");
+  const panelValue = isOrgTheme ? "#fffdf8" : activeTheme.panel;
+  const inkValue = isOrgTheme ? "#111111" : activeTheme.ink;
+  const lineValue = isOrgTheme ? "#d8d2c4" : activeTheme.line;
+  const cardInkValue = isOrgTheme ? "#161616" : (activeTheme.cardInk || "#161616");
+  const cardMutedValue = isOrgTheme ? "#4c4638" : (activeTheme.cardMuted || "#4c4638");
 
   if (authLoading) {
     return <main className="bd-root"><p>Loading session...</p></main>;
@@ -1274,13 +1341,15 @@ export default function BirdDogPage() {
     <main
       className="bd-root"
       style={{
-        ["--org-primary" as string]: activeTheme.primary || brand.primary,
-        ["--org-accent" as string]: activeTheme.accent || brand.accent,
-        ["--bd-bg" as string]: activeTheme.bg,
-        ["--bd-bg-image" as string]: activeTheme.bgImage || "none",
-        ["--bd-panel" as string]: activeTheme.panel,
-        ["--bd-ink" as string]: activeTheme.ink,
-        ["--bd-line" as string]: activeTheme.line
+        ["--org-primary" as string]: orgPrimary,
+        ["--org-accent" as string]: orgAccent,
+        ["--bd-bg" as string]: bgValue,
+        ["--bd-bg-image" as string]: bgImageValue,
+        ["--bd-panel" as string]: panelValue,
+        ["--bd-ink" as string]: inkValue,
+        ["--bd-line" as string]: lineValue,
+        ["--bd-card-ink" as string]: cardInkValue,
+        ["--bd-card-muted" as string]: cardMutedValue
       }}
       onTouchStart={onPullStart}
       onTouchMove={onPullMove}
@@ -1297,6 +1366,11 @@ export default function BirdDogPage() {
         </button>
         {menuOpen ? (
           <div className="menu-dropdown">
+            {user?.orgLogoUrl ? (
+              <div className="menu-brand">
+                <img src={user.orgLogoUrl} alt={user.orgName || "University"} />
+              </div>
+            ) : null}
             <button
               className={activeTab === "tournaments" ? "active" : ""}
               type="button"
@@ -1339,7 +1413,7 @@ export default function BirdDogPage() {
                   onClick={() => setThemeId(theme.id)}
                   title={theme.label}
                 >
-                  <span className="theme-dot" style={{ backgroundColor: theme.primary }} />
+                  <span className="theme-dot" style={{ backgroundColor: theme.id === "org" ? orgPrimary : theme.primary }} />
                   <span>{theme.label}</span>
                 </button>
               ))}
@@ -1559,10 +1633,7 @@ export default function BirdDogPage() {
       {showTournaments ? (
       <section className="panel">
         <h2>Tournament Dashboard</h2>
-        <p className="muted">
-          Scroll all tournaments below. Open one tournament to load its details, then move to Schedule or Notes.
-        </p>
-        <p className="muted small">{inventoryRefreshing ? "Syncing latest data from Perfect Game..." : "Pull down to refresh from Perfect Game."}</p>
+        {inventoryRefreshing ? <p className="muted small">Syncing latest data from Perfect Game...</p> : null}
         {openError ? <p className="muted">{openError}</p> : null}
         <div className="tournament-grid" style={{ marginTop: 12 }}>
           {inventory.length ? inventory.map((item) => {
@@ -1597,12 +1668,11 @@ export default function BirdDogPage() {
       ) : null}
 
       {showNotes ? (
-      <section className="panel grid2">
-        <div>
+      <section className="panel">
+        <div style={{ width: "100%" }}>
           <h2>Participating Teams</h2>
           <p className="muted">Teams in tournament: {selectedTournament?.teams?.length || 0}</p>
           <div className="row wrap" style={{ marginBottom: 8 }}>
-            <button className="secondary" type="button" onClick={() => openPgTournamentPage("teams")}>Open PG Teams Page</button>
             <button
               className="secondary"
               type="button"
@@ -1622,6 +1692,14 @@ export default function BirdDogPage() {
               Download Teams PDF
             </button>
           </div>
+          <label>
+            Search Participating Teams
+            <input
+              value={teamsSearchQuery}
+              onChange={(e) => setTeamsSearchQuery(e.target.value)}
+              placeholder="Search by team, city, or record"
+            />
+          </label>
           {selectedTournament?.teams?.length ? (
             <div className="table-wrap" style={{ marginBottom: 12 }}>
               <table className="roster-table">
@@ -1634,13 +1712,13 @@ export default function BirdDogPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {selectedTournament.teams.map((team) => (
-                    <tr key={team.id} style={{ cursor: "pointer" }} onClick={() => openTeamScheduleAndRoster(team)}>
+                  {filteredTeams.map((team) => (
+                    <tr key={team.id} style={{ cursor: "pointer" }} onClick={() => viewTeamScheduleAndRoster(team)}>
                       <td>{team.name}</td>
                       <td>{team.from || "-"}</td>
                       <td>{team.record || "-"}</td>
-                      <td>
-                        <button className="secondary" type="button" onClick={(e) => { e.stopPropagation(); openTeamScheduleAndRoster(team); }}>
+                      <td className="action-cell">
+                        <button className="secondary" type="button" onClick={(e) => { e.stopPropagation(); viewTeamScheduleAndRoster(team); }}>
                           View Schedule + Roster
                         </button>
                       </td>
@@ -1650,97 +1728,6 @@ export default function BirdDogPage() {
               </table>
             </div>
           ) : <p className="muted">Participating teams appear after full tournament ingest.</p>}
-        </div>
-        <div>
-          <h2>Team Players</h2>
-          <div className="row wrap" style={{ marginBottom: 8 }}>
-            <button
-              className="secondary"
-              type="button"
-              onClick={() => {
-                if (!selectedTeamDashboard) return;
-                openTeamScheduleAndRoster(selectedTeamDashboard.team);
-              }}
-              disabled={!selectedTeamDashboard}
-            >
-              Open Selected Team on PG
-            </button>
-            <button
-              className="secondary"
-              type="button"
-              onClick={() => {
-                if (!selectedTeamDashboard) return;
-                const rows = selectedTeamDashboard.teamPlayers.map((p, idx) => [
-                  String(idx + 1),
-                  p.name,
-                  p.position || "-",
-                  p.school || "-"
-                ]);
-                downloadPdfLikeReport(
-                  `Tournament Roster - ${selectedTeamDashboard.team.name}`,
-                  ["No.", "Name", "Pos", "School"],
-                  rows
-                );
-              }}
-              disabled={!selectedTeamDashboard}
-            >
-              Download Roster PDF
-            </button>
-          </div>
-          {selectedTeamDashboard ? (
-            <div className="table-wrap">
-              <p className="muted"><strong>Team:</strong> {selectedTeamDashboard.team.name}</p>
-              <p className="muted"><strong>Best Player:</strong> {selectedTeamDashboard.bestPlayer?.name || "N/A"}</p>
-              <table className="roster-table">
-                <thead>
-                  <tr>
-                    <th>No.</th>
-                    <th>Name</th>
-                    <th>Pos</th>
-                    <th>School</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedTeamDashboard.teamPlayers.map((p, idx) => (
-                    <tr key={p.id}>
-                      <td>{idx + 1}</td>
-                      <td>{p.name}</td>
-                      <td>{p.position}</td>
-                      <td>{p.school}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : <p className="muted">Click a team to view player roster.</p>}
-        </div>
-        <div>
-          <h2>Tournament Matchups</h2>
-          <div className="row wrap" style={{ marginBottom: 8 }}>
-            <button className="secondary" type="button" onClick={() => openPgTournamentPage("schedule")}>Open PG Schedule Page</button>
-            <button
-              className="secondary"
-              type="button"
-              onClick={() => {
-                const rows = games.map((g) => [timeLabel(g.startTime), g.field, `${g.homeTeam} vs ${g.awayTeam}`]);
-                downloadPdfLikeReport(
-                  `Tournament Schedule - ${selectedTournament?.name || "Tournament"}`,
-                  ["Time", "Field", "Matchup"],
-                  rows
-                );
-              }}
-            >
-              Download Schedule PDF
-            </button>
-          </div>
-          <div className="log-list" style={{ maxHeight: 220 }}>
-            {games.length ? games.map((g) => (
-              <article key={g.id} className="log-card">
-                <p><strong>{timeLabel(g.startTime)}</strong> · {g.field}</p>
-                <p>{g.homeTeam} vs {g.awayTeam}</p>
-              </article>
-            )) : <p className="muted">No matchups loaded yet. Open an unlocked tournament to ingest PG/PBR details.</p>}
-          </div>
         </div>
       </section>
       ) : null}
