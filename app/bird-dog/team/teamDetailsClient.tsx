@@ -151,7 +151,8 @@ export default function TeamDetailsClient({ initialParams }: Props) {
             teamId: initialParams.teamId,
             teamUrl: initialParams.teamUrl,
             teamName: initialParams.teamName,
-            eventId: initialParams.eventId
+            eventId: initialParams.eventId,
+            tournamentId: initialParams.returnTournamentId
           })
         });
         if (!res.ok) {

@@ -14,10 +14,13 @@ export async function GET(req: NextRequest) {
   if (!company) {
     const dbCompanies = await listHarvestCompanies(session.orgId).catch(() => []);
     const companies = dbCompanies.length ? dbCompanies : ["PG", "PBR"];
+    const dataMode = (process.env.BIRD_DOG_DATA_MODE || "imported").toLowerCase();
 
     return NextResponse.json({
       companies,
-      note: "Queue a scrape job to ingest live PG/PBR data. Mock data appears only when DB is empty.",
+      note: dataMode === "live"
+        ? "Queue a scrape job to ingest live PG/PBR data."
+        : "Imported dataset mode is active. Live PG scraping is disabled.",
       queueEndpoint: "/api/harvest/jobs"
     });
   }
