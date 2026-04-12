@@ -1,0 +1,24 @@
+project_name = "bird-dog"
+environment  = "prod"
+aws_region   = "us-east-1"
+
+domain_name     = "app.example.edu"
+certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+# Set true and provide zone id if you want Terraform to create a Route53 alias record.
+create_dns_record = false
+route53_zone_id   = ""
+
+repo_url               = "https://github.com/your-org/bird-dog-app.git"
+repo_branch            = "main"
+ssm_env_parameter_name = "/bird-dog/prod/env"
+ssm_kms_key_arn        = ""
+
+instance_type    = "t3.large"
+desired_capacity = 2
+min_size         = 2
+max_size         = 8
+
+# Optional: only if you need SSH access.
+key_name        = ""
+ssh_cidr_blocks = []

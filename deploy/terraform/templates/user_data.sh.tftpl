@@ -1,0 +1,47 @@
+#!/bin/bash
+set -euxo pipefail
+
+exec > >(tee /var/log/bird-dog-bootstrap.log | logger -t user-data -s 2>/dev/console) 2>&1
+
+dnf makecache -y
+dnf install -y git curl-minimal --allowerasing
+curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
+dnf install -y nodejs --allowerasing
+npm install -g pm2
+
+mkdir -p /var/www/bird-dog-app /etc/bird-dog
+chown -R ec2-user:ec2-user /var/www/bird-dog-app
+
+aws ssm get-parameter \
+  --name "${ssm_env_parameter_name}" \
+  --with-decryption \
+  --query "Parameter.Value" \
+  --output text > /etc/bird-dog/.env.production
+
+chown root:ec2-user /etc/bird-dog/.env.production
+chmod 640 /etc/bird-dog/.env.production
+
+if [ ! -d /var/www/bird-dog-app/current/.git ]; then
+  sudo -u ec2-user -H git clone "${repo_url}" /var/www/bird-dog-app/current
+fi
+
+cd /var/www/bird-dog-app/current
+sudo -u ec2-user -H git fetch origin "${repo_branch}"
+sudo -u ec2-user -H git checkout "${repo_branch}"
+sudo -u ec2-user -H git pull --ff-only origin "${repo_branch}"
+
+sudo -u ec2-user -H npm ci
+sudo -u ec2-user -H npm run build
+
+if [ -f /var/www/bird-dog-app/current/deploy/ec2/ecosystem.config.cjs ]; then
+  sudo -u ec2-user -H pm2 startOrReload deploy/ec2/ecosystem.config.cjs --update-env
+else
+  sudo -u ec2-user -H bash -lc 'set -a; source /etc/bird-dog/.env.production; set +a; cd /var/www/bird-dog-app/current; pm2 start npm --name bird-dog-web -- run start'
+  sudo -u ec2-user -H bash -lc 'set -a; source /etc/bird-dog/.env.production; set +a; cd /var/www/bird-dog-app/current; pm2 start npm --name bird-dog-harvest-worker -- run worker:harvest'
+fi
+
+sudo -u ec2-user -H pm2 save
+
+env PATH=$PATH:/usr/bin pm2 startup systemd -u ec2-user --hp /home/ec2-user || true
+systemctl enable pm2-ec2-user || true
+systemctl restart pm2-ec2-user || true
