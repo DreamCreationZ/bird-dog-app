@@ -2,5 +2,11 @@ node_modules
 .next
 .DS_Store
 .vercel
+tsconfig.tsbuildinfo
+.terraform
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+deploy/ec2/env.production
 
 .env.local

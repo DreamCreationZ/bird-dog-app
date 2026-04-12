@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "deploy:ec2": "bash deploy/ec2/scripts/deploy.sh",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "worker:harvest": "node workers/harvest-worker.mjs"
