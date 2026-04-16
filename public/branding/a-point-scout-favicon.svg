@@ -1,0 +1,18 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A-POINT Scout Favicon">
+  <defs>
+    <linearGradient id="favNavy" x1="62" y1="22" x2="191" y2="223" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2c5685"/>
+      <stop offset="1" stop-color="#15395d"/>
+    </linearGradient>
+  </defs>
+
+  <path fill="url(#favNavy)" d="M66 222L94 128H111L87 222H66ZM166 222L143 128H160L188 222H166ZM90 186L95 169H160L164 186H90Z"/>
+  <rect x="82" y="208" width="104" height="14" rx="2" fill="url(#favNavy)"/>
+
+  <g transform="translate(0 -2)">
+    <path d="M128 35L174 72L128 109L82 72L128 35Z" fill="none" stroke="url(#favNavy)" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M128 51C139 51 147 60 147 71C147 81 139 90 128 90C118 90 109 81 109 71C109 60 118 51 128 51Z" fill="none" stroke="url(#favNavy)" stroke-width="5"/>
+    <path d="M128 56L135 71L128 85L121 71L128 56Z" fill="url(#favNavy)"/>
+    <circle cx="128" cy="71" r="2" fill="#ffffff"/>
+  </g>
+</svg>

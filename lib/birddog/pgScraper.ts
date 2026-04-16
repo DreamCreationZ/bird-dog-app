@@ -21,7 +21,14 @@ export type PgTeamRosterRow = {
   no: string;
   name: string;
   position: string;
+  height?: string;
+  weight?: string;
+  batsThrows?: string;
+  grad?: string;
   school: string;
+  hometown?: string;
+  rank?: string;
+  commitment?: string;
 };
 
 type EventScoreboardRow = {
@@ -56,7 +63,28 @@ function cleanText(input: string) {
 }
 
 function cleanCellWithBreaks(input: string) {
-  return cleanText(input.replace(/<br\s*\/?>/gi, "\n"));
+  const marker = "__PG_BREAK__";
+  return cleanText(input.replace(/<br\s*\/?>/gi, marker))
+    .replace(new RegExp(marker, "g"), "\n");
+}
+
+function splitCellLines(input: string) {
+  return cleanCellWithBreaks(input)
+    .split("\n")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function parseInlinePosition(nameOrNameWithPos: string) {
+  const value = nameOrNameWithPos.trim();
+  const inlinePos = value.match(
+    /^(.*?)(?:\s+)((?:RHP|LHP|SS|CF|RF|LF|OF|C|1B|2B|3B|INF|MIF|P|UT|DH)(?:[\s,\/]+(?:RHP|LHP|SS|CF|RF|LF|OF|C|1B|2B|3B|INF|MIF|P|UT|DH))*)$/i
+  );
+  if (!inlinePos) return { name: value, position: "" };
+  return {
+    name: inlinePos[1].trim(),
+    position: inlinePos[2].replace(/\s+/g, " ").trim()
+  };
 }
 
 function readTitle(html: string) {
@@ -515,22 +543,47 @@ function parseTeamRosterFromHtml(html: string): PgTeamRosterRow[] {
   const rows = [...table.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => m[1]);
   if (!rows.length) return [];
 
-  const headers = [...rows[0].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)].map((m) => cleanText(m[1]).toLowerCase());
+  let headerIdx = 0;
+  let headers: string[] = [];
+  for (let i = 0; i < Math.min(rows.length, 6); i += 1) {
+    const candidate = [...rows[i].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)].map((m) => cleanText(m[1]).toLowerCase());
+    const looksLikeHeader = candidate.some((h) => h.includes("name")) && candidate.some((h) => h.includes("school") || h.includes("hometown"));
+    if (looksLikeHeader) {
+      headerIdx = i;
+      headers = candidate;
+      break;
+    }
+  }
+  if (!headers.length) {
+    headers = [...rows[0].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)].map((m) => cleanText(m[1]).toLowerCase());
+    headerIdx = 0;
+  }
+
   const nameIdx = headers.findIndex((h) => h.includes("name"));
   const schoolIdx = headers.findIndex((h) => h.includes("school") || h === "hs");
   const noIdx = headers.findIndex((h) => h === "no." || h === "no");
+  const htIdx = headers.findIndex((h) => h === "ht" || h.includes("height"));
+  const wtIdx = headers.findIndex((h) => h === "wt" || h.includes("weight"));
+  const btIdx = headers.findIndex((h) => h === "b/t" || h.includes("bats") || h.includes("throws"));
+  const gradIdx = headers.findIndex((h) => h.includes("grad"));
+  const hometownIdx = headers.findIndex((h) => h.includes("hometown"));
+  const rankIdx = headers.findIndex((h) => h === "rank" || h.includes("national rank"));
+  const commitmentIdx = headers.findIndex((h) => h.includes("commitment"));
   const out: PgTeamRosterRow[] = [];
   const seen = new Set<string>();
 
-  for (const row of rows.slice(1)) {
+  for (const row of rows.slice(headerIdx + 1)) {
     const cellsRaw = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => m[1]);
     if (!cellsRaw.length) continue;
     const cells = cellsRaw.map((cell) => cleanCellWithBreaks(cell));
     const rawNo = cells[noIdx >= 0 ? noIdx : 0] || "";
     if (!/^\d+$/.test(rawNo.trim())) continue;
-    const nameCell = cells[nameIdx >= 0 ? nameIdx : 1] || "";
-    const nameParts = nameCell.split("\n").map((p) => p.trim()).filter(Boolean);
-    const name = nameParts[0] || "";
+    const rawNameCell = cellsRaw[nameIdx >= 0 ? nameIdx : 1] || "";
+    const nameParts = splitCellLines(rawNameCell);
+    const fallbackNameCell = cells[nameIdx >= 0 ? nameIdx : 1] || "";
+    const parsedInline = parseInlinePosition(nameParts[0] || fallbackNameCell);
+    const name = parsedInline.name || "";
+    const inlinePosition = parsedInline.position || "";
     if (
       !name
       || !/[A-Za-z]/.test(name)
@@ -543,8 +596,15 @@ function parseTeamRosterFromHtml(html: string): PgTeamRosterRow[] {
     out.push({
       no: rawNo,
       name,
-      position: nameParts[1] || "",
-      school
+      position: nameParts[1] || inlinePosition || "",
+      height: (htIdx >= 0 ? cells[htIdx] : "") || "",
+      weight: (wtIdx >= 0 ? cells[wtIdx] : "") || "",
+      batsThrows: (btIdx >= 0 ? cells[btIdx] : "") || "",
+      grad: (gradIdx >= 0 ? cells[gradIdx] : "") || "",
+      school,
+      hometown: (hometownIdx >= 0 ? cells[hometownIdx] : "") || "",
+      rank: (rankIdx >= 0 ? cells[rankIdx] : "") || "",
+      commitment: (commitmentIdx >= 0 ? cells[commitmentIdx] : "") || ""
     });
   }
 
@@ -648,7 +708,14 @@ function parseRosterFromRecapHtml(html: string, teamName: string): PgTeamRosterR
       no: "",
       name,
       position: "",
-      school: teamName
+      height: "",
+      weight: "",
+      batsThrows: "",
+      grad: "",
+      school: teamName,
+      hometown: "",
+      rank: "",
+      commitment: ""
     });
     if (out.length >= 60) break;
   }
@@ -658,7 +725,7 @@ function parseRosterFromRecapHtml(html: string, teamName: string): PgTeamRosterR
 
 export async function scrapePgTeamLive(
   teamUrl: string,
-  options?: { teamName?: string; eventId?: string }
+  options?: { teamName?: string; eventId?: string; fastMode?: boolean }
 ) {
   const resolved = /^https?:\/\//i.test(teamUrl) ? teamUrl : toAbsolutePgUrl(teamUrl);
   const candidates = Array.from(new Set([resolved, normalizeTeamPageUrl(resolved)]));
@@ -688,7 +755,7 @@ export async function scrapePgTeamLive(
       }
       if (roster.length > bestRoster.length) bestRoster = roster;
 
-      const missingTimes = schedule.filter((row) => !row.time && row.recapUrl).slice(0, 24);
+      const missingTimes = options?.fastMode ? [] : schedule.filter((row) => !row.time && row.recapUrl).slice(0, 24);
       if (missingTimes.length) {
         const withTimes: PgTeamScheduleRow[] = [];
         for (const row of missingTimes) {
@@ -724,7 +791,7 @@ export async function scrapePgTeamLive(
     }
   }
 
-  if (numericEvent && options?.teamName) {
+  if (!options?.fastMode && numericEvent && options?.teamName) {
     try {
       const eventUrl = `https://www.perfectgame.org/events/TournamentSchedule.aspx?event=${numericEvent}`;
       const firstSchedulePage = await fetchHtml(eventUrl);

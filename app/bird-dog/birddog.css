@@ -185,11 +185,21 @@
   background: var(--bd-danger);
 }
 
+.bd-root button.pulse {
+  border: 1px solid #790a0a;
+  box-shadow: 0 0 0 2px rgba(177, 15, 15, 0.18);
+}
+
 .bd-root .pulse-box {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 8px;
   align-items: center;
+}
+
+.bd-root .pulse-box .pulse {
+  min-height: 44px;
+  min-width: 132px;
 }
 
 .bd-root .player-grid {
@@ -351,6 +361,26 @@
   font-size: 0.8rem;
 }
 
+.bd-root .thumb-dock {
+  position: sticky;
+  bottom: 8px;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px solid #cdbda1;
+  border-radius: 10px;
+  background: rgba(255, 252, 245, 0.98);
+  backdrop-filter: blur(2px);
+}
+
+.bd-root .thumb-dock button {
+  min-height: 44px;
+  width: 100%;
+}
+
 @media (min-width: 920px) {
   .bd-root .grid2 {
     grid-template-columns: 1fr 1fr;
@@ -359,7 +389,7 @@
 
 @media (max-width: 700px) {
   .bd-root {
-    padding-bottom: 12px;
+    padding-bottom: 62px;
   }
 
   .bd-root .pulse-box,

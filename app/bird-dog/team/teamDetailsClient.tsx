@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Props = {
   initialParams: {
@@ -11,7 +10,6 @@ type Props = {
     teamUrl: string;
     eventId: string;
     tournamentName: string;
-    tournamentIcon: string;
     returnTab: string;
     returnInventorySlug: string;
     returnTournamentId: string;
@@ -31,7 +29,50 @@ type TeamRosterRow = {
   no: string;
   name: string;
   position: string;
+  height?: string;
+  weight?: string;
+  batsThrows?: string;
+  grad?: string;
   school: string;
+  hometown?: string;
+  rank?: string;
+  commitment?: string;
+};
+
+type GeneratedCoachStep = {
+  at: string;
+  title: string;
+  detail: string;
+  from?: string;
+  to?: string;
+  mode?: string;
+};
+
+type TravelerProfile = {
+  firstName: string;
+  lastName: string;
+  dateOfBirth: string;
+  gender: "MALE" | "FEMALE" | "UNSPECIFIED";
+  email: string;
+  phone: string;
+  countryCallingCode: string;
+  nationality: string;
+};
+
+type BookingProviderResult = {
+  provider: string;
+  status: "booked" | "quoted" | "failed" | "skipped";
+  reference?: string;
+  detail?: string;
+};
+
+type MonitorAlert = {
+  id: string;
+  kind: "pg_change" | "weather";
+  severity: "low" | "medium" | "high";
+  title: string;
+  detail: string;
+  createdAt: string;
 };
 
 type RecorderState = "idle" | "recording";
@@ -53,6 +94,8 @@ type BrowserSpeechRecognition = {
   interimResults: boolean;
   continuous: boolean;
   onresult: ((event: BrowserSpeechResultEvent) => void) | null;
+  onerror?: ((event: Event) => void) | null;
+  onend?: (() => void) | null;
   start: () => void;
   stop: () => void;
 };
@@ -62,8 +105,95 @@ type BrowserSpeechConstructor = new () => BrowserSpeechRecognition;
 type TeamNote = {
   id: string;
   transcript: string;
+  audioUrl?: string;
   createdAt: string;
 };
+
+type PlayerNote = {
+  text: string;
+  audioUrl?: string;
+  updatedAt: string;
+};
+
+type PlayerNotesMap = Record<string, PlayerNote>;
+
+type RecorderTarget = "team" | `player:${string}` | null;
+
+type SavedPaymentMethod = {
+  id: string;
+  type: string;
+  label: string;
+};
+
+type BookingPaymentMode = "card" | "upi";
+
+type PlannerCacheState = {
+  selectedPlayers: string[];
+  coachStartLocation: string;
+  generatedSteps: GeneratedCoachStep[];
+  approvedPlan: boolean;
+  includeCompletedGames: boolean;
+  bookingTestMode: boolean;
+  bookingPaymentMode: BookingPaymentMode;
+  selectedPaymentMethodId: string;
+  traveler: TravelerProfile;
+};
+
+type TeamDetailsCachePayload = {
+  schedule: TeamScheduleRow[];
+  roster: TeamRosterRow[];
+};
+
+const TEAM_DETAILS_TTL_MS = 10 * 60 * 1000;
+
+function teamDetailsCacheKey(input: Props["initialParams"]) {
+  const identity = [
+    input.inventorySlug,
+    input.teamId,
+    input.teamName,
+    input.tournamentName,
+    input.returnTournamentId,
+    input.eventId
+  ].join("|");
+  return `bird_dog:team_details:v4:${identity}`;
+}
+
+function readTeamDetailsCache(key: string): TeamDetailsCachePayload | null {
+  if (typeof window === "undefined") return null;
+  let raw = "";
+  try {
+    raw = window.sessionStorage.getItem(key) || "";
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { savedAt: number; data: TeamDetailsCachePayload };
+    if (!parsed?.data || typeof parsed.savedAt !== "number") return null;
+    if (Date.now() - parsed.savedAt > TEAM_DETAILS_TTL_MS) return null;
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeTeamDetailsCache(key: string, payload: TeamDetailsCachePayload) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), data: payload }));
+  } catch {
+    // Ignore storage write errors.
+  }
+}
+
+function parseJsonSafe<T>(raw: string | null, fallback: T): T {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
 
 function safe(value: string) {
   return String(value ?? "")
@@ -107,12 +237,12 @@ function downloadPdfLikeReport(title: string, headers: string[], rows: string[][
 }
 
 function looksLikeLocation(value: string) {
-  const v = value.toLowerCase();
+  const v = String(value || "").toLowerCase();
   return /high school|complex|park|field|stadium|baseball|academy|facility|, [a-z]{2}\b| - [a-z]{2}\b/.test(v);
 }
 
 function normalizeTeamName(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
 function pickOpponent(teamName: string, homeTeam: string, awayTeam: string) {
@@ -124,45 +254,485 @@ function pickOpponent(teamName: string, homeTeam: string, awayTeam: string) {
   return awayTeam || homeTeam || "-";
 }
 
+function rosterRowKey(row: TeamRosterRow) {
+  return `${row.no || "x"}::${String(row.name || "").toLowerCase()}`;
+}
+
+function parseScheduleDateTime(row: TeamScheduleRow, index: number) {
+  const raw = `${row.date || ""} ${row.time || ""}`.trim();
+  const date = raw ? new Date(raw) : new Date();
+  if (!Number.isNaN(date.getTime())) return date;
+  return new Date(Date.now() + index * 90 * 60 * 1000);
+}
+
+function extractLocation(value: string) {
+  const raw = String(value || "").trim();
+  if (!raw) return "Event Venue";
+  const atSplit = raw.split("@");
+  const preferred = atSplit.length > 1 ? atSplit[atSplit.length - 1] : raw;
+  return preferred.trim() || raw;
+}
+
+function extractState(value: string) {
+  const match = value.match(/,\s*([A-Z]{2})\b/);
+  return match ? match[1] : "";
+}
+
+function scheduleRowKey(row: TeamScheduleRow) {
+  const normalize = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
+  return [
+    row.gameNo || "",
+    normalize(row.date || ""),
+    normalize(row.time || ""),
+    normalize(row.field || ""),
+    normalize(row.homeTeam || ""),
+    normalize(row.awayTeam || "")
+  ].join("|");
+}
+
+function scheduleFingerprint(rows: TeamScheduleRow[]) {
+  return rows.map((row) => scheduleRowKey(row)).sort().join("~");
+}
+
+function chooseRecorderMimeType() {
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") return "";
+  const candidates = [
+    "audio/mp4;codecs=mp4a.40.2",
+    "audio/mp4",
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus"
+  ];
+  for (const type of candidates) {
+    if (MediaRecorder.isTypeSupported(type)) return type;
+  }
+  return "";
+}
+
+function isSafariBrowser() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  return /Safari/i.test(ua) && !/Chrome|Chromium|CriOS|Android/i.test(ua);
+}
+
+function encodeWav(chunks: Float32Array[], sampleRate: number) {
+  const totalSamples = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const buffer = new ArrayBuffer(44 + totalSamples * 2);
+  const view = new DataView(buffer);
+
+  const writeString = (offset: number, value: string) => {
+    for (let i = 0; i < value.length; i += 1) {
+      view.setUint8(offset + i, value.charCodeAt(i));
+    }
+  };
+
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + totalSamples * 2, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, totalSamples * 2, true);
+
+  let offset = 44;
+  for (const chunk of chunks) {
+    for (let i = 0; i < chunk.length; i += 1) {
+      const sample = Math.max(-1, Math.min(1, chunk[i]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      offset += 2;
+    }
+  }
+
+  return new Blob([view], { type: "audio/wav" });
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Unable to process recorded audio."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function toRad(n: number) {
+  return (n * Math.PI) / 180;
+}
+
+function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const r = 6371;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const x = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * r * Math.asin(Math.sqrt(x));
+}
+
+function estimateTravelNoGeo(from: string, to: string) {
+  if (from.toLowerCase() === to.toLowerCase()) return { mode: "Walk / Local Cab", minutes: 20 };
+  const fromState = extractState(from);
+  const toState = extractState(to);
+  if (fromState && toState && fromState !== toState) return { mode: "Flight + Cab", minutes: 300 };
+  if (fromState && toState && fromState === toState) return { mode: "Car / Train", minutes: 120 };
+  return { mode: "Car / Cab", minutes: 90 };
+}
+
+function prepareBookingLegsForProvider(
+  legs: Array<{ at: string; from: string; to: string; mode: string }>,
+  enableTestMode: boolean
+) {
+  const normalized = legs.map((leg) => ({
+    at: String(leg.at || ""),
+    from: String(leg.from || ""),
+    to: String(leg.to || ""),
+    mode: String(leg.mode || "")
+  }));
+  if (!enableTestMode) {
+    return { legs: normalized, shifted: false, statusNote: "" };
+  }
+
+  const parsed = normalized
+    .map((leg, idx) => ({ idx, ms: Date.parse(leg.at) }))
+    .filter((item) => Number.isFinite(item.ms));
+  if (!parsed.length) {
+    return {
+      legs: normalized,
+      shifted: false,
+      statusNote: "Booking test mode is on, but no valid date/time was found to shift."
+    };
+  }
+
+  const earliestMs = Math.min(...parsed.map((item) => item.ms));
+  const now = Date.now();
+  const minimumFutureMs = now + 2 * 60 * 60 * 1000;
+  if (earliestMs >= minimumFutureMs) {
+    return {
+      legs: normalized,
+      shifted: false,
+      statusNote: "Booking test mode is on, but itinerary is already in future dates."
+    };
+  }
+
+  const targetStartMs = now + 2 * 24 * 60 * 60 * 1000;
+  const shiftMs = targetStartMs - earliestMs;
+  const shifted = normalized.map((leg) => {
+    const ms = Date.parse(leg.at);
+    if (!Number.isFinite(ms)) return leg;
+    return { ...leg, at: new Date(ms + shiftMs).toISOString() };
+  });
+
+  return {
+    legs: shifted,
+    shifted: true,
+    statusNote: `Booking test mode: shifted provider booking dates from ${new Date(earliestMs).toLocaleString()} to ${new Date(targetStartMs).toLocaleString()}.`
+  };
+}
+
 export default function TeamDetailsClient({ initialParams }: Props) {
-  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [scheduleRows, setScheduleRows] = useState<TeamScheduleRow[]>([]);
   const [rosterRows, setRosterRows] = useState<TeamRosterRow[]>([]);
   const [scheduleSearch, setScheduleSearch] = useState("");
   const [rosterSearch, setRosterSearch] = useState("");
-  const [speechSupported, setSpeechSupported] = useState(false);
   const [recorderState, setRecorderState] = useState<RecorderState>("idle");
+  const [recordingTarget, setRecordingTarget] = useState<RecorderTarget>(null);
   const [transcript, setTranscript] = useState("");
+  const [teamAudioDraftUrl, setTeamAudioDraftUrl] = useState("");
   const [teamNotes, setTeamNotes] = useState<TeamNote[]>([]);
+  const [playerNotes, setPlayerNotes] = useState<PlayerNotesMap>({});
+  const [notesStatus, setNotesStatus] = useState("");
+  const [selectedPlayers, setSelectedPlayers] = useState<string[]>([]);
+  const [coachStartLocation, setCoachStartLocation] = useState("Current City");
+  const [includeCompletedGames, setIncludeCompletedGames] = useState(
+    process.env.NEXT_PUBLIC_BIRD_DOG_ALLOW_PAST_GAMES === "1"
+  );
+  const [bookingTestMode, setBookingTestMode] = useState(
+    process.env.NEXT_PUBLIC_BIRD_DOG_BOOKING_TEST_MODE !== "0"
+  );
+  const [paymentMethods, setPaymentMethods] = useState<SavedPaymentMethod[]>([]);
+  const [bookingPaymentMode, setBookingPaymentMode] = useState<BookingPaymentMode>("card");
+  const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState("");
+  const [paymentMethodsLoading, setPaymentMethodsLoading] = useState(false);
+  const [paymentMethodSetupLoading, setPaymentMethodSetupLoading] = useState(false);
+  const [upiCheckoutLoading, setUpiCheckoutLoading] = useState(false);
+  const [upiAuthorized, setUpiAuthorized] = useState(false);
+  const bookingPaymentRequired = process.env.NEXT_PUBLIC_BIRD_DOG_REQUIRE_BOOKING_PAYMENT !== "0";
+  const [plannerLoading, setPlannerLoading] = useState(false);
+  const [plannerStatus, setPlannerStatus] = useState("");
+  const [generatedSteps, setGeneratedSteps] = useState<GeneratedCoachStep[]>([]);
+  const [approvedPlan, setApprovedPlan] = useState(false);
+  const [bookingLoading, setBookingLoading] = useState(false);
+  const [bookingStatus, setBookingStatus] = useState("");
+  const [bookingResults, setBookingResults] = useState<BookingProviderResult[]>([]);
+  const [monitoring, setMonitoring] = useState(false);
+  const [monitorAlerts, setMonitorAlerts] = useState<MonitorAlert[]>([]);
+  const [lastPgSyncAt, setLastPgSyncAt] = useState("");
+  const [traveler, setTraveler] = useState<TravelerProfile>({
+    firstName: "",
+    lastName: "",
+    dateOfBirth: "",
+    gender: "UNSPECIFIED",
+    email: "",
+    phone: "",
+    countryCallingCode: "1",
+    nationality: "US"
+  });
+  const geocodeCacheRef = useRef<Map<string, { lat: number; lng: number } | null>>(new Map());
+  const scheduleRowsRef = useRef<TeamScheduleRow[]>([]);
+  const rosterRowsRef = useRef<TeamRosterRow[]>([]);
+  const scheduleFingerprintRef = useRef("");
+  const weatherAlertHashRef = useRef("");
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const mediaChunksRef = useRef<Blob[]>([]);
+  const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const fallbackAudioContextRef = useRef<AudioContext | null>(null);
+  const fallbackSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const fallbackProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const fallbackPcmChunksRef = useRef<Float32Array[]>([]);
+  const fallbackSampleRateRef = useRef(44100);
+  const fallbackTargetRef = useRef<NonNullable<RecorderTarget> | null>(null);
+  const transcriptRef = useRef("");
+  const autoSaveTeamNoteRef = useRef(false);
+  const plannerCacheLoadedRef = useRef(false);
+
+  const teamRequestPayload = useMemo(() => ({
+    inventorySlug: initialParams.inventorySlug,
+    teamId: initialParams.teamId,
+    teamUrl: initialParams.teamUrl,
+    teamName: initialParams.teamName,
+    eventId: initialParams.eventId,
+    tournamentId: initialParams.returnTournamentId
+  }), [
+    initialParams.eventId,
+    initialParams.inventorySlug,
+    initialParams.returnTournamentId,
+    initialParams.teamId,
+    initialParams.teamName,
+    initialParams.teamUrl
+  ]);
+
+  const plannerCacheKey = useMemo(
+    () => `bd-team-planner-v2:${initialParams.inventorySlug}:${initialParams.teamId}`,
+    [initialParams.inventorySlug, initialParams.teamId]
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const param = new URLSearchParams(window.location.search).get("allowPast");
+    if (param === "1") setIncludeCompletedGames(true);
+    if (param === "0") setIncludeCompletedGames(false);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || plannerCacheLoadedRef.current) return;
+    plannerCacheLoadedRef.current = true;
+
+    try {
+      const raw = window.sessionStorage.getItem(plannerCacheKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<PlannerCacheState>;
+        if (Array.isArray(parsed.selectedPlayers)) setSelectedPlayers(parsed.selectedPlayers.filter(Boolean));
+        if (typeof parsed.coachStartLocation === "string" && parsed.coachStartLocation.trim()) {
+          setCoachStartLocation(parsed.coachStartLocation);
+        }
+        if (Array.isArray(parsed.generatedSteps)) {
+          const steps = parsed.generatedSteps
+            .map((item) => ({
+              at: String(item?.at || ""),
+              title: String(item?.title || ""),
+              detail: String(item?.detail || ""),
+              from: item?.from ? String(item.from) : undefined,
+              to: item?.to ? String(item.to) : undefined,
+              mode: item?.mode ? String(item.mode) : undefined
+            }))
+            .filter((item) => item.at && item.title);
+          setGeneratedSteps(steps);
+        }
+        if (typeof parsed.approvedPlan === "boolean") setApprovedPlan(parsed.approvedPlan);
+        if (typeof parsed.includeCompletedGames === "boolean") setIncludeCompletedGames(parsed.includeCompletedGames);
+        if (typeof parsed.bookingTestMode === "boolean") setBookingTestMode(parsed.bookingTestMode);
+        if (parsed.bookingPaymentMode === "card" || parsed.bookingPaymentMode === "upi") {
+          setBookingPaymentMode(parsed.bookingPaymentMode);
+        }
+        if (typeof parsed.selectedPaymentMethodId === "string") setSelectedPaymentMethodId(parsed.selectedPaymentMethodId);
+        if (parsed.traveler && typeof parsed.traveler === "object") {
+          setTraveler((prev) => ({
+            ...prev,
+            firstName: String(parsed.traveler?.firstName || prev.firstName),
+            lastName: String(parsed.traveler?.lastName || prev.lastName),
+            dateOfBirth: String(parsed.traveler?.dateOfBirth || prev.dateOfBirth),
+            gender: (String(parsed.traveler?.gender || prev.gender).toUpperCase() as TravelerProfile["gender"]),
+            email: String(parsed.traveler?.email || prev.email),
+            phone: String(parsed.traveler?.phone || prev.phone),
+            countryCallingCode: String(parsed.traveler?.countryCallingCode || prev.countryCallingCode),
+            nationality: String(parsed.traveler?.nationality || prev.nationality)
+          }));
+        }
+      }
+    } catch {
+      // Ignore corrupted planner cache.
+    }
+  }, [plannerCacheKey]);
+
+  async function loadPaymentMethods(input?: { showStatus?: boolean }) {
+    setPaymentMethodsLoading(true);
+    try {
+      const res = await fetch("/api/payments/methods", {
+        method: "GET",
+        cache: "no-store"
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (input?.showStatus) {
+          setBookingStatus(body?.error || `Could not load saved payment methods (${res.status}).`);
+        }
+        return;
+      }
+      const list = Array.isArray(body?.methods) ? body.methods as Array<Record<string, unknown>> : [];
+      const normalized: SavedPaymentMethod[] = list
+        .map((item) => ({
+          id: String(item?.id || ""),
+          type: String(item?.type || ""),
+          label: String(item?.label || "")
+        }))
+        .filter((item) => item.id);
+      setPaymentMethods(normalized);
+
+      const nextDefault = String(body?.defaultPaymentMethodId || "");
+      setSelectedPaymentMethodId((prev) => {
+        if (prev && normalized.some((item) => item.id === prev)) return prev;
+        if (nextDefault && normalized.some((item) => item.id === nextDefault)) return nextDefault;
+        return normalized[0]?.id || "";
+      });
+    } finally {
+      setPaymentMethodsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const pmSetup = params.get("pmSetup");
+    const travelPayment = params.get("travelPayment");
+    if (pmSetup === "success") {
+      setBookingStatus("Payment method saved. Select it below and click Book Approved Travel.");
+    } else if (pmSetup === "cancelled") {
+      setBookingStatus("Payment method setup cancelled.");
+    }
+    if (travelPayment === "success") {
+      setUpiAuthorized(true);
+      setBookingStatus("UPI authorization completed. You can now click Book Approved Travel.");
+    } else if (travelPayment === "cancelled") {
+      setUpiAuthorized(false);
+      setBookingStatus("UPI authorization cancelled.");
+    }
+    if (pmSetup || travelPayment) {
+      params.delete("pmSetup");
+      params.delete("travelPayment");
+      const nextQuery = params.toString();
+      const clean = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
+      window.history.replaceState(null, "", clean);
+    }
+    void loadPaymentMethods({ showStatus: Boolean(pmSetup) });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !plannerCacheLoadedRef.current) return;
+    const payload: PlannerCacheState = {
+      selectedPlayers,
+      coachStartLocation,
+      generatedSteps,
+      approvedPlan,
+      includeCompletedGames,
+      bookingTestMode,
+      bookingPaymentMode,
+      selectedPaymentMethodId,
+      traveler
+    };
+    try {
+      window.sessionStorage.setItem(plannerCacheKey, JSON.stringify(payload));
+    } catch {
+      // Ignore session storage quota errors.
+    }
+  }, [
+    approvedPlan,
+    bookingTestMode,
+    bookingPaymentMode,
+    coachStartLocation,
+    generatedSteps,
+    includeCompletedGames,
+    plannerCacheKey,
+    selectedPaymentMethodId,
+    selectedPlayers,
+    traveler
+  ]);
+
+  function pushMonitorAlert(alert: Omit<MonitorAlert, "createdAt">) {
+    const nextAlert: MonitorAlert = { ...alert, createdAt: new Date().toISOString() };
+    setMonitorAlerts((prev) => [nextAlert, ...prev].slice(0, 20));
+
+    if (typeof window !== "undefined" && "Notification" in window) {
+      try {
+        if (Notification.permission === "granted") {
+          new Notification(alert.title, { body: alert.detail });
+        } else if (Notification.permission === "default") {
+          void Notification.requestPermission();
+        }
+      } catch {
+        // Ignore browser notification errors.
+      }
+    }
+  }
+
+  async function fetchTeamDetailsRemote() {
+    const res = await fetch("/api/harvest/team", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(teamRequestPayload)
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body?.error || `Failed (${res.status})`);
+    }
+    const data = await res.json();
+    const schedule = Array.isArray(data?.schedule) ? data.schedule as TeamScheduleRow[] : [];
+    const roster = Array.isArray(data?.roster) ? data.roster as TeamRosterRow[] : [];
+    return { schedule, roster };
+  }
 
   useEffect(() => {
     let mounted = true;
     async function load() {
+      const cacheKey = teamDetailsCacheKey(initialParams);
+      const cached = readTeamDetailsCache(cacheKey);
+      if (cached) {
+        setScheduleRows(cached.schedule);
+        setRosterRows(cached.roster);
+        setLoading(false);
+        return;
+      }
+
       setLoading(true);
       setError("");
       try {
-        const res = await fetch("/api/harvest/team", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            inventorySlug: initialParams.inventorySlug,
-            teamId: initialParams.teamId,
-            teamUrl: initialParams.teamUrl,
-            teamName: initialParams.teamName,
-            eventId: initialParams.eventId,
-            tournamentId: initialParams.returnTournamentId
-          })
-        });
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body?.error || `Failed (${res.status})`);
-        }
-        const data = await res.json();
+        const data = await fetchTeamDetailsRemote();
         if (!mounted) return;
-        setScheduleRows(Array.isArray(data?.schedule) ? data.schedule : []);
-        setRosterRows(Array.isArray(data?.roster) ? data.roster : []);
+        const schedule = data.schedule;
+        const roster = data.roster;
+        setScheduleRows(schedule);
+        setRosterRows(roster);
+        scheduleFingerprintRef.current = scheduleFingerprint(schedule);
+        if (schedule.length || roster.length) {
+          writeTeamDetailsCache(cacheKey, { schedule, roster });
+        }
       } catch (fetchError) {
         if (!mounted) return;
         setError(String(fetchError));
@@ -174,87 +744,1013 @@ export default function TeamDetailsClient({ initialParams }: Props) {
     return () => {
       mounted = false;
     };
-  }, [initialParams.eventId, initialParams.inventorySlug, initialParams.teamId, initialParams.teamName, initialParams.teamUrl]);
-
-  const backHref = useMemo(() => {
-    const params = new URLSearchParams();
-    params.set("tab", initialParams.returnTab || "notes");
-    if (initialParams.returnInventorySlug) params.set("inventorySlug", initialParams.returnInventorySlug);
-    if (initialParams.returnTournamentId) params.set("tournamentId", initialParams.returnTournamentId);
-    return `/bird-dog?${params.toString()}`;
-  }, [initialParams.returnInventorySlug, initialParams.returnTab, initialParams.returnTournamentId]);
+  }, [
+    initialParams.eventId,
+    initialParams.inventorySlug,
+    initialParams.returnTournamentId,
+    initialParams.teamId,
+    initialParams.teamName,
+    initialParams.teamUrl,
+    initialParams.tournamentName,
+    teamRequestPayload
+  ]);
 
   function goBackOneStep() {
-    if (window.history.length > 1) {
-      router.back();
-      return;
-    }
-    router.push(backHref);
+    const qs = new URLSearchParams(window.location.search);
+    const nextTab = "tournaments";
+    const nextInventory = initialParams.returnInventorySlug || initialParams.inventorySlug || qs.get("inventorySlug") || "";
+    const nextTournament = initialParams.returnTournamentId || qs.get("returnTournamentId") || qs.get("tournamentId") || "";
+    const nextParams = new URLSearchParams();
+    nextParams.set("tab", nextTab);
+    if (nextInventory) nextParams.set("inventorySlug", nextInventory);
+    if (nextTournament) nextParams.set("tournamentId", nextTournament);
+    const target = `/bird-dog?${nextParams.toString()}`;
+    window.location.assign(target);
   }
 
   const notesStorageKey = useMemo(
     () => `bird_dog:team_notes:${(initialParams.teamId || initialParams.teamName).toLowerCase()}`,
     [initialParams.teamId, initialParams.teamName]
   );
+  const playerNotesStorageKey = useMemo(
+    () => `bird_dog:player_notes:${(initialParams.teamId || initialParams.teamName).toLowerCase()}`,
+    [initialParams.teamId, initialParams.teamName]
+  );
+
+  useEffect(() => {
+    setSelectedPlayers((prev) => {
+      const valid = new Set(rosterRows.map((row) => rosterRowKey(row)));
+      return prev.filter((key) => valid.has(key));
+    });
+  }, [rosterRows]);
+
+  useEffect(() => {
+    scheduleRowsRef.current = scheduleRows;
+  }, [scheduleRows]);
+
+  useEffect(() => {
+    rosterRowsRef.current = rosterRows;
+  }, [rosterRows]);
+
+  useEffect(() => {
+    transcriptRef.current = transcript;
+  }, [transcript]);
 
   useEffect(() => {
     const ctor = (window as unknown as { SpeechRecognition?: BrowserSpeechConstructor; webkitSpeechRecognition?: BrowserSpeechConstructor }).SpeechRecognition
       || (window as unknown as { webkitSpeechRecognition?: BrowserSpeechConstructor }).webkitSpeechRecognition;
-    setSpeechSupported(Boolean(ctor));
+    if (!ctor) {
+      setNotesStatus("Speech-to-text is unavailable in this browser. Audio recording still works.");
+    }
   }, []);
 
   useEffect(() => {
-    const raw = window.localStorage.getItem(notesStorageKey);
+    let raw = "";
+    try {
+      raw = window.localStorage.getItem(notesStorageKey) || "";
+    } catch {
+      return;
+    }
     if (!raw) return;
-    const parsed = JSON.parse(raw) as TeamNote[];
-    setTeamNotes(Array.isArray(parsed) ? parsed : []);
+    const parsed = parseJsonSafe<TeamNote[]>(raw, []);
+    const sanitized = Array.isArray(parsed)
+      ? parsed
+        .map((item) => ({
+          ...item,
+          audioUrl: String(item?.audioUrl || "").startsWith("blob:") ? "" : item?.audioUrl
+        }))
+      : [];
+    setTeamNotes(sanitized);
   }, [notesStorageKey]);
 
-  function persistNotes(next: TeamNote[]) {
-    setTeamNotes(next);
-    window.localStorage.setItem(notesStorageKey, JSON.stringify(next));
+  useEffect(() => {
+    let raw = "";
+    try {
+      raw = window.localStorage.getItem(playerNotesStorageKey) || "";
+    } catch {
+      return;
+    }
+    if (!raw) return;
+    const parsed = parseJsonSafe<PlayerNotesMap>(raw, {});
+    const sanitized = parsed && typeof parsed === "object"
+      ? Object.fromEntries(
+        Object.entries(parsed).map(([key, value]) => [
+          key,
+          {
+            text: value?.text || "",
+            audioUrl: String(value?.audioUrl || "").startsWith("blob:") ? "" : value?.audioUrl,
+            updatedAt: value?.updatedAt || new Date(0).toISOString()
+          }
+        ])
+      )
+      : {};
+    setPlayerNotes(sanitized);
+  }, [playerNotesStorageKey]);
+
+  useEffect(() => () => {
+    speechRecognitionRef.current?.stop();
+    speechRecognitionRef.current = null;
+    mediaRecorderRef.current?.stop();
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+    }
+    fallbackProcessorRef.current?.disconnect();
+    fallbackSourceRef.current?.disconnect();
+    fallbackAudioContextRef.current?.close().catch(() => undefined);
+    fallbackProcessorRef.current = null;
+    fallbackSourceRef.current = null;
+    fallbackAudioContextRef.current = null;
+    fallbackPcmChunksRef.current = [];
+    fallbackTargetRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    if (!initialParams.teamName) return;
+    const intervalSeconds = Number.parseInt(process.env.NEXT_PUBLIC_BIRD_DOG_MONITOR_INTERVAL_SECONDS || "180", 10);
+    const ms = Math.max(60000, (Number.isFinite(intervalSeconds) ? intervalSeconds : 180) * 1000);
+    void runLiveMonitorSync();
+    const id = window.setInterval(() => {
+      void runLiveMonitorSync();
+    }, ms);
+    return () => window.clearInterval(id);
+  }, [initialParams.teamName, initialParams.teamId, initialParams.returnTournamentId]);
+
+  function appendTeamNote(noteText: string, audioUrl?: string) {
+    setTeamNotes((prev) => {
+      const next: TeamNote[] = [
+        {
+          id: `team-note-${Date.now()}`,
+          transcript: noteText || "Audio note",
+          audioUrl: audioUrl || undefined,
+          createdAt: new Date().toISOString()
+        },
+        ...prev
+      ];
+      try {
+        window.localStorage.setItem(notesStorageKey, JSON.stringify(next));
+      } catch {
+        // Ignore storage write errors.
+      }
+      return next;
+    });
   }
 
-  function startMic() {
+  function updatePlayerNoteText(playerKey: string, text: string) {
+    setPlayerNotes((prev) => {
+      const next = {
+        ...prev,
+        [playerKey]: {
+          text,
+          audioUrl: prev[playerKey]?.audioUrl || "",
+          updatedAt: new Date().toISOString()
+        }
+      };
+      try {
+        window.localStorage.setItem(playerNotesStorageKey, JSON.stringify(next));
+      } catch {
+        // Ignore storage write errors.
+      }
+      return next;
+    });
+  }
+
+  function savePlayerAudio(playerKey: string, audioUrl: string) {
+    setPlayerNotes((prev) => {
+      const next = {
+        ...prev,
+        [playerKey]: {
+          text: prev[playerKey]?.text || "",
+          audioUrl,
+          updatedAt: new Date().toISOString()
+        }
+      };
+      try {
+        window.localStorage.setItem(playerNotesStorageKey, JSON.stringify(next));
+      } catch {
+        // Ignore storage write errors.
+      }
+      return next;
+    });
+  }
+
+  function startSpeechCapture(target: NonNullable<RecorderTarget>) {
     const ctor = (window as unknown as { SpeechRecognition?: BrowserSpeechConstructor; webkitSpeechRecognition?: BrowserSpeechConstructor }).SpeechRecognition
       || (window as unknown as { webkitSpeechRecognition?: BrowserSpeechConstructor }).webkitSpeechRecognition;
-    if (!ctor) return;
-    const recognition = new ctor();
-    recognition.lang = "en-US";
-    recognition.interimResults = true;
-    recognition.continuous = true;
-    recognition.onresult = (event) => {
-      let text = "";
-      for (let i = 0; i < event.results.length; i += 1) {
-        const result = event.results[i]?.[0]?.transcript || "";
-        if (result) text += `${result} `;
+    if (!ctor) return false;
+    try {
+      const recognition = new ctor();
+      recognition.lang = "en-US";
+      recognition.interimResults = true;
+      recognition.continuous = true;
+      recognition.onresult = (event) => {
+        let text = "";
+        for (let i = 0; i < event.results.length; i += 1) {
+          const fragment = event.results[i]?.[0]?.transcript || "";
+          if (fragment) text += `${fragment} `;
+        }
+        const nextText = text.trim();
+        if (!nextText) return;
+        if (target === "team") {
+          setTranscript(nextText);
+          return;
+        }
+        if (target.startsWith("player:")) {
+          updatePlayerNoteText(target.slice("player:".length), nextText);
+        }
+      };
+      recognition.onerror = () => {
+        setNotesStatus("Audio recording will continue, but speech-to-text is unavailable in this browser.");
+      };
+      recognition.onend = () => {
+        if (speechRecognitionRef.current === recognition) {
+          speechRecognitionRef.current = null;
+        }
+      };
+      recognition.start();
+      speechRecognitionRef.current = recognition;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function stopSpeechCapture() {
+    speechRecognitionRef.current?.stop();
+    speechRecognitionRef.current = null;
+  }
+
+  async function startPcmFallbackCapture(stream: MediaStream, target: NonNullable<RecorderTarget>) {
+    const AudioContextCtor = (window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext }).AudioContext
+      || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) return false;
+    try {
+      const audioContext = new AudioContextCtor();
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      fallbackPcmChunksRef.current = [];
+      fallbackSampleRateRef.current = audioContext.sampleRate;
+      fallbackTargetRef.current = target;
+      processor.onaudioprocess = (event) => {
+        const channel = event.inputBuffer.getChannelData(0);
+        fallbackPcmChunksRef.current.push(new Float32Array(channel));
+      };
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
       }
-      setTranscript(text.trim());
-    };
-    recognition.start();
-    (window as unknown as { __bdTeamRecognition?: BrowserSpeechRecognition }).__bdTeamRecognition = recognition;
-    setRecorderState("recording");
+      fallbackAudioContextRef.current = audioContext;
+      fallbackSourceRef.current = source;
+      fallbackProcessorRef.current = processor;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function startAudioCapture(target: NonNullable<RecorderTarget>) {
+    if (typeof window.navigator?.mediaDevices?.getUserMedia !== "function") {
+      setNotesStatus("Audio recording is not supported in this browser.");
+      return;
+    }
+    if (recorderState === "recording") {
+      setNotesStatus("Stop the current recording before starting a new one.");
+      return;
+    }
+    try {
+      const stream = await window.navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      if (isSafariBrowser() && await startPcmFallbackCapture(stream, target)) {
+        void startSpeechCapture(target);
+        setRecorderState("recording");
+        setRecordingTarget(target);
+        setNotesStatus("Recording...");
+        return;
+      }
+      if (typeof MediaRecorder === "undefined") {
+        if (await startPcmFallbackCapture(stream, target)) {
+          void startSpeechCapture(target);
+          setRecorderState("recording");
+          setRecordingTarget(target);
+          setNotesStatus("Recording...");
+          return;
+        }
+        stream.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+        setNotesStatus("Audio recording is not supported in this browser.");
+        return;
+      }
+      const mimeType = chooseRecorderMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 128000 })
+        : new MediaRecorder(stream);
+      mediaChunksRef.current = [];
+      recorder.onerror = () => {
+        setNotesStatus("Recording failed. Please retry and check microphone permissions.");
+      };
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) mediaChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        if (!mediaChunksRef.current.length) {
+          stream.getTracks().forEach((track) => track.stop());
+          mediaRecorderRef.current = null;
+          mediaStreamRef.current = null;
+          setRecorderState("idle");
+          setRecordingTarget(null);
+          setNotesStatus("No audio captured. Check mic access/input source and try again.");
+          return;
+        }
+        const blob = new Blob(mediaChunksRef.current, { type: mimeType || recorder.mimeType || "audio/webm" });
+        if (blob.size < 1024) {
+          stream.getTracks().forEach((track) => track.stop());
+          mediaRecorderRef.current = null;
+          mediaStreamRef.current = null;
+          setRecorderState("idle");
+          setRecordingTarget(null);
+          setNotesStatus("Recording was too short or silent. Please try again.");
+          return;
+        }
+        stream.getTracks().forEach((track) => track.stop());
+        mediaRecorderRef.current = null;
+        mediaStreamRef.current = null;
+        setRecorderState("idle");
+        setRecordingTarget(null);
+        void blobToDataUrl(blob)
+          .then((dataUrl) => {
+            if (!dataUrl) {
+              setNotesStatus("Unable to save recording. Please retry.");
+              return;
+            }
+            if (target === "team") {
+              if (autoSaveTeamNoteRef.current) {
+                const spoken = transcriptRef.current.trim();
+                appendTeamNote(spoken || "Audio note", dataUrl);
+                setTranscript("");
+                setTeamAudioDraftUrl("");
+                autoSaveTeamNoteRef.current = false;
+                setNotesStatus("Note saved.");
+                return;
+              }
+              setTeamAudioDraftUrl(dataUrl);
+              setNotesStatus("Audio captured. Click Save Note.");
+              return;
+            } else if (target.startsWith("player:")) {
+              savePlayerAudio(target.slice("player:".length), dataUrl);
+            }
+            setNotesStatus("Audio captured.");
+          })
+          .catch(() => {
+            setNotesStatus("Unable to process recorded audio. Please retry.");
+          });
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start(500);
+      void startSpeechCapture(target);
+      setRecorderState("recording");
+      setRecordingTarget(target);
+      setNotesStatus("Recording...");
+    } catch {
+      setNotesStatus("Microphone permission is blocked. Allow mic access and retry.");
+    }
+  }
+
+  function stopAudioCapture() {
+    stopSpeechCapture();
+    if (fallbackProcessorRef.current) {
+      const target = fallbackTargetRef.current;
+      const chunks = [...fallbackPcmChunksRef.current];
+      const sampleRate = fallbackSampleRateRef.current || 44100;
+      fallbackProcessorRef.current.disconnect();
+      fallbackSourceRef.current?.disconnect();
+      fallbackAudioContextRef.current?.close().catch(() => undefined);
+      fallbackProcessorRef.current = null;
+      fallbackSourceRef.current = null;
+      fallbackAudioContextRef.current = null;
+      fallbackPcmChunksRef.current = [];
+      fallbackTargetRef.current = null;
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      }
+      mediaStreamRef.current = null;
+      setRecorderState("idle");
+      setRecordingTarget(null);
+      if (!target || !chunks.length) {
+        setNotesStatus("No audio captured. Check mic and retry.");
+        return;
+      }
+      const wavBlob = encodeWav(chunks, sampleRate);
+      if (wavBlob.size < 1024) {
+        setNotesStatus("Recording was too short or silent. Please try again.");
+        return;
+      }
+      void blobToDataUrl(wavBlob)
+        .then((dataUrl) => {
+          if (!dataUrl) {
+            setNotesStatus("Unable to save recording. Please retry.");
+            return;
+          }
+          if (target === "team") {
+            if (autoSaveTeamNoteRef.current) {
+              const spoken = transcriptRef.current.trim();
+              appendTeamNote(spoken || "Audio note", dataUrl);
+              setTranscript("");
+              setTeamAudioDraftUrl("");
+              autoSaveTeamNoteRef.current = false;
+              setNotesStatus("Note saved.");
+              return;
+            }
+            setTeamAudioDraftUrl(dataUrl);
+            setNotesStatus("Audio captured. Click Save Note.");
+            return;
+          }
+          if (target.startsWith("player:")) {
+            savePlayerAudio(target.slice("player:".length), dataUrl);
+          }
+          setNotesStatus("Audio captured.");
+        })
+        .catch(() => {
+          setNotesStatus("Unable to process recorded audio. Please retry.");
+        });
+      return;
+    }
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+      return;
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+    }
+    mediaRecorderRef.current = null;
+    mediaStreamRef.current = null;
+    setRecorderState("idle");
+    setRecordingTarget(null);
+  }
+
+  async function startMic() {
+    if (recorderState === "recording" && recordingTarget !== "team") {
+      setNotesStatus("A player note recording is active. Stop it first.");
+      return;
+    }
+    if (recorderState === "recording" && recordingTarget === "team") {
+      return;
+    }
+    autoSaveTeamNoteRef.current = false;
+    await startAudioCapture("team");
   }
 
   function stopMic() {
-    const holder = window as unknown as { __bdTeamRecognition?: BrowserSpeechRecognition };
-    holder.__bdTeamRecognition?.stop();
-    holder.__bdTeamRecognition = undefined;
+    stopSpeechCapture();
+    if ((mediaRecorderRef.current || fallbackProcessorRef.current) && recordingTarget === "team") {
+      autoSaveTeamNoteRef.current = true;
+      stopAudioCapture();
+      return;
+    }
+    autoSaveTeamNoteRef.current = false;
     setRecorderState("idle");
+    setRecordingTarget(null);
   }
 
   function saveTeamNote() {
-    if (!transcript.trim()) return;
-    const next: TeamNote[] = [
-      {
-        id: `team-note-${Date.now()}`,
-        transcript: transcript.trim(),
-        createdAt: new Date().toISOString()
-      },
-      ...teamNotes
-    ];
-    persistNotes(next);
+    const cleanTranscript = transcript.trim();
+    if (!cleanTranscript && !teamAudioDraftUrl) return;
+    appendTeamNote(cleanTranscript || "Audio note", teamAudioDraftUrl || undefined);
     setTranscript("");
+    setTeamAudioDraftUrl("");
+    setNotesStatus("Note saved.");
+  }
+
+  function togglePlayerAudio(row: TeamRosterRow) {
+    const playerKey = rosterRowKey(row);
+    const playerTarget: RecorderTarget = `player:${playerKey}`;
+    if (recorderState === "recording" && recordingTarget === playerTarget) {
+      autoSaveTeamNoteRef.current = false;
+      stopAudioCapture();
+      return;
+    }
+    if (recorderState === "recording") {
+      setNotesStatus("Stop the current recording before recording this player note.");
+      return;
+    }
+    autoSaveTeamNoteRef.current = false;
+    void startAudioCapture(playerTarget);
+  }
+
+  function toggleBestPlayer(row: TeamRosterRow) {
+    const key = rosterRowKey(row);
+    setSelectedPlayers((prev) => (prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key]));
+  }
+
+  function hasTravelerForBooking(profile: TravelerProfile) {
+    return Boolean(
+      profile.firstName.trim()
+      && profile.lastName.trim()
+      && profile.dateOfBirth.trim()
+      && profile.email.trim()
+      && profile.phone.trim()
+      && profile.countryCallingCode.trim()
+      && profile.nationality.trim()
+    );
+  }
+
+  async function geocodeLocation(address: string) {
+    const key = address.trim().toLowerCase();
+    if (!key) return null;
+    if (geocodeCacheRef.current.has(key)) {
+      return geocodeCacheRef.current.get(key) || null;
+    }
+
+    try {
+      const res = await fetch(`/api/maps/geocode?address=${encodeURIComponent(address)}`);
+      const data = await res.json().catch(() => ({ location: null }));
+      const location = data?.location && typeof data.location.lat === "number" && typeof data.location.lng === "number"
+        ? { lat: data.location.lat, lng: data.location.lng }
+        : null;
+      geocodeCacheRef.current.set(key, location);
+      return location;
+    } catch {
+      geocodeCacheRef.current.set(key, null);
+      return null;
+    }
+  }
+
+  async function recommendTravel(from: string, to: string) {
+    const fromGeo = await geocodeLocation(from);
+    const toGeo = await geocodeLocation(to);
+    if (!fromGeo || !toGeo) return estimateTravelNoGeo(from, to);
+
+    const km = haversineKm(fromGeo, toGeo);
+    if (km > 550) return { mode: "Flight + Cab", minutes: Math.round((km / 760) * 60 + 180) };
+    if (km > 180) return { mode: "Train / Bus + Cab", minutes: Math.round((km / 95) * 60 + 35) };
+    if (km > 30) return { mode: "Cab / Car", minutes: Math.round((km / 45) * 60 + 12) };
+    return { mode: "Metro / Walk", minutes: Math.round((km / 22) * 60 + 8) };
+  }
+
+  async function checkWeatherRisks(nextSchedule: TeamScheduleRow[]) {
+    const now = Date.now();
+    const items = nextSchedule
+      .map((row, idx) => ({
+        id: `${row.gameNo || idx + 1}`,
+        location: row.field || "",
+        at: parseScheduleDateTime(row, idx).toISOString()
+      }))
+      .filter((row) => row.location && new Date(row.at).getTime() >= now)
+      .slice(0, 20);
+    if (!items.length) return;
+
+    const res = await fetch("/api/weather/risks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items })
+    });
+    if (!res.ok) return;
+    const body = await res.json().catch(() => ({}));
+    const alerts = Array.isArray(body?.alerts) ? body.alerts : [];
+    const hash = alerts.map((a: { title?: string; detail?: string }) => `${a.title || ""}|${a.detail || ""}`).join("~");
+    if (!hash || hash === weatherAlertHashRef.current) return;
+    weatherAlertHashRef.current = hash;
+
+    for (const alert of alerts.slice(0, 5)) {
+      pushMonitorAlert({
+        id: `wx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        kind: "weather",
+        severity: (alert?.severity || "medium") as "low" | "medium" | "high",
+        title: String(alert?.title || "Weather watch"),
+        detail: String(alert?.detail || "Weather risk detected for an upcoming game.")
+      });
+    }
+  }
+
+  function compareAndAlertScheduleChanges(previousRows: TeamScheduleRow[], nextRows: TeamScheduleRow[]) {
+    const prevByGame = new Map(previousRows.map((row) => [row.gameNo || scheduleRowKey(row), row]));
+    const nextByGame = new Map(nextRows.map((row) => [row.gameNo || scheduleRowKey(row), row]));
+    const removed: TeamScheduleRow[] = [];
+    const changed: Array<{ before: TeamScheduleRow; after: TeamScheduleRow }> = [];
+
+    for (const [id, before] of prevByGame.entries()) {
+      const after = nextByGame.get(id);
+      if (!after) {
+        removed.push(before);
+        continue;
+      }
+      if (
+        before.date !== after.date
+        || before.time !== after.time
+        || before.field !== after.field
+        || before.homeTeam !== after.homeTeam
+        || before.awayTeam !== after.awayTeam
+      ) {
+        changed.push({ before, after });
+      }
+    }
+
+    if (removed.length) {
+      pushMonitorAlert({
+        id: `pg-remove-${Date.now()}`,
+        kind: "pg_change",
+        severity: "high",
+        title: "PG schedule change detected",
+        detail: `${removed.length} game(s) disappeared from Perfect Game. Likely cancellation/reschedule. Approve regenerate to modify your coach travel plan.`
+      });
+    }
+    if (changed.length) {
+      pushMonitorAlert({
+        id: `pg-change-${Date.now()}`,
+        kind: "pg_change",
+        severity: "medium",
+        title: "PG game timing/location updated",
+        detail: `${changed.length} game(s) changed date/time/field. Approve regenerate to keep bookings aligned.`
+      });
+    }
+  }
+
+  async function runLiveMonitorSync() {
+    setMonitoring(true);
+    try {
+      const data = await fetchTeamDetailsRemote();
+      const previous = scheduleRowsRef.current;
+      const nextFingerprint = scheduleFingerprint(data.schedule);
+      const hasChange = nextFingerprint !== scheduleFingerprintRef.current;
+      if (hasChange) {
+        compareAndAlertScheduleChanges(previous, data.schedule);
+        setScheduleRows(data.schedule);
+        setRosterRows(data.roster.length ? data.roster : rosterRowsRef.current);
+        scheduleFingerprintRef.current = nextFingerprint;
+        writeTeamDetailsCache(teamDetailsCacheKey(initialParams), { schedule: data.schedule, roster: data.roster.length ? data.roster : rosterRowsRef.current });
+        if (approvedPlan) {
+          setPlannerStatus("Perfect Game updated this team schedule. Approve regenerate to modify travel bookings.");
+        }
+      }
+      await checkWeatherRisks(data.schedule);
+      setLastPgSyncAt(new Date().toISOString());
+    } catch {
+      // Keep prior data if monitor sync fails.
+    } finally {
+      setMonitoring(false);
+    }
+  }
+
+  async function approveRegenerateFromAlerts() {
+    setMonitorAlerts([]);
+    await runLiveMonitorSync();
+    await generateCoachSchedule();
+    setApprovedPlan(false);
+    setPlannerStatus("Plan regenerated from latest PG/weather updates. Review and click Approve Recommendation to modify bookings.");
+  }
+
+  async function generateCoachSchedule() {
+    if (!rosterRows.length || !scheduleRows.length) {
+      setPlannerStatus("Load roster + schedule first, then generate.");
+      return;
+    }
+    if (!selectedPlayers.length) {
+      setPlannerStatus("Select at least one best player from roster.");
+      return;
+    }
+
+    setPlannerLoading(true);
+    setPlannerStatus("");
+    setBookingStatus("");
+    setBookingResults([]);
+    setApprovedPlan(false);
+
+    try {
+      const selectedSet = new Set(selectedPlayers);
+      const selectedRoster = rosterRows.filter((row) => selectedSet.has(rosterRowKey(row)));
+      const sortedGames = [...scheduleRows].sort(
+        (a, b) => parseScheduleDateTime(a, 0).getTime() - parseScheduleDateTime(b, 0).getTime()
+      );
+      const now = Date.now();
+      const upcomingGames = sortedGames.filter((game, idx) => parseScheduleDateTime(game, idx).getTime() >= now);
+      const skippedPastCount = Math.max(0, sortedGames.length - upcomingGames.length);
+
+      const generationGames = includeCompletedGames ? sortedGames : upcomingGames;
+      if (!generationGames.length) {
+        const latest = sortedGames.length
+          ? parseScheduleDateTime(sortedGames[sortedGames.length - 1], sortedGames.length - 1)
+          : null;
+        setGeneratedSteps([]);
+        setPlannerStatus(
+          latest
+            ? `All listed games for ${initialParams.teamName} are already completed (latest game: ${latest.toLocaleString()}). Schedule generation is only available for upcoming games.`
+            : `All listed games for ${initialParams.teamName} are already completed. Schedule generation is only available for upcoming games.`
+        );
+        return;
+      }
+
+      const nextSteps: GeneratedCoachStep[] = [];
+      let currentPoint = coachStartLocation.trim() || "Current City";
+
+      for (let idx = 0; idx < generationGames.length; idx += 1) {
+        const game = generationGames[idx];
+        const gameAt = parseScheduleDateTime(game, idx);
+        const venue = extractLocation(game.field || "");
+        const opponent = pickOpponent(initialParams.teamName, game.homeTeam, game.awayTeam);
+
+        const travel = await recommendTravel(currentPoint, venue);
+        const departAt = new Date(gameAt.getTime() - travel.minutes * 60 * 1000);
+        const lateMinutes = departAt.getTime() < Date.now() ? Math.max(0, Math.round((Date.now() - departAt.getTime()) / 60000)) : 0;
+
+        nextSteps.push({
+          at: departAt.toISOString(),
+          title: `Travel ${currentPoint} -> ${venue}`,
+          detail: `${travel.mode} · ETA ${travel.minutes} min${lateMinutes ? ` · leave ASAP (late by ~${lateMinutes} min)` : ""}`,
+          from: currentPoint,
+          to: venue,
+          mode: travel.mode
+        });
+
+        nextSteps.push({
+          at: gameAt.toISOString(),
+          title: `Watch ${initialParams.teamName} vs ${opponent}`,
+          detail: `Field: ${game.field || "TBD"} · Best players selected: ${selectedRoster.map((p) => p.name).join(", ")}`
+        });
+
+        currentPoint = venue;
+      }
+
+      setGeneratedSteps(nextSteps);
+      if (includeCompletedGames) {
+        setPlannerStatus(
+          skippedPastCount
+            ? `Test mode enabled: included ${skippedPastCount} completed game(s). Generated ${nextSteps.length} coach steps for ${selectedRoster.length} selected players.`
+            : `Test mode enabled: generated ${nextSteps.length} coach steps for ${selectedRoster.length} selected players.`
+        );
+      } else {
+        setPlannerStatus(
+          skippedPastCount
+            ? `Generated ${nextSteps.length} coach steps for ${selectedRoster.length} selected players. Skipped ${skippedPastCount} completed game(s).`
+            : `Generated ${nextSteps.length} coach steps for ${selectedRoster.length} selected players.`
+        );
+      }
+    } catch (error) {
+      setPlannerStatus(error instanceof Error ? error.message : "Failed to generate schedule.");
+    } finally {
+      setPlannerLoading(false);
+    }
+  }
+
+  async function approveRecommendation() {
+    if (!generatedSteps.length) return;
+    const selectedSet = new Set(selectedPlayers);
+    const selectedRoster = rosterRows.filter((row) => selectedSet.has(rosterRowKey(row)));
+    const travelLegs = generatedSteps.filter((step) => step.mode);
+    const firstLeg = travelLegs[0];
+    const lastLeg = travelLegs[travelLegs.length - 1];
+
+    const desiredPlayers = selectedRoster.map((row) => ({
+      playerId: rosterRowKey(row),
+      name: row.name,
+      team: initialParams.teamName
+    }));
+
+    const payload = {
+      flightSource: firstLeg?.from || coachStartLocation,
+      flightDestination: lastLeg?.to || "",
+      flightArrivalTime: generatedSteps[0]?.at || "",
+      hotelName: "",
+      notes: "Coach-approved recommendation generated from tournament roster selection.",
+      desiredPlayers,
+      generatedPlan: generatedSteps.map((step) => ({
+        at: step.at,
+        title: step.title,
+        detail: step.detail,
+        from: step.from || "",
+        to: step.to || "",
+        mode: step.mode || ""
+      }))
+    };
+
+    const res = await fetch("/api/schedules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      setPlannerStatus("Could not approve schedule right now.");
+      return;
+    }
+    setApprovedPlan(true);
+    setPlannerStatus("Schedule approved and saved for the coach.");
+    if (hasTravelerForBooking(traveler)) {
+      if (bookingPaymentRequired && bookingPaymentMode === "card" && !selectedPaymentMethodId) {
+        setBookingStatus("Add/select a saved card, then click Book Approved Travel.");
+      } else if (bookingPaymentRequired && bookingPaymentMode === "upi" && !upiAuthorized) {
+        setBookingStatus("Complete UPI authorization, then click Book Approved Travel.");
+      } else {
+        await executeProviderBookings({ trigger: "approve" });
+      }
+    } else {
+      setBookingStatus("Approved. Enter traveler profile to create real bookings.");
+    }
+  }
+
+  async function openPaymentMethodSetup() {
+    setPaymentMethodSetupLoading(true);
+    const popup = typeof window === "undefined" ? null : window.open("", "_blank");
+    if (popup) {
+      try {
+        popup.document.write("<title>Opening payment setup...</title><p style='font-family:Arial,sans-serif;padding:12px;'>Opening secure payment setup...</p>");
+      } catch {
+        // Ignore popup rendering issues.
+      }
+    }
+    try {
+      const returnTo = typeof window === "undefined"
+        ? "/bird-dog/team"
+        : `${window.location.pathname}${window.location.search}`;
+      const res = await fetch("/api/payments/methods/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          returnTo
+        })
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.checkoutUrl) {
+        if (popup && !popup.closed) popup.close();
+        setBookingStatus(body?.error || `Unable to open payment setup (${res.status}).`);
+        return;
+      }
+      if (popup && !popup.closed) {
+        popup.location.href = body.checkoutUrl;
+        try {
+          popup.focus();
+        } catch {
+          // Ignore focus errors.
+        }
+      } else {
+        const opened = window.open(body.checkoutUrl, "_blank");
+        if (!opened) {
+          window.location.assign(body.checkoutUrl);
+        }
+      }
+      setBookingStatus("Payment setup opened in a new tab. Complete it, then return here and click Refresh Methods.");
+    } catch (error) {
+      if (popup && !popup.closed) popup.close();
+      setBookingStatus(error instanceof Error ? error.message : "Unable to open payment setup.");
+    } finally {
+      setPaymentMethodSetupLoading(false);
+    }
+  }
+
+  async function openUpiCheckout() {
+    setUpiCheckoutLoading(true);
+    const popup = typeof window === "undefined" ? null : window.open("", "_blank");
+    if (popup) {
+      try {
+        popup.document.write("<title>Opening UPI checkout...</title><p style='font-family:Arial,sans-serif;padding:12px;'>Opening secure UPI checkout...</p>");
+      } catch {
+        // Ignore popup rendering issues.
+      }
+    }
+    try {
+      const returnTo = typeof window === "undefined"
+        ? "/bird-dog/team"
+        : `${window.location.pathname}${window.location.search}`;
+      const res = await fetch("/api/payments/travel-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          returnTo,
+          teamName: initialParams.teamName,
+          tournamentName: initialParams.tournamentName
+        })
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.checkoutUrl) {
+        if (popup && !popup.closed) popup.close();
+        setBookingStatus(body?.error || `Unable to open UPI checkout (${res.status}).`);
+        return;
+      }
+      setUpiAuthorized(false);
+      if (popup && !popup.closed) {
+        popup.location.href = body.checkoutUrl;
+        try {
+          popup.focus();
+        } catch {
+          // Ignore focus errors.
+        }
+      } else {
+        const opened = window.open(body.checkoutUrl, "_blank");
+        if (!opened) {
+          window.location.assign(body.checkoutUrl);
+        }
+      }
+      setBookingStatus("UPI checkout opened. Complete payment, then return and click Book Approved Travel.");
+    } catch (error) {
+      if (popup && !popup.closed) popup.close();
+      setBookingStatus(error instanceof Error ? error.message : "Unable to open UPI checkout.");
+    } finally {
+      setUpiCheckoutLoading(false);
+    }
+  }
+
+  async function executeProviderBookings(input?: { trigger?: "approve" | "manual" }) {
+    if (!approvedPlan && input?.trigger !== "approve") {
+      setBookingStatus("Approve recommendation first, then create bookings.");
+      return;
+    }
+    if (bookingPaymentRequired) {
+      if (bookingPaymentMode === "card" && !selectedPaymentMethodId) {
+        setBookingStatus("Add/select a saved card first.");
+        return;
+      }
+      if (bookingPaymentMode === "upi" && !upiAuthorized) {
+        setBookingStatus("Complete UPI authorization first.");
+        return;
+      }
+    }
+    const travelLegs = generatedSteps.filter((step) => step.mode && step.from && step.to);
+    if (!travelLegs.length) {
+      setBookingStatus("No travel legs found to book.");
+      return;
+    }
+
+    if (!hasTravelerForBooking(traveler)) {
+      setBookingStatus("Traveler profile is required for real OTA bookings.");
+      return;
+    }
+
+    const prepared = prepareBookingLegsForProvider(
+      travelLegs.map((leg) => ({
+        at: leg.at,
+        from: String(leg.from || ""),
+        to: String(leg.to || ""),
+        mode: String(leg.mode || "")
+      })),
+      bookingTestMode
+    );
+
+    setBookingLoading(true);
+    setBookingStatus("");
+    setBookingResults([]);
+    try {
+      if (bookingPaymentRequired && bookingPaymentMode === "card") {
+        const authRes = await fetch("/api/payments/travel-authorize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            paymentMethodId: selectedPaymentMethodId,
+            teamName: initialParams.teamName,
+            tournamentName: initialParams.tournamentName
+          })
+        });
+        const authBody = await authRes.json().catch(() => ({}));
+        if (!authRes.ok) {
+          setBookingStatus(authBody?.error || `Payment authorization failed (${authRes.status}).`);
+          return;
+        }
+      }
+
+      const res = await fetch("/api/bookings/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          teamName: initialParams.teamName,
+          tournamentName: initialParams.tournamentName,
+          travelLegs: prepared.legs,
+          bookingTestMode,
+          traveler
+        })
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setBookingStatus(body?.error || `Booking failed (${res.status})`);
+        return;
+      }
+      const results: BookingProviderResult[] = Array.isArray(body?.results) ? body.results : [];
+      setBookingResults(results);
+      const booked = results.filter((item) => item.status === "booked").length;
+      const quoted = results.filter((item) => item.status === "quoted").length;
+      const failed = results.filter((item) => item.status === "failed").length;
+      const skipped = results.filter((item) => item.status === "skipped").length;
+      const refs = results
+        .filter((item) => item.reference)
+        .slice(0, 3)
+        .map((item) => `${item.provider}: ${item.reference}`)
+        .join(" | ");
+      const parts = [`Booking run complete. Booked: ${booked}, Quoted: ${quoted}, Failed: ${failed}, Skipped: ${skipped}${refs ? ` (${refs})` : ""}`];
+      if (bookingPaymentRequired && bookingPaymentMode === "card") {
+        parts.push("Card authorization succeeded with selected saved card.");
+      } else if (bookingPaymentRequired && bookingPaymentMode === "upi") {
+        parts.push("UPI authorization completed via checkout.");
+      }
+      if (prepared.statusNote) parts.push(prepared.statusNote);
+      if (!booked && !quoted && skipped > 0) {
+        parts.push("Only local-transfer legs were detected (cab/walk). No OTA flight/bus leg required for this run.");
+      }
+      setBookingStatus(parts.join(" "));
+    } catch (error) {
+      setBookingStatus(error instanceof Error ? error.message : "Booking request failed.");
+    } finally {
+      setBookingLoading(false);
+    }
+  }
+
+  function dismissMonitorAlert(id: string) {
+    setMonitorAlerts((prev) => prev.filter((item) => item.id !== id));
   }
 
   const filteredSchedule = useMemo(() => {
@@ -269,9 +1765,12 @@ export default function TeamDetailsClient({ initialParams }: Props) {
     const query = rosterSearch.trim().toLowerCase();
     if (!query) return rosterRows;
     return rosterRows.filter((row) =>
-      `${row.no} ${row.name} ${row.position} ${row.school}`.toLowerCase().includes(query)
+      `${row.no} ${row.name} ${row.position} ${row.height || ""} ${row.weight || ""} ${row.batsThrows || ""} ${row.grad || ""} ${row.school} ${row.hometown || ""} ${row.rank || ""} ${row.commitment || ""}`.toLowerCase().includes(query)
     );
   }, [rosterRows, rosterSearch]);
+
+  const paymentReady = !bookingPaymentRequired
+    || (bookingPaymentMode === "card" ? Boolean(selectedPaymentMethodId) : upiAuthorized);
 
   return (
     <main className="bd-root">
@@ -290,13 +1789,42 @@ export default function TeamDetailsClient({ initialParams }: Props) {
             </button>
           ) : null}
         </div>
-        {initialParams.tournamentIcon ? (
-          <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
-            <img className="tile-icon" src={initialParams.tournamentIcon} alt={initialParams.tournamentName || "Tournament"} />
-          </div>
-        ) : null}
         <h2 style={{ marginTop: 8 }}>{initialParams.tournamentName || "Tournament"}</h2>
         <p className="muted"><strong>Team:</strong> {initialParams.teamName || "-"}</p>
+      </section>
+
+      <section className="panel">
+        <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <h2 style={{ margin: 0 }}>Live Sync Monitor</h2>
+          <button className="secondary" type="button" onClick={() => void runLiveMonitorSync()} disabled={monitoring}>
+            {monitoring ? "Syncing..." : "Sync with Perfect Game"}
+          </button>
+        </div>
+        <p className="muted" style={{ marginTop: 8 }}>
+          {lastPgSyncAt
+            ? `Last PG sync: ${new Date(lastPgSyncAt).toLocaleString()}`
+            : "PG sync is active and checks for schedule/weather changes automatically."}
+        </p>
+        {monitorAlerts.length ? (
+          <div className="log-list" style={{ maxHeight: 220 }}>
+            {monitorAlerts.map((alert) => (
+              <article key={alert.id} className="log-card">
+                <p><strong>{alert.title}</strong></p>
+                <p>{alert.detail}</p>
+                <div className="row wrap">
+                  <button type="button" onClick={() => void approveRegenerateFromAlerts()}>
+                    Approve & Regenerate Plan
+                  </button>
+                  <button className="secondary" type="button" onClick={() => dismissMonitorAlert(alert.id)}>
+                    Dismiss
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="muted">No schedule/weather alerts right now.</p>
+        )}
       </section>
 
       <section className="panel">
@@ -366,8 +1894,21 @@ export default function TeamDetailsClient({ initialParams }: Props) {
             type="button"
             onClick={() => downloadPdfLikeReport(
               `Tournament Roster - ${initialParams.teamName}`,
-              ["No.", "Name", "Pos", "HS"],
-              filteredRoster.map((row, idx) => [row.no || String(idx + 1), row.name, row.position || "-", row.school || "-"])
+              ["No.", "Name", "Pos", "Ht", "Wt", "B/T", "Grad", "School", "Hometown", "Rank", "Commitment", "Notes"],
+              filteredRoster.map((row, idx) => [
+                row.no || String(idx + 1),
+                row.name,
+                row.position || "-",
+                row.height || "-",
+                row.weight || "-",
+                row.batsThrows || "-",
+                row.grad || "-",
+                row.school || "-",
+                row.hometown || "-",
+                row.rank || "-",
+                row.commitment || "-",
+                playerNotes[rosterRowKey(row)]?.text || "-"
+              ])
             )}
           >
             Download Roster PDF
@@ -385,38 +1926,329 @@ export default function TeamDetailsClient({ initialParams }: Props) {
           <table className="roster-table">
             <thead>
               <tr>
+                <th>Best</th>
                 <th>No.</th>
                 <th>Name</th>
                 <th>Pos</th>
-                <th>HS</th>
+                <th>Ht</th>
+                <th>Wt</th>
+                <th>B/T</th>
+                <th>Grad</th>
+                <th>School</th>
+                <th>Hometown</th>
+                <th>Rank</th>
+                <th>Commitment</th>
+                <th>Notes</th>
               </tr>
             </thead>
             <tbody>
               {filteredRoster.length ? filteredRoster.map((row, idx) => (
                 <tr key={`${row.no}-${row.name}-${idx}`}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      disabled={loading || !!error}
+                      checked={selectedPlayers.includes(rosterRowKey(row))}
+                      onChange={() => toggleBestPlayer(row)}
+                    />
+                  </td>
                   <td>{row.no || idx + 1}</td>
                   <td>{row.name}</td>
                   <td>{row.position || "-"}</td>
+                  <td>{row.height || "-"}</td>
+                  <td>{row.weight || "-"}</td>
+                  <td>{row.batsThrows || "-"}</td>
+                  <td>{row.grad || "-"}</td>
                   <td>{row.school || "-"}</td>
+                  <td>{row.hometown || "-"}</td>
+                  <td>{row.rank || "-"}</td>
+                  <td>{row.commitment || "-"}</td>
+                  <td style={{ minWidth: 260 }}>
+                    <textarea
+                      rows={2}
+                      value={playerNotes[rosterRowKey(row)]?.text || ""}
+                      onChange={(e) => updatePlayerNoteText(rosterRowKey(row), e.target.value)}
+                      placeholder="Coach note for this player"
+                    />
+                    <div className="row wrap" style={{ marginTop: 6 }}>
+                      <button
+                        className="secondary"
+                        type="button"
+                        onClick={() => togglePlayerAudio(row)}
+                      >
+                        {recordingTarget === `player:${rosterRowKey(row)}` ? "Stop Audio" : "Record Audio"}
+                      </button>
+                    </div>
+                    {recordingTarget === `player:${rosterRowKey(row)}` ? (
+                      <p className="muted" style={{ marginTop: 4, marginBottom: 4 }}>Recording now...</p>
+                    ) : null}
+                    {playerNotes[rosterRowKey(row)]?.audioUrl ? (
+                      <audio controls src={playerNotes[rosterRowKey(row)]?.audioUrl} style={{ width: "100%", marginTop: 6 }} />
+                    ) : null}
+                  </td>
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={4}>No roster rows found yet for this team.</td>
+                  <td colSpan={13}>No roster rows found yet for this team.</td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+        <p className="muted" style={{ marginTop: 8 }}>
+          {selectedPlayers.length
+            ? `${selectedPlayers.length} best player(s) selected.`
+            : "Select best players to enable coach schedule generation."}
+        </p>
+        {notesStatus ? <p className="muted">{notesStatus}</p> : null}
       </section>
+
+      <section className="panel">
+        <h2>Coach Planner</h2>
+        <label>
+          Coach Start Location
+          <input
+            value={coachStartLocation}
+            onChange={(e) => setCoachStartLocation(e.target.value)}
+            placeholder="Current city or airport"
+          />
+        </label>
+        <label className="row" style={{ gap: 8, marginBottom: 8 }}>
+          <input
+            type="checkbox"
+            checked={includeCompletedGames}
+            onChange={(e) => setIncludeCompletedGames(e.target.checked)}
+          />
+          Include completed matches (Test mode)
+        </label>
+        <div className="row wrap">
+          <button
+            type="button"
+            disabled={!rosterRows.length || !selectedPlayers.length || plannerLoading}
+            onClick={() => void generateCoachSchedule()}
+          >
+            {plannerLoading ? "Generating..." : "Generate My Schedule"}
+          </button>
+          <button
+            className="secondary"
+            type="button"
+            disabled={!generatedSteps.length}
+            onClick={() => void approveRecommendation()}
+          >
+            Approve Recommendation
+          </button>
+          <button
+            className="secondary"
+            type="button"
+            disabled={paymentMethodSetupLoading}
+            onClick={() => void openPaymentMethodSetup()}
+          >
+            {paymentMethodSetupLoading ? "Opening Payment..." : "Add / Manage Payment Methods"}
+          </button>
+          <button
+            className="secondary"
+            type="button"
+            disabled={upiCheckoutLoading}
+            onClick={() => void openUpiCheckout()}
+          >
+            {upiCheckoutLoading ? "Opening UPI..." : "Authorize UPI Payment"}
+          </button>
+          <button
+            className="secondary"
+            type="button"
+            disabled={!generatedSteps.length || bookingLoading || !paymentReady}
+            onClick={() => void executeProviderBookings({ trigger: "manual" })}
+          >
+            {bookingLoading ? "Booking..." : "Book Approved Travel"}
+          </button>
+        </div>
+        {bookingPaymentRequired ? (
+          <p className="muted" style={{ marginTop: 6 }}>
+            {bookingPaymentMode === "card"
+              ? (selectedPaymentMethodId
+                ? "Saved card selected. Booking can proceed with card authorization."
+                : "Select a saved card (or add one) before booking.")
+              : (upiAuthorized
+                ? "UPI authorization complete. Booking can proceed."
+                : "Run UPI authorization first, then booking can proceed.")}
+          </p>
+        ) : null}
+        <div className="row wrap" style={{ marginBottom: 8 }}>
+          <label style={{ minWidth: 260 }}>
+            Payment Option
+            <select
+              value={bookingPaymentMode}
+              onChange={(e) => setBookingPaymentMode((e.target.value === "upi" ? "upi" : "card"))}
+            >
+              <option value="card">Saved Card</option>
+              <option value="upi">UPI</option>
+            </select>
+          </label>
+        </div>
+        {bookingPaymentMode === "card" ? (
+          <div className="row wrap" style={{ marginBottom: 8 }}>
+            <label style={{ minWidth: 320 }}>
+              Saved Payment Method
+              <select
+                value={selectedPaymentMethodId}
+                onChange={(e) => setSelectedPaymentMethodId(e.target.value)}
+                disabled={paymentMethodsLoading}
+              >
+                <option value="">Select saved method</option>
+                {paymentMethods.map((pm) => (
+                  <option key={pm.id} value={pm.id}>{pm.label}</option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="secondary"
+              type="button"
+              disabled={paymentMethodsLoading}
+              onClick={() => void loadPaymentMethods({ showStatus: true })}
+            >
+              {paymentMethodsLoading ? "Refreshing..." : "Refresh Methods"}
+            </button>
+          </div>
+        ) : (
+          <p className="muted" style={{ marginBottom: 8 }}>
+            Use "Authorize UPI Payment" to open secure checkout. After success, return and click Book Approved Travel.
+          </p>
+        )}
+        <label className="row" style={{ gap: 8, marginBottom: 8 }}>
+          <input
+            type="checkbox"
+            checked={bookingTestMode}
+            onChange={(e) => setBookingTestMode(e.target.checked)}
+          />
+          Booking Test Mode (shift past itinerary dates into future for OTA provider testing)
+        </label>
+        <div className="panel" style={{ marginTop: 8, background: "#f8f5ec" }}>
+          <h3 style={{ marginTop: 0 }}>Traveler Profile (for OTA booking)</h3>
+          <div className="grid2">
+            <label>
+              First Name
+              <input
+                value={traveler.firstName}
+                onChange={(e) => setTraveler((prev) => ({ ...prev, firstName: e.target.value }))}
+                placeholder="Coach first name"
+              />
+            </label>
+            <label>
+              Last Name
+              <input
+                value={traveler.lastName}
+                onChange={(e) => setTraveler((prev) => ({ ...prev, lastName: e.target.value }))}
+                placeholder="Coach last name"
+              />
+            </label>
+            <label>
+              Date of Birth
+              <input
+                type="date"
+                value={traveler.dateOfBirth}
+                onChange={(e) => setTraveler((prev) => ({ ...prev, dateOfBirth: e.target.value }))}
+              />
+            </label>
+            <label>
+              Gender
+              <select
+                value={traveler.gender}
+                onChange={(e) => setTraveler((prev) => ({ ...prev, gender: e.target.value as TravelerProfile["gender"] }))}
+              >
+                <option value="UNSPECIFIED">Unspecified</option>
+                <option value="MALE">Male</option>
+                <option value="FEMALE">Female</option>
+              </select>
+            </label>
+            <label>
+              Email
+              <input
+                type="email"
+                value={traveler.email}
+                onChange={(e) => setTraveler((prev) => ({ ...prev, email: e.target.value }))}
+                placeholder="coach@team.com"
+              />
+            </label>
+            <label>
+              Phone Number
+              <input
+                value={traveler.phone}
+                onChange={(e) => setTraveler((prev) => ({ ...prev, phone: e.target.value }))}
+                placeholder="4085551234"
+              />
+            </label>
+            <label>
+              Country Calling Code
+              <input
+                value={traveler.countryCallingCode}
+                onChange={(e) => setTraveler((prev) => ({ ...prev, countryCallingCode: e.target.value }))}
+                placeholder="1"
+              />
+            </label>
+            <label>
+              Nationality (2-letter)
+              <input
+                value={traveler.nationality}
+                onChange={(e) => setTraveler((prev) => ({ ...prev, nationality: e.target.value.toUpperCase() }))}
+                placeholder="US"
+              />
+            </label>
+          </div>
+        </div>
+        {plannerStatus ? <p className="muted">{plannerStatus}</p> : null}
+        {bookingStatus ? <p className="muted">{bookingStatus}</p> : null}
+        {bookingResults.length ? (
+          <div className="log-list" style={{ maxHeight: 220, marginBottom: 8 }}>
+            {bookingResults.map((item, idx) => (
+              <article key={`${item.provider}-${idx}`} className="log-card">
+                <p><strong>{item.provider.toUpperCase()} · {item.status.toUpperCase()}</strong>{item.reference ? ` · ${item.reference}` : ""}</p>
+                <p>{item.detail || "No provider detail returned."}</p>
+              </article>
+            ))}
+          </div>
+        ) : null}
+        <div className="log-list" style={{ maxHeight: 260 }}>
+          {generatedSteps.length ? generatedSteps.map((step, idx) => (
+            <article key={`${step.at}-${idx}`} className="log-card">
+              <p><strong>{new Date(step.at).toLocaleString()} - {step.title}</strong></p>
+              <p>{step.detail}</p>
+            </article>
+          )) : <p className="muted">Generate schedule to view travel and watch plan.</p>}
+        </div>
+      </section>
+
+      {selectedPlayers.length ? (
+        <section
+          className="panel"
+          style={{ position: "sticky", bottom: 10, zIndex: 20, borderColor: "var(--org-primary)" }}
+        >
+          <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <p style={{ margin: 0 }}><strong>{selectedPlayers.length}</strong> player(s) selected</p>
+            <button
+              type="button"
+              onClick={() => void generateCoachSchedule()}
+              disabled={plannerLoading}
+            >
+              {plannerLoading ? "Generating..." : "Generate My Schedule"}
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       <section className="panel grid2">
         <div>
           <h2>Hands-Free Notes</h2>
           <div className="row wrap">
-            {recorderState === "idle" ? (
-              <button type="button" onClick={startMic}>Start Mic</button>
-            ) : (
+            {recorderState === "recording" && recordingTarget === "team" ? (
               <button type="button" className="danger" onClick={stopMic}>Stop Mic</button>
+            ) : (
+              <button
+                type="button"
+                onClick={startMic}
+                disabled={recorderState === "recording" && recordingTarget !== "team"}
+              >
+                Start Mic
+              </button>
             )}
             <button className="secondary" type="button" onClick={saveTeamNote}>Save Note</button>
           </div>
@@ -429,19 +2261,19 @@ export default function TeamDetailsClient({ initialParams }: Props) {
               placeholder="Transcript appears here."
             />
           </label>
-          {!speechSupported ? <p className="muted">Speech recognition is not available in this browser.</p> : null}
+          {teamAudioDraftUrl ? <audio controls src={teamAudioDraftUrl} style={{ width: "100%", marginBottom: 8 }} /> : null}
           <div className="log-list" style={{ maxHeight: 180 }}>
             {teamNotes.length ? teamNotes.map((note) => (
               <article key={note.id} className="log-card">
                 <p><strong>{new Date(note.createdAt).toLocaleString()}</strong></p>
                 <p>{note.transcript}</p>
+                {note.audioUrl ? <audio controls src={note.audioUrl} style={{ width: "100%" }} /> : null}
               </article>
-            )) : <p className="muted">No notes saved for this team yet.</p>}
+            )) : null}
           </div>
         </div>
         <div>
           <h2>Optimized Path</h2>
-          <p className="muted">Schedule and roster stay on this page while you capture team notes.</p>
         </div>
       </section>
     </main>

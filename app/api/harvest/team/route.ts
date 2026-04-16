@@ -14,6 +14,53 @@ function teamMatches(candidate: string, target: string) {
   return a === b || a.includes(b) || b.includes(a);
 }
 
+function hasDetailedRosterColumns(
+  roster: Array<{
+    height?: string;
+    weight?: string;
+    batsThrows?: string;
+    grad?: string;
+    hometown?: string;
+    rank?: string;
+    commitment?: string;
+  }>
+) {
+  return roster.some((row) =>
+    Boolean(
+      row.height
+      || row.weight
+      || row.batsThrows
+      || row.grad
+      || row.hometown
+      || row.rank
+      || row.commitment
+    )
+  );
+}
+
+function rosterMergeKey(row: { no?: string; name?: string }) {
+  const no = String(row.no || "").trim();
+  const name = normalize(String(row.name || ""));
+  return `${no}|${name}`;
+}
+
+async function resolveTeamUrl(input: {
+  teamId: string;
+  teamUrl: string;
+  teamName: string;
+  eventId: string;
+}) {
+  let url = input.teamUrl;
+  if (!url && /^pg-team-\d+$/i.test(input.teamId)) {
+    const teamNum = input.teamId.replace(/^pg-team-/i, "");
+    url = `https://www.perfectgame.org/Events/Tournaments/Teams/Default.aspx?team=${teamNum}`;
+  }
+  if (!url && input.teamName && input.eventId) {
+    url = await resolvePgTeamUrl(input.teamName, input.eventId);
+  }
+  return url;
+}
+
 export async function POST(req: NextRequest) {
   const session = readSessionFromRequest(req);
   if (!session) {
@@ -43,65 +90,155 @@ export async function POST(req: NextRequest) {
     const allowLiveScrape = process.env.BIRD_DOG_ALLOW_PG_LIVE_SCRAPE === "true";
 
     if (dataMode !== "live" || !allowLiveScrape) {
-      if (!tournamentId) {
-        return NextResponse.json({ error: "tournamentId is required in imported mode." }, { status: 400 });
+      const tournament = tournamentId
+        ? await getHarvestedTournament(session.orgId, tournamentId)
+        : null;
+
+      const targetTeamName = teamName
+        || tournament?.teams?.find((team) => team.id === teamId)?.name
+        || "";
+
+      if (tournament && targetTeamName) {
+        const teamGames = tournament.games
+          .filter((game) => teamMatches(game.homeTeam, targetTeamName) || teamMatches(game.awayTeam, targetTeamName))
+          .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+
+        const schedule = teamGames.map((game, index) => ({
+          gameNo: String(index + 1),
+          date: new Date(game.startTime).toLocaleDateString("en-US"),
+          time: new Date(game.startTime).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
+          field: game.field,
+          homeTeam: game.homeTeam,
+          awayTeam: game.awayTeam
+        }));
+
+        const rosterMap = new Map<string, {
+          no: string;
+          name: string;
+          position: string;
+          height: string;
+          weight: string;
+          batsThrows: string;
+          grad: string;
+          school: string;
+          hometown: string;
+          rank: string;
+          commitment: string;
+        }>();
+        teamGames.forEach((game) => {
+          game.players.forEach((player) => {
+            if (!rosterMap.has(player.id)) {
+              rosterMap.set(player.id, {
+                no: "",
+                name: player.name,
+                position: player.position || "",
+                height: "",
+                weight: "",
+                batsThrows: "",
+                grad: "",
+                school: player.school || "",
+                hometown: "",
+                rank: "",
+                commitment: ""
+              });
+            }
+          });
+        });
+
+        const importedRoster = Array.from(rosterMap.values());
+        const importedReady = schedule.length && importedRoster.length;
+        const importedDetailed = hasDetailedRosterColumns(importedRoster);
+
+        const shouldEnrichFromLive = !importedReady || !importedDetailed;
+        if (shouldEnrichFromLive) {
+          const fallbackTeamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName: targetTeamName || teamName, eventId });
+          if (fallbackTeamUrl) {
+            const live = await scrapePgTeamLive(fallbackTeamUrl, {
+              teamName: targetTeamName || teamName,
+              eventId,
+              fastMode: true
+            });
+            if (live.schedule.length || live.roster.length) {
+              const mergedRosterMap = new Map<string, {
+                no: string;
+                name: string;
+                position: string;
+                height?: string;
+                weight?: string;
+                batsThrows?: string;
+                grad?: string;
+                school: string;
+                hometown?: string;
+                rank?: string;
+                commitment?: string;
+              }>(
+                importedRoster.map((row) => [rosterMergeKey(row), row])
+              );
+              for (const liveRow of live.roster) {
+                const key = rosterMergeKey(liveRow);
+                const existing = mergedRosterMap.get(key);
+                mergedRosterMap.set(key, {
+                  no: liveRow.no || existing?.no || "",
+                  name: liveRow.name || existing?.name || "",
+                  position: liveRow.position || existing?.position || "",
+                  height: liveRow.height || existing?.height || "",
+                  weight: liveRow.weight || existing?.weight || "",
+                  batsThrows: liveRow.batsThrows || existing?.batsThrows || "",
+                  grad: liveRow.grad || existing?.grad || "",
+                  school: liveRow.school || existing?.school || "",
+                  hometown: liveRow.hometown || existing?.hometown || "",
+                  rank: liveRow.rank || existing?.rank || "",
+                  commitment: liveRow.commitment || existing?.commitment || ""
+                });
+              }
+              return NextResponse.json({
+                ok: true,
+                source: importedReady ? "imported_plus_pg_live" : "pg_live_fallback",
+                schedule: live.schedule.length ? live.schedule : schedule,
+                roster: Array.from(mergedRosterMap.values()),
+                teamUrl: fallbackTeamUrl
+              });
+            }
+          }
+        }
+
+        if (importedReady) {
+          return NextResponse.json({
+            ok: true,
+            source: "imported_dataset",
+            schedule,
+            roster: importedRoster,
+            teamUrl: ""
+          });
+        }
       }
-      const tournament = await getHarvestedTournament(session.orgId, tournamentId);
+
+      const fallbackTeamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName: targetTeamName || teamName, eventId });
+      if (fallbackTeamUrl) {
+        const live = await scrapePgTeamLive(fallbackTeamUrl, {
+          teamName: targetTeamName || teamName,
+          eventId,
+          fastMode: true
+        });
+        if (live.schedule.length || live.roster.length) {
+          return NextResponse.json({ ok: true, source: "pg_live_fallback", ...live, teamUrl: fallbackTeamUrl });
+        }
+      }
+
       if (!tournament) {
         return NextResponse.json({ error: "Tournament not found in imported dataset." }, { status: 404 });
       }
 
-      const targetTeamName = teamName
-        || tournament.teams?.find((team) => team.id === teamId)?.name
-        || "";
-
-      if (!targetTeamName) {
-        return NextResponse.json({ error: "Unable to resolve target team." }, { status: 404 });
-      }
-
-      const teamGames = tournament.games
-        .filter((game) => teamMatches(game.homeTeam, targetTeamName) || teamMatches(game.awayTeam, targetTeamName))
-        .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
-
-      const schedule = teamGames.map((game, index) => ({
-        gameNo: String(index + 1),
-        date: new Date(game.startTime).toLocaleDateString("en-US"),
-        time: new Date(game.startTime).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
-        field: game.field,
-        homeTeam: game.homeTeam,
-        awayTeam: game.awayTeam
-      }));
-
-      const rosterMap = new Map<string, { no: string; name: string; position: string; school: string }>();
-      teamGames.forEach((game) => {
-        game.players.forEach((player) => {
-          if (!rosterMap.has(player.id)) {
-            rosterMap.set(player.id, {
-              no: "",
-              name: player.name,
-              position: player.position || "",
-              school: player.school || ""
-            });
-          }
-        });
-      });
-
       return NextResponse.json({
         ok: true,
         source: "imported_dataset",
-        schedule,
-        roster: Array.from(rosterMap.values()),
-        teamUrl: ""
+        schedule: [],
+        roster: [],
+        teamUrl: fallbackTeamUrl || ""
       });
     }
 
-    if (!teamUrl && /^pg-team-\d+$/i.test(teamId)) {
-      const teamNum = teamId.replace(/^pg-team-/i, "");
-      teamUrl = `https://www.perfectgame.org/Events/Tournaments/Teams/Default.aspx?team=${teamNum}`;
-    }
-    if (!teamUrl && teamName && eventId) {
-      teamUrl = await resolvePgTeamUrl(teamName, eventId);
-    }
+    teamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName, eventId });
     if (!teamUrl) {
       return NextResponse.json({ error: "Team URL could not be resolved." }, { status: 404 });
     }

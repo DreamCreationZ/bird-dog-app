@@ -3,6 +3,7 @@
 import { TouchEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Game, ItineraryStop, Player, PulseEvent, ScoutNote, SessionUser, Tournament } from "@/lib/birddog/types";
+import { loadHarvestDataset, loadHarvestOverview, loadHarvestTournament } from "@/lib/birddog/clientHarvest";
 
 type RecorderState = "idle" | "recording";
 
@@ -23,6 +24,8 @@ type BrowserSpeechRecognition = {
   interimResults: boolean;
   continuous: boolean;
   onresult: ((event: BrowserSpeechResultEvent) => void) | null;
+  onerror?: ((event: Event) => void) | null;
+  onend?: (() => void) | null;
   start: () => void;
   stop: () => void;
 };
@@ -76,6 +79,25 @@ type CoachSchedule = {
   updated_at: string;
 };
 
+type CoachLiveLocation = {
+  id: string;
+  org_id: string;
+  user_id: string;
+  coach_name: string;
+  latitude: number;
+  longitude: number;
+  accuracy_meters: number | null;
+  captured_at: string;
+  updated_at: string;
+};
+
+type CoachMeetSuggestion = {
+  kind: "common" | "midpoint" | "none";
+  label: string;
+  detail: string;
+  mapUrl?: string;
+};
+
 type PlaceSuggestion = {
   label: string;
   placeId: string;
@@ -99,6 +121,7 @@ type OptimizedStop = ItineraryStop & {
 
 const CACHE_KEY = "bird_dog_tournament_cache";
 const PREVIEW_UNLOCK_ALL = process.env.NEXT_PUBLIC_BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
+const COACH_LOCATION_SHARING_KEY = "bird_dog:coach_location_sharing";
 
 function timeLabel(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -131,6 +154,39 @@ function makeOrgKey(orgId: string, userId: string, key: string) {
   return `bird_dog:${orgId}:${userId}:${key}`;
 }
 
+function parseJsonSafe<T>(raw: string | null, fallback: T): T {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeLocalGet(key: string) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeLocalSet(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
+function safeLocalRemove(key: string) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
 function toRadians(value: number) {
   return (value * Math.PI) / 180;
 }
@@ -152,6 +208,21 @@ function alphaColor(hex: string, alpha: number) {
   return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
 }
 
+function schoolColorPair(seed: string) {
+  const palette = [
+    { primary: "#5b1832", accent: "#f1d26a" },
+    { primary: "#0f2d52", accent: "#d7a316" },
+    { primary: "#5a1f07", accent: "#f6c46b" },
+    { primary: "#11402d", accent: "#bfe28d" },
+    { primary: "#10263f", accent: "#8dc7ff" },
+    { primary: "#2f193f", accent: "#c4a4ff" }
+  ];
+  const raw = seed.trim().toLowerCase();
+  let hash = 0;
+  for (let i = 0; i < raw.length; i += 1) hash = (hash * 31 + raw.charCodeAt(i)) >>> 0;
+  return palette[hash % palette.length];
+}
+
 function distanceKm(aLat: number, aLng: number, bLat: number, bLng: number) {
   const earthRadius = 6371;
   const dLat = toRadians(bLat - aLat);
@@ -168,15 +239,105 @@ function eventIdFromHint(hint?: string) {
   return match ? `pg-${match[1]}` : "";
 }
 
-function tournamentIconByName(name: string) {
-  const low = name.toLowerCase();
-  if (low.includes("wwba")) return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupeEventLogo_wwba_national_event_page_logo.png";
-  if (low.includes("regional")) return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupeEventLogo_wwba_regional_event_page_logo.png";
-  if (low.includes("world")) return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupeEventLogo_PG%20National%20World%20Series.png";
-  if (low.includes("showcase")) return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupEventLogo_PG_SHOWCASE_LOGO.png";
-  if (low.includes("elite")) return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupEventLogo_necMk2.png";
-  if (low.includes("select")) return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupEventLogo_nscmk2.png";
-  return "https://0ebf220f63c8a281d66e-20abd5688b9423eda60643010803535a.ssl.cf1.rackcdn.com/GroupEventLogo_PG_LOGO_EVENT.png";
+function normalizeLocationText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function extractedPlanLocation(item: PlanItem): string {
+  const title = (item.title || "").trim();
+  const detail = (item.detail || "").trim();
+  if (/^go to /i.test(title)) return title.replace(/^go to /i, "").trim();
+  if (/^travel /i.test(title) && title.includes("->")) {
+    return title.split("->").slice(-1)[0]?.trim() || "";
+  }
+  const fieldMatch = detail.match(/field:\s*([^·]+)/i);
+  if (fieldMatch?.[1]) return fieldMatch[1].trim();
+  if (/^return to hotel$/i.test(title) && detail) return detail;
+  return "";
+}
+
+function scheduleCandidates(schedule: CoachSchedule) {
+  const out: Array<{ atMs: number; atIso: string; label: string; norm: string }> = [];
+  for (const item of schedule.generated_plan || []) {
+    const label = extractedPlanLocation(item);
+    const atMs = Date.parse(item.at || "");
+    const norm = normalizeLocationText(label);
+    if (label && norm && Number.isFinite(atMs)) {
+      out.push({ atMs, atIso: item.at, label, norm });
+    }
+  }
+  const fallbackLocation = schedule.hotel_name || schedule.flight_destination || "";
+  const fallbackAt = schedule.flight_arrival_time || "";
+  const fallbackMs = Date.parse(fallbackAt);
+  const fallbackNorm = normalizeLocationText(fallbackLocation);
+  if (fallbackLocation && fallbackNorm && Number.isFinite(fallbackMs)) {
+    out.push({ atMs: fallbackMs, atIso: fallbackAt, label: fallbackLocation, norm: fallbackNorm });
+  }
+  return out;
+}
+
+function buildCoachMeetSuggestion(
+  mine: CoachSchedule | null,
+  other: CoachSchedule,
+  myLive: CoachLiveLocation | null,
+  otherLive: CoachLiveLocation | null
+): CoachMeetSuggestion {
+  if (myLive && otherLive) {
+    const km = distanceKm(myLive.latitude, myLive.longitude, otherLive.latitude, otherLive.longitude);
+    if (km <= 150) {
+      const midLat = (myLive.latitude + otherLive.latitude) / 2;
+      const midLng = (myLive.longitude + otherLive.longitude) / 2;
+      return {
+        kind: "midpoint",
+        label: "Live midpoint available",
+        detail: `You are ~${km.toFixed(1)} km apart. Meet now at midpoint.`,
+        mapUrl: `https://www.google.com/maps/search/?api=1&query=${midLat},${midLng}`
+      };
+    }
+  }
+
+  if (mine) {
+    const mineCandidates = scheduleCandidates(mine);
+    const otherCandidates = scheduleCandidates(other);
+    let best:
+      | { location: string; atMs: number; gapMs: number }
+      | null = null;
+    for (const a of mineCandidates) {
+      for (const b of otherCandidates) {
+        if (a.norm !== b.norm) continue;
+        const gapMs = Math.abs(a.atMs - b.atMs);
+        if (gapMs > 3 * 60 * 60 * 1000) continue;
+        const chosen = Math.min(a.atMs, b.atMs);
+        if (!best || gapMs < best.gapMs) {
+          best = { location: a.label, atMs: chosen, gapMs };
+        }
+      }
+    }
+    if (best) {
+      return {
+        kind: "common",
+        label: best.location,
+        detail: `Common point around ${new Date(best.atMs).toLocaleString()}`,
+        mapUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(best.location)}`
+      };
+    }
+  }
+
+  return {
+    kind: "none",
+    label: "No common point",
+    detail: "No shared location/time window found yet."
+  };
+}
+
+function normalizeTournamentName(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function perfectGameUrlForItem(item: InventoryTournament) {
+  const rawHint = (item.harvestHint || "").trim();
+  if (/^https?:\/\/www\.perfectgame\.org\//i.test(rawHint)) return rawHint;
+  return `https://www.perfectgame.org/search.aspx?search=${encodeURIComponent(item.name)}`;
 }
 
 function tournamentDateBadge(name: string, liveDate?: string) {
@@ -319,6 +480,21 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+function chooseRecorderMimeType() {
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") return "";
+  const candidates = [
+    "audio/mp4;codecs=mp4a.40.2",
+    "audio/mp4",
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus"
+  ];
+  for (const type of candidates) {
+    if (MediaRecorder.isTypeSupported(type)) return type;
+  }
+  return "";
+}
+
 export default function BirdDogPage() {
   const router = useRouter();
 
@@ -347,12 +523,18 @@ export default function BirdDogPage() {
   const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
   const [openError, setOpenError] = useState("");
   const [selectedInventorySlug, setSelectedInventorySlug] = useState("");
-  const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes">("tournaments");
+  const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes" | "coaches">("tournaments");
   const [menuOpen, setMenuOpen] = useState(false);
   const [queryStateApplied, setQueryStateApplied] = useState(false);
 
   const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
   const [viewingSchedule, setViewingSchedule] = useState<CoachSchedule | null>(null);
+  const [liveLocations, setLiveLocations] = useState<CoachLiveLocation[]>([]);
+  const [locationSharingEnabled, setLocationSharingEnabled] = useState(false);
+  const [locationStatus, setLocationStatus] = useState("");
+  const [coachFilterQuery, setCoachFilterQuery] = useState("");
+  const [coachFilterDate, setCoachFilterDate] = useState("");
+  const [coachFilterMeetMode, setCoachFilterMeetMode] = useState<"all" | "common" | "none">("all");
   const [scheduleForm, setScheduleForm] = useState({
     flightSource: "",
     flightDestination: "",
@@ -390,13 +572,16 @@ export default function BirdDogPage() {
 
   const [selectedGameId, setSelectedGameId] = useState("");
   const [pulseMessage, setPulseMessage] = useState("Pitcher change");
+  const [pulseStatus, setPulseStatus] = useState("");
 
   const [recorderState, setRecorderState] = useState<RecorderState>("idle");
   const [transcript, setTranscript] = useState("");
   const [speechSupported, setSpeechSupported] = useState(false);
+  const [recordingStatus, setRecordingStatus] = useState("");
   const [tournamentViewTitle, setTournamentViewTitle] = useState("");
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const pullStartYRef = useRef<number | null>(null);
@@ -406,15 +591,21 @@ export default function BirdDogPage() {
   useEffect(() => {
     let mounted = true;
     async function loadSession() {
-      const res = await fetch("/api/session/me");
-      if (!res.ok) {
+      try {
+        const res = await fetch("/api/session/me");
+        if (!res.ok) {
+          router.replace("/login");
+          return;
+        }
+        const data = await res.json();
+        if (!mounted) return;
+        setUser(data.user);
+      } catch {
+        if (!mounted) return;
         router.replace("/login");
-        return;
+      } finally {
+        if (mounted) setAuthLoading(false);
       }
-      const data = await res.json();
-      if (!mounted) return;
-      setUser(data.user);
-      setAuthLoading(false);
     }
 
     void loadSession();
@@ -424,6 +615,7 @@ export default function BirdDogPage() {
   }, [router]);
 
   useEffect(() => {
+    if (typeof window === "undefined" || typeof navigator === "undefined") return;
     setOnline(navigator.onLine);
     const onOnline = () => setOnline(true);
     const onOffline = () => setOnline(false);
@@ -439,20 +631,61 @@ export default function BirdDogPage() {
     if (!user) return;
     let mounted = true;
     async function boot() {
-      const res = await fetch("/api/harvest");
-      if (!res.ok) return;
-      const data = await res.json();
-      if (!mounted) return;
-      setCompanies(data.companies || ["PG", "PBR"]);
-      await loadCompanyData("PG");
-      await fetchJobs();
-      await fetchInventory();
-      await fetchSchedules();
+      loadCachedTournament();
+      try {
+        const overview = await loadHarvestOverview();
+        if (!mounted) return;
+        const nextCompanies: ("PG" | "PBR")[] = overview.companies?.length
+          ? overview.companies
+          : ["PG", "PBR"];
+        setCompanies(nextCompanies);
+
+        const defaultCompany: "PG" | "PBR" = nextCompanies[0] || "PG";
+        await Promise.allSettled([
+          loadCompanyData(defaultCompany),
+          fetchJobs(),
+          fetchInventory(),
+          fetchSchedules(),
+          fetchLiveLocations()
+        ]);
+      } catch {
+        if (!mounted) return;
+        setCompanies(["PG", "PBR"]);
+      }
     }
     void boot();
     return () => {
       mounted = false;
     };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const saved = safeLocalGet(`${COACH_LOCATION_SHARING_KEY}:${user.userId}`);
+    setLocationSharingEnabled(saved === "1");
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    safeLocalSet(`${COACH_LOCATION_SHARING_KEY}:${user.userId}`, locationSharingEnabled ? "1" : "0");
+  }, [locationSharingEnabled, user]);
+
+  useEffect(() => {
+    if (!user || !locationSharingEnabled) return;
+    void pingCurrentLocation();
+    const id = window.setInterval(() => {
+      void pingCurrentLocation();
+    }, 60_000);
+    return () => window.clearInterval(id);
+  }, [locationSharingEnabled, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    void fetchLiveLocations();
+    const id = window.setInterval(() => {
+      void fetchLiveLocations();
+    }, 45_000);
+    return () => window.clearInterval(id);
   }, [user]);
 
   useEffect(() => {
@@ -462,7 +695,7 @@ export default function BirdDogPage() {
     const tab = params.get("tab");
     const inventorySlug = params.get("inventorySlug");
     const tournamentId = params.get("tournamentId");
-    if (tab === "tournaments" || tab === "schedule" || tab === "notes") {
+    if (tab === "tournaments" || tab === "schedule" || tab === "notes" || tab === "coaches") {
       setActiveTab(tab);
     }
     if (inventorySlug) {
@@ -478,6 +711,15 @@ export default function BirdDogPage() {
     const ctor = (window as unknown as { SpeechRecognition?: BrowserSpeechConstructor; webkitSpeechRecognition?: BrowserSpeechConstructor }).SpeechRecognition
       || (window as unknown as { webkitSpeechRecognition?: BrowserSpeechConstructor }).webkitSpeechRecognition;
     setSpeechSupported(Boolean(ctor));
+  }, []);
+
+  useEffect(() => () => {
+    speechRecognitionRef.current?.stop();
+    speechRecognitionRef.current = null;
+    mediaRecorderRef.current?.stop();
+    mediaRecorderRef.current = null;
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -539,31 +781,40 @@ export default function BirdDogPage() {
 
   useEffect(() => {
     if (!user) return;
-    const rawWatch = localStorage.getItem(makeOrgKey(user.orgId, user.userId, "watchlist"));
-    const rawNotes = localStorage.getItem(makeOrgKey(user.orgId, user.userId, "notes"));
-    const rawPulses = localStorage.getItem(makeOrgKey(user.orgId, user.userId, "pulses"));
-    const rawSync = localStorage.getItem(makeOrgKey(user.orgId, user.userId, "lastSyncAt"));
+    const rawWatch = safeLocalGet(makeOrgKey(user.orgId, user.userId, "watchlist"));
+    const rawNotes = safeLocalGet(makeOrgKey(user.orgId, user.userId, "notes"));
+    const rawPulses = safeLocalGet(makeOrgKey(user.orgId, user.userId, "pulses"));
+    const rawSync = safeLocalGet(makeOrgKey(user.orgId, user.userId, "lastSyncAt"));
 
-    setWatchlist(rawWatch ? JSON.parse(rawWatch) : []);
-    setNotes(rawNotes ? JSON.parse(rawNotes) : []);
-    setPulses(rawPulses ? JSON.parse(rawPulses) : []);
+    const parsedWatch = parseJsonSafe<unknown>(rawWatch, []);
+    const parsedNotes = parseJsonSafe<unknown>(rawNotes, []);
+    const parsedPulses = parseJsonSafe<unknown>(rawPulses, []);
+
+    setWatchlist(Array.isArray(parsedWatch) ? parsedWatch as string[] : []);
+    setNotes(Array.isArray(parsedNotes) ? parsedNotes as ScoutNote[] : []);
+    setPulses(Array.isArray(parsedPulses) ? parsedPulses as PulseEvent[] : []);
     setLastSyncAt(rawSync || null);
   }, [user]);
 
   useEffect(() => {
     if (!user) return;
-    localStorage.setItem(makeOrgKey(user.orgId, user.userId, "watchlist"), JSON.stringify(watchlist));
+    safeLocalSet(makeOrgKey(user.orgId, user.userId, "watchlist"), JSON.stringify(watchlist));
   }, [user, watchlist]);
 
   useEffect(() => {
     if (!user) return;
-    localStorage.setItem(makeOrgKey(user.orgId, user.userId, "notes"), JSON.stringify(notes));
+    safeLocalSet(makeOrgKey(user.orgId, user.userId, "notes"), JSON.stringify(notes));
   }, [user, notes]);
 
   useEffect(() => {
     if (!user) return;
-    localStorage.setItem(makeOrgKey(user.orgId, user.userId, "pulses"), JSON.stringify(pulses));
+    safeLocalSet(makeOrgKey(user.orgId, user.userId, "pulses"), JSON.stringify(pulses));
   }, [user, pulses]);
+
+  useEffect(() => {
+    if (!user || !selectedTournament) return;
+    cacheTournamentOffline();
+  }, [company, selectedTournament, user]);
 
   useEffect(() => {
     if (!online || !user) return;
@@ -581,35 +832,35 @@ export default function BirdDogPage() {
     }
   }, []);
 
-  async function loadCompanyData(nextCompany: "PG" | "PBR") {
+  async function loadCompanyData(nextCompany: "PG" | "PBR", forceRefresh = false) {
     setLoadingHarvest(true);
     try {
-      const res = await fetch(`/api/harvest?company=${nextCompany}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      const nextTournaments: Tournament[] = data?.dataset?.tournaments || [];
+      const dataset = await loadHarvestDataset(nextCompany, forceRefresh);
+      const nextTournaments: Tournament[] = dataset.tournaments || [];
       setCompany(nextCompany);
       setTournaments(nextTournaments);
       setSelectedTournamentId(nextTournaments[0]?.id || "");
       if (nextTournaments[0]?.id) {
-        await loadTournamentDetails(nextCompany, nextTournaments[0].id);
+        await loadTournamentDetails(nextCompany, nextTournaments[0].id, forceRefresh);
       } else {
         setSelectedGameId("");
       }
+    } catch {
+      // Keep existing tournament state when data is temporarily unavailable.
     } finally {
       setLoadingHarvest(false);
     }
   }
 
-  async function loadTournamentDetails(nextCompany: "PG" | "PBR", nextTournamentId: string) {
-    const res = await fetch(`/api/harvest?company=${nextCompany}&tournamentId=${nextTournamentId}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    if (!data?.tournament) return;
-
-    setTournaments((prev) => prev.map((item) => (item.id === nextTournamentId ? data.tournament : item)));
-    setSelectedTournamentId(nextTournamentId);
-    setSelectedGameId(data.tournament.games?.[0]?.id || "");
+  async function loadTournamentDetails(nextCompany: "PG" | "PBR", nextTournamentId: string, forceRefresh = false) {
+    try {
+      const tournament = await loadHarvestTournament(nextCompany, nextTournamentId, forceRefresh);
+      setTournaments((prev) => prev.map((item) => (item.id === nextTournamentId ? tournament : item)));
+      setSelectedTournamentId(nextTournamentId);
+      setSelectedGameId(tournament.games?.[0]?.id || "");
+    } catch {
+      // Keep existing shallow tournament record.
+    }
   }
 
   async function fetchJobs() {
@@ -636,6 +887,7 @@ export default function BirdDogPage() {
 
   async function refreshTournamentByInventory(item: InventoryTournament) {
     try {
+      const targetTournamentId = await resolveTournamentIdForItem(item);
       const harvestHint = item.harvestHint || item.name;
       const liveOpen = await fetch("/api/harvest/open", {
         method: "POST",
@@ -643,7 +895,8 @@ export default function BirdDogPage() {
         body: JSON.stringify({
           company: item.company,
           inventorySlug: item.slug,
-          tournamentHint: harvestHint
+          tournamentHint: harvestHint,
+          tournamentId: targetTournamentId || undefined
         })
       });
       if (!liveOpen.ok) return;
@@ -659,6 +912,26 @@ export default function BirdDogPage() {
       setTournamentViewTitle(openedTournament.name);
     } catch (error) {
       setOpenError(String(error));
+    }
+  }
+
+  async function resolveTournamentIdForItem(item: InventoryTournament) {
+    const wanted = normalizeTournamentName(item.name);
+    const byCurrentState = tournaments.find((t) => {
+      const name = normalizeTournamentName(t.name);
+      return name === wanted || name.includes(wanted) || wanted.includes(name);
+    })?.id;
+    if (byCurrentState) return byCurrentState;
+
+    try {
+      const dataset = await loadHarvestDataset(item.company);
+      const match = dataset.tournaments.find((t) => {
+        const name = normalizeTournamentName(t.name);
+        return name === wanted || name.includes(wanted) || wanted.includes(name);
+      });
+      return match?.id || "";
+    } catch {
+      return "";
     }
   }
 
@@ -759,6 +1032,61 @@ export default function BirdDogPage() {
     const scheduleList: CoachSchedule[] = data.schedules || [];
     setSchedules(scheduleList);
     hydrateMySchedule(scheduleList);
+  }
+
+  async function fetchLiveLocations() {
+    const res = await fetch("/api/location", { cache: "no-store" });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => ({}));
+    const rows = Array.isArray(data?.locations) ? data.locations as Array<Record<string, unknown>> : [];
+    const normalized = rows.map((row) => ({
+      id: String(row?.id || ""),
+      org_id: String(row?.org_id || ""),
+      user_id: String(row?.user_id || ""),
+      coach_name: String(row?.coach_name || ""),
+      latitude: Number(row?.latitude || 0),
+      longitude: Number(row?.longitude || 0),
+      accuracy_meters: row?.accuracy_meters == null ? null : Number(row.accuracy_meters),
+      captured_at: String(row?.captured_at || ""),
+      updated_at: String(row?.updated_at || "")
+    })) as CoachLiveLocation[];
+    setLiveLocations(normalized.filter((row) => row.user_id && Number.isFinite(row.latitude) && Number.isFinite(row.longitude)));
+  }
+
+  async function pingCurrentLocation() {
+    if (!navigator.geolocation) {
+      setLocationStatus("Live location unsupported in this browser.");
+      return;
+    }
+    const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: true,
+        timeout: 9000,
+        maximumAge: 20000
+      });
+    }).catch(() => null);
+    if (!position) {
+      setLocationStatus("Location permission denied or unavailable.");
+      return;
+    }
+
+    const payload = {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracyMeters: position.coords.accuracy
+    };
+    const res = await fetch("/api/location", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setLocationStatus(body?.error || `Location update failed (${res.status})`);
+      return;
+    }
+    setLocationStatus(`Live location synced at ${new Date().toLocaleTimeString()}.`);
+    await fetchLiveLocations();
   }
 
   function createGeneratedPlan(): PlanItem[] {
@@ -905,6 +1233,7 @@ export default function BirdDogPage() {
   }
 
   function openScheduleView(schedule: CoachSchedule) {
+    setActiveTab("coaches");
     setViewingSchedule(schedule);
   }
 
@@ -923,14 +1252,10 @@ export default function BirdDogPage() {
     params.set("teamUrl", team.href || "");
     params.set("eventId", currentEventNumber());
     params.set("tournamentName", selectedTournament?.name || tournamentViewTitle || "");
-    params.set("tournamentIcon", tournamentIconByName(selectedTournament?.name || tournamentViewTitle || team.name));
     params.set("returnTab", "notes");
     params.set("returnInventorySlug", selectedInventorySlug);
     params.set("returnTournamentId", selectedTournamentId);
-    const opened = window.open(`/bird-dog/team?${params.toString()}`, "_blank", "noopener,noreferrer");
-    if (!opened) {
-      router.push(`/bird-dog/team?${params.toString()}`);
-    }
+    router.push(`/bird-dog/team?${params.toString()}`);
   }
 
   function downloadPdfLikeReport(title: string, headers: string[], rows: string[][]) {
@@ -1022,6 +1347,7 @@ export default function BirdDogPage() {
     setCompany(item.company);
     setJobHint(item.name);
     try {
+      const targetTournamentId = await resolveTournamentIdForItem(item);
       const harvestHint = item.harvestHint || item.name;
       const liveOpen = await fetch("/api/harvest/open", {
         method: "POST",
@@ -1029,11 +1355,23 @@ export default function BirdDogPage() {
         body: JSON.stringify({
           company: item.company,
           inventorySlug: item.slug,
-          tournamentHint: harvestHint
+          tournamentHint: harvestHint,
+          tournamentId: targetTournamentId || undefined
         })
       });
       if (!liveOpen.ok) {
         const data = await liveOpen.json().catch(() => ({}));
+        if (liveOpen.status === 409 && item.company === "PG") {
+          await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
+          const pgUrl = perfectGameUrlForItem(item);
+          const popup = window.open(pgUrl, "_blank", "noopener,noreferrer");
+          if (!popup) {
+            setOpenError("Tournament data is not imported yet, and popup was blocked. Please allow popups and tap again.");
+            return;
+          }
+          setOpenError("Tournament data is not imported yet. Opened the Perfect Game page in a new tab.");
+          return;
+        }
         throw new Error(data?.error || "Unable to load tournament details");
       }
       const data = await liveOpen.json();
@@ -1052,7 +1390,7 @@ export default function BirdDogPage() {
     } catch (error) {
       setOpenError(error instanceof Error ? error.message : "Failed to open tournament.");
       await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
-      await loadCompanyData(item.company);
+      await loadCompanyData(item.company, true);
     } finally {
       setOpeningSlug("");
     }
@@ -1060,7 +1398,7 @@ export default function BirdDogPage() {
 
   function cacheTournamentOffline() {
     if (!selectedTournament || !user) return;
-    localStorage.setItem(
+    safeLocalSet(
       `${CACHE_KEY}:${user.orgId}`,
       JSON.stringify({
         cachedAt: new Date().toISOString(),
@@ -1072,13 +1410,17 @@ export default function BirdDogPage() {
 
   function loadCachedTournament() {
     if (!user) return;
-    const raw = localStorage.getItem(`${CACHE_KEY}:${user.orgId}`);
+    const raw = safeLocalGet(`${CACHE_KEY}:${user.orgId}`);
     if (!raw) return;
-    const parsed = JSON.parse(raw) as { company: "PG" | "PBR"; tournament: Tournament };
-    setCompany(parsed.company);
-    setTournaments([parsed.tournament]);
-    setSelectedTournamentId(parsed.tournament.id);
-    setSelectedGameId(parsed.tournament.games[0]?.id || "");
+    try {
+      const parsed = JSON.parse(raw) as { company: "PG" | "PBR"; tournament: Tournament };
+      setCompany(parsed.company);
+      setTournaments([parsed.tournament]);
+      setSelectedTournamentId(parsed.tournament.id);
+      setSelectedGameId(parsed.tournament.games[0]?.id || "");
+    } catch {
+      safeLocalRemove(`${CACHE_KEY}:${user.orgId}`);
+    }
   }
 
   function toggleWatch(playerId: string) {
@@ -1111,50 +1453,108 @@ export default function BirdDogPage() {
       },
       ...prev
     ]);
+    setPulseStatus(`Pulse sent at ${new Date().toLocaleTimeString()}.`);
   }
 
   async function startRecording() {
     if (recorderState === "recording") return;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const recorder = new MediaRecorder(stream);
-    audioChunksRef.current = [];
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) audioChunksRef.current.push(event.data);
-    };
-    recorder.start();
-    mediaRecorderRef.current = recorder;
-
-    const ctor = (window as unknown as { SpeechRecognition?: BrowserSpeechConstructor; webkitSpeechRecognition?: BrowserSpeechConstructor }).SpeechRecognition
-      || (window as unknown as { webkitSpeechRecognition?: BrowserSpeechConstructor }).webkitSpeechRecognition;
-
-    if (ctor) {
-      const recognition = new ctor();
-      recognition.lang = "en-US";
-      recognition.interimResults = true;
-      recognition.continuous = true;
-      recognition.onresult = (event) => {
-        let live = "";
-        for (let i = 0; i < event.results.length; i += 1) {
-          live += `${event.results[i][0].transcript} `;
-        }
-        setTranscript(live.trim());
-      };
-      recognition.start();
-      speechRecognitionRef.current = recognition;
+    if (!selectedGameId) {
+      setRecordingStatus("Select a game first, then start recording.");
+      return;
     }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      const mimeType = chooseRecorderMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 128000 })
+        : new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+      recorder.onerror = () => {
+        setRecordingStatus("Recording failed. Check microphone access and retry.");
+      };
+      recorder.start(500);
+      mediaRecorderRef.current = recorder;
 
-    setRecorderState("recording");
+      const ctor = (window as unknown as { SpeechRecognition?: BrowserSpeechConstructor; webkitSpeechRecognition?: BrowserSpeechConstructor }).SpeechRecognition
+        || (window as unknown as { webkitSpeechRecognition?: BrowserSpeechConstructor }).webkitSpeechRecognition;
+
+      if (ctor) {
+        try {
+          const recognition = new ctor();
+          recognition.lang = "en-US";
+          recognition.interimResults = true;
+          recognition.continuous = true;
+          recognition.onresult = (event) => {
+            let live = "";
+            for (let i = 0; i < event.results.length; i += 1) {
+              live += `${event.results[i][0].transcript} `;
+            }
+            setTranscript(live.trim());
+          };
+          recognition.onerror = () => {
+            setRecordingStatus("Audio is recording, but speech-to-text is unavailable in this browser.");
+          };
+          recognition.onend = () => {
+            if (speechRecognitionRef.current === recognition) speechRecognitionRef.current = null;
+          };
+          recognition.start();
+          speechRecognitionRef.current = recognition;
+        } catch {
+          setRecordingStatus("Audio recording started. Speech-to-text is unavailable.");
+        }
+      } else {
+        setRecordingStatus("Audio recording started. Speech-to-text is unavailable.");
+      }
+
+      setRecorderState("recording");
+      setRecordingStatus("Recording...");
+    } catch {
+      setRecordingStatus("Microphone permission blocked. Allow access in Safari and try again.");
+    }
   }
 
   async function stopRecording() {
     if (recorderState !== "recording") return;
-    mediaRecorderRef.current?.stop();
-    mediaRecorderRef.current?.stream.getTracks().forEach((track) => track.stop());
-    speechRecognitionRef.current?.stop();
-    setRecorderState("idle");
+    const recorder = mediaRecorderRef.current;
+    const stream = mediaStreamRef.current;
+    if (!recorder) {
+      setRecorderState("idle");
+      setRecordingStatus("Recorder was not active.");
+      return;
+    }
+    const stoppedBlob = new Promise<Blob | null>((resolve) => {
+      recorder.addEventListener("stop", () => {
+        const mime = recorder.mimeType || "audio/webm";
+        const blob = audioChunksRef.current.length
+          ? new Blob(audioChunksRef.current, { type: mime })
+          : null;
+        resolve(blob);
+      }, { once: true });
+    });
 
-    const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-    const audioDataUrl = await blobToDataUrl(blob);
+    recorder.stop();
+    stream?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+    mediaRecorderRef.current = null;
+    speechRecognitionRef.current?.stop();
+    speechRecognitionRef.current = null;
+    setRecorderState("idle");
+    const blob = await stoppedBlob;
+    if (!blob || blob.size < 1024) {
+      setRecordingStatus("No usable audio captured. Please retry and speak clearly.");
+      return;
+    }
+    let audioDataUrl = "";
+    try {
+      audioDataUrl = await blobToDataUrl(blob);
+    } catch {
+      setRecordingStatus("Could not process audio file. Please retry.");
+      return;
+    }
     if (!selectedGameId) return;
 
     setNotes((prev) => [
@@ -1168,6 +1568,7 @@ export default function BirdDogPage() {
       },
       ...prev
     ]);
+    setRecordingStatus("Note saved.");
     setTranscript("");
   }
 
@@ -1199,7 +1600,7 @@ export default function BirdDogPage() {
       setPulses((prev) => prev.map((p) => (pulseIds.has(p.id) ? { ...p, synced: true } : p)));
       const nowIso = new Date().toISOString();
       setLastSyncAt(nowIso);
-      localStorage.setItem(makeOrgKey(user.orgId, user.userId, "lastSyncAt"), nowIso);
+      safeLocalSet(makeOrgKey(user.orgId, user.userId, "lastSyncAt"), nowIso);
     } finally {
       setSyncing(false);
     }
@@ -1230,9 +1631,51 @@ export default function BirdDogPage() {
       `${team.name} ${team.from || ""} ${team.record || ""}`.toLowerCase().includes(query)
     );
   }, [selectedTournament?.teams, teamsSearchQuery]);
+  const myCoachSchedule = useMemo(
+    () => schedules.find((item) => item.user_id === user?.userId) || null,
+    [schedules, user?.userId]
+  );
+  const liveByUserId = useMemo(() => new Map(liveLocations.map((item) => [item.user_id, item])), [liveLocations]);
+  const otherCoachSchedules = useMemo(
+    () => schedules.filter((item) => item.user_id !== user?.userId),
+    [schedules, user?.userId]
+  );
+  const coachMeetSuggestionById = useMemo(() => {
+    const map = new Map<string, CoachMeetSuggestion>();
+    for (const item of otherCoachSchedules) {
+      const suggestion = buildCoachMeetSuggestion(
+        myCoachSchedule,
+        item,
+        user ? (liveByUserId.get(user.userId) || null) : null,
+        liveByUserId.get(item.user_id) || null
+      );
+      map.set(item.id, suggestion);
+    }
+    return map;
+  }, [liveByUserId, myCoachSchedule, otherCoachSchedules, user]);
+  const filteredCoachSchedules = useMemo(() => {
+    const query = coachFilterQuery.trim().toLowerCase();
+    const dateFilter = coachFilterDate.trim();
+    return otherCoachSchedules.filter((item) => {
+      if (query) {
+        const blob = `${item.coach_name} ${item.coach_email || ""} ${item.flight_source || ""} ${item.flight_destination || ""}`;
+        if (!blob.toLowerCase().includes(query)) return false;
+      }
+      if (dateFilter) {
+        const sourceDate = item.flight_arrival_time || item.generated_plan?.[0]?.at || "";
+        if (!sourceDate || Number.isNaN(Date.parse(sourceDate))) return false;
+        if (new Date(sourceDate).toISOString().slice(0, 10) !== dateFilter) return false;
+      }
+      const suggestion = coachMeetSuggestionById.get(item.id);
+      if (coachFilterMeetMode === "common" && suggestion?.kind === "none") return false;
+      if (coachFilterMeetMode === "none" && suggestion?.kind !== "none") return false;
+      return true;
+    });
+  }, [coachFilterDate, coachFilterMeetMode, coachFilterQuery, coachMeetSuggestionById, otherCoachSchedules]);
   const showTournaments = activeTab === "tournaments";
-  const showSchedule = activeTab === "schedule" && canAccessLockedPages;
-  const showNotes = activeTab === "notes" && canAccessLockedPages;
+  const showSchedule = activeTab === "schedule";
+  const showNotes = activeTab === "notes";
+  const showCoaches = activeTab === "coaches";
   const orgPrimary = user?.orgPrimary || "#1f3a5f";
   const orgAccent = user?.orgAccent || "#d7a316";
   const bgValue = "#f9f8f4";
@@ -1265,10 +1708,10 @@ export default function BirdDogPage() {
       onTouchMove={onPullMove}
       onTouchEnd={onPullEnd}
     >
-      <div className="top-menu">
+      <section className="top-menu">
         <button
+          className="secondary menu-trigger"
           type="button"
-          className="menu-trigger secondary"
           aria-label="Open navigation menu"
           onClick={() => setMenuOpen((prev) => !prev)}
         >
@@ -1276,64 +1719,68 @@ export default function BirdDogPage() {
         </button>
         {menuOpen ? (
           <div className="menu-dropdown">
-            {user?.orgLogoUrl ? (
-              <div className="menu-brand">
-                <img src={user.orgLogoUrl} alt={user.orgName || "University"} />
-              </div>
-            ) : null}
             <button
-              className={activeTab === "tournaments" ? "active" : ""}
               type="button"
+              className={activeTab === "tournaments" ? "active" : ""}
               onClick={() => {
                 setActiveTab("tournaments");
                 setMenuOpen(false);
               }}
             >
-              Tournaments
+              Tournament Dashboard
             </button>
             <button
-              className={activeTab === "schedule" ? "active" : ""}
               type="button"
-              disabled={!canAccessLockedPages}
-              onClick={() => {
-                setActiveTab("schedule");
-                setMenuOpen(false);
-              }}
-            >
-              Schedule
-            </button>
-            <button
               className={activeTab === "notes" ? "active" : ""}
-              type="button"
-              disabled={!canAccessLockedPages}
               onClick={() => {
                 setActiveTab("notes");
                 setMenuOpen(false);
               }}
             >
-              Notes
+              Tournament Roster
             </button>
             <button
               type="button"
-              className="danger"
+              className={activeTab === "schedule" ? "active" : ""}
               onClick={() => {
+                setActiveTab("schedule");
                 setMenuOpen(false);
-                void logout();
               }}
             >
-              Log Out
+              My Schedule
+            </button>
+            <button
+              type="button"
+              className={activeTab === "coaches" ? "active" : ""}
+              onClick={() => {
+                setActiveTab("coaches");
+                setMenuOpen(false);
+                void fetchSchedules();
+              }}
+            >
+              View Coaches Schedules
             </button>
           </div>
         ) : null}
-      </div>
+      </section>
 
-      {!canAccessLockedPages && (activeTab === "schedule" || activeTab === "notes") ? (
-        <section className="panel">
-          <h2>Tournament Locked</h2>
-          <p className="muted">Subscribe and unlock a tournament from the dashboard first. Schedule and Notes become available only after unlock.</p>
-          <button className="secondary" onClick={() => setActiveTab("tournaments")}>Back to Dashboard</button>
-        </section>
-      ) : null}
+      <section className="panel">
+        <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <h2>
+            {showTournaments ? "Tournament Dashboard" : showNotes ? "Tournament Roster" : showSchedule ? "My Schedule" : "View Coaches Schedules"}
+          </h2>
+          <button className="secondary" onClick={() => void logout()}>Log Out</button>
+        </div>
+        <p className="muted">
+          {showTournaments
+            ? "Click any tournament to open participating teams."
+            : showNotes
+              ? "Open team roster and schedule details."
+              : showSchedule
+                ? "Build and save your own travel schedule."
+                : "See other coaches schedules in your organization."}
+        </p>
+      </section>
 
       {showSchedule ? (
       <section className="panel grid2">
@@ -1525,6 +1972,135 @@ export default function BirdDogPage() {
         </section>
       ) : null}
 
+      {showCoaches ? (
+        <section className="panel">
+          <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <h2>Coach Schedule Board</h2>
+            <div className="row wrap">
+              <button className="secondary" onClick={() => void fetchSchedules()}>Refresh Schedules</button>
+              <button className="secondary" onClick={() => void fetchLiveLocations()}>Refresh Live Map</button>
+            </div>
+          </div>
+          <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
+          <div className="panel" style={{ marginTop: 8, background: "#f8f5ec" }}>
+            <div className="row wrap">
+              <label>
+                Search Coach
+                <input
+                  value={coachFilterQuery}
+                  onChange={(e) => setCoachFilterQuery(e.target.value)}
+                  placeholder="Search coach, email, route"
+                />
+              </label>
+              <label>
+                Filter Date
+                <input
+                  type="date"
+                  value={coachFilterDate}
+                  onChange={(e) => setCoachFilterDate(e.target.value)}
+                />
+              </label>
+              <label>
+                Meet Status
+                <select
+                  value={coachFilterMeetMode}
+                  onChange={(e) => setCoachFilterMeetMode(e.target.value as "all" | "common" | "none")}
+                >
+                  <option value="all">All</option>
+                  <option value="common">Common/Midpoint only</option>
+                  <option value="none">No common point only</option>
+                </select>
+              </label>
+            </div>
+            <div className="row wrap" style={{ marginTop: 8 }}>
+              <label className="row" style={{ gap: 8, marginRight: 10 }}>
+                <input
+                  type="checkbox"
+                  checked={locationSharingEnabled}
+                  onChange={(e) => setLocationSharingEnabled(e.target.checked)}
+                />
+                Share my live location continuously
+              </label>
+              <button className="secondary" onClick={() => void pingCurrentLocation()}>Sync My Location Now</button>
+            </div>
+            {locationStatus ? <p className="muted" style={{ marginTop: 6 }}>{locationStatus}</p> : null}
+          </div>
+          {filteredCoachSchedules.length ? (
+            <div className="table-wrap">
+              <table className="roster-table">
+                <thead>
+                  <tr>
+                    <th>Coach</th>
+                    <th>Email</th>
+                    <th>Live Location</th>
+                    <th>Middle Location</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredCoachSchedules.map((item) => {
+                    const live = liveByUserId.get(item.user_id) || null;
+                    const meet = coachMeetSuggestionById.get(item.id) || {
+                      kind: "none",
+                      label: "No common point",
+                      detail: "No shared location/time window found yet."
+                    };
+                    const liveAgeMinutes = live?.captured_at
+                      ? Math.max(0, Math.round((Date.now() - Date.parse(live.captured_at)) / 60000))
+                      : null;
+                    return (
+                    <tr key={item.id}>
+                      <td>{item.coach_name}</td>
+                      <td>{item.coach_email || "-"}</td>
+                      <td>
+                        {live ? (
+                          <div>
+                            <p className="small" style={{ margin: 0 }}>
+                              {live.latitude.toFixed(4)}, {live.longitude.toFixed(4)}
+                            </p>
+                            <p className="small" style={{ margin: 0 }}>
+                              {liveAgeMinutes != null ? `${liveAgeMinutes} min ago` : "just now"}
+                            </p>
+                            <a
+                              href={`https://www.google.com/maps/search/?api=1&query=${live.latitude},${live.longitude}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="small"
+                            >
+                              Open Map
+                            </a>
+                          </div>
+                        ) : (
+                          <span className="small">Location unavailable</span>
+                        )}
+                      </td>
+                      <td>
+                        <p className="small" style={{ margin: 0 }}><strong>{meet.label}</strong></p>
+                        <p className="small" style={{ margin: 0 }}>{meet.detail}</p>
+                        {meet.mapUrl ? (
+                          <a href={meet.mapUrl} target="_blank" rel="noopener noreferrer" className="small">
+                            Open Meet Point
+                          </a>
+                        ) : null}
+                      </td>
+                      <td className="action-cell">
+                        <button className="secondary" onClick={() => openScheduleView(item)}>View Schedule</button>
+                      </td>
+                    </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="muted">No other coach schedules match current filters.</p>
+          )}
+          <div className="row wrap">
+            <button className="secondary" onClick={() => setActiveTab("schedule")}>Go to My Schedule</button>
+          </div>
+        </section>
+      ) : null}
+
       {showTournaments ? (
       <section className="panel">
         <h2>Tournament Dashboard</h2>
@@ -1547,7 +2123,6 @@ export default function BirdDogPage() {
                 }}
               >
                 {tournamentDateBadge(item.name, item.displayDate) ? <p className="tile-date">{tournamentDateBadge(item.name, item.displayDate)}</p> : null}
-                <img className="tile-icon" src={tournamentIconByName(item.name)} alt={item.name} />
                 <p className="tile-title"><strong>{item.name}</strong></p>
                 <p className="muted">{item.season.toUpperCase()} · {item.company}</p>
                 {item.displayCity ? <p className="small">{item.displayCity}</p> : null}
@@ -1563,7 +2138,7 @@ export default function BirdDogPage() {
       ) : null}
 
       {showNotes ? (
-      <section className="panel">
+      <section className="panel" id="teams-roster-section">
         <div style={{ width: "100%" }}>
           <h2>Participating Teams</h2>
           <p className="muted">Teams in tournament: {selectedTournament?.teams?.length || 0}</p>
@@ -1628,6 +2203,100 @@ export default function BirdDogPage() {
       ) : null}
 
       {showNotes ? (
+      <section className="thumb-dock" aria-label="Quick Actions">
+        <button
+          type="button"
+          className={recorderState === "recording" ? "danger" : ""}
+          onClick={() => {
+            if (recorderState === "recording") {
+              void stopRecording();
+              return;
+            }
+            void startRecording();
+          }}
+        >
+          {recorderState === "recording" ? "Stop Mic" : "Mic"}
+        </button>
+        <button
+          type="button"
+          className="pulse"
+          disabled={!selectedGameId || !pulseMessage.trim()}
+          onClick={sendPulse}
+        >
+          Pulse
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => {
+            const el = document.getElementById("teams-roster-section");
+            el?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
+        >
+          Roster
+        </button>
+      </section>
+      ) : null}
+
+      {showNotes ? (
+      <section className="panel">
+        <h2>Scout Cockpit</h2>
+        <label>
+          Active Game
+          <select value={selectedGameId} onChange={(e) => setSelectedGameId(e.target.value)}>
+            {games.length ? games.map((game) => (
+              <option key={game.id} value={game.id}>
+                {`${timeLabel(game.startTime)} - ${game.homeTeam} vs ${game.awayTeam} @ ${game.field}`}
+              </option>
+            )) : <option value="">No games loaded</option>}
+          </select>
+        </label>
+        <div className="pulse-box">
+          <input
+            value={pulseMessage}
+            onChange={(e) => setPulseMessage(e.target.value)}
+            placeholder="Pitcher change, rain delay, field switch..."
+          />
+          <button
+            type="button"
+            className="pulse"
+            disabled={!selectedGameId || !pulseMessage.trim()}
+            onClick={sendPulse}
+          >
+            Send Pulse
+          </button>
+        </div>
+        {pulseStatus ? <p className="muted">{pulseStatus}</p> : null}
+
+        <h3 style={{ marginBottom: 8 }}>Active Watchlist (Must-See)</h3>
+        <div className="player-grid">
+          {players.length ? players.map((player) => {
+            const active = watchlistSet.has(player.id);
+            const schoolTheme = schoolColorPair(player.school || player.name);
+            return (
+              <button
+                key={player.id}
+                type="button"
+                className={`player-card ${active ? "active" : ""}`}
+                onClick={() => toggleWatch(player.id)}
+                style={active ? {
+                  borderColor: schoolTheme.primary,
+                  boxShadow: `inset 0 0 0 2px ${schoolTheme.accent}`,
+                  background: `linear-gradient(180deg, #ffffff 0%, ${alphaColor(schoolTheme.accent, 0.18)} 100%)`
+                } : undefined}
+              >
+                <strong>{player.name}</strong>
+                <small>{player.school || "Unknown Team"}</small>
+                <span>{player.position || "-"}</span>
+                <span>{active ? "Must-See" : "Tap to mark Must-See"}</span>
+              </button>
+            );
+          }) : <p className="muted">No players loaded yet.</p>}
+        </div>
+      </section>
+      ) : null}
+
+      {showNotes ? (
       <section className="panel grid2">
         <div>
           <h2>Hands-Free Notes</h2>
@@ -1643,6 +2312,7 @@ export default function BirdDogPage() {
             <textarea rows={5} value={transcript} onChange={(e) => setTranscript(e.target.value)} placeholder="Transcript appears here." />
           </label>
           {!speechSupported ? <p className="muted">Speech recognition is not available in this browser. Audio capture still works.</p> : null}
+          {recordingStatus ? <p className="muted">{recordingStatus}</p> : null}
         </div>
 
         <div>
@@ -1673,7 +2343,7 @@ export default function BirdDogPage() {
                 <p key={note.id} className="small">{timeLabel(note.createdAt)} - {note.transcript}</p>
               ))}
             </article>
-          )) : <p className="muted">No player notes yet for this tournament.</p>}
+          )) : null}
         </div>
       </section>
       ) : null}

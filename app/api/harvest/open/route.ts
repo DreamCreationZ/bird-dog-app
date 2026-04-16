@@ -7,6 +7,25 @@ function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function extractHintCandidates(tournamentHint: string) {
+  const candidates = [tournamentHint];
+
+  try {
+    const url = new URL(tournamentHint);
+    const search = url.searchParams.get("search");
+    if (search) candidates.push(search);
+
+    const event = url.searchParams.get("event");
+    if (event) candidates.push(`pg ${event}`);
+  } catch {
+    // tournamentHint can be plain text, not always URL.
+  }
+
+  return candidates
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export async function POST(req: NextRequest) {
   const session = readSessionFromRequest(req);
   if (!session) {
@@ -19,8 +38,8 @@ export async function POST(req: NextRequest) {
   const tournamentHint = String(body?.tournamentHint || "").trim();
   const tournamentId = String(body?.tournamentId || "").trim();
 
-  if (!inventorySlug || !tournamentHint) {
-    return NextResponse.json({ error: "inventorySlug and tournamentHint are required" }, { status: 400 });
+  if (!inventorySlug || (!tournamentHint && !tournamentId)) {
+    return NextResponse.json({ error: "inventorySlug and tournamentHint or tournamentId are required" }, { status: 400 });
   }
 
   const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
@@ -46,10 +65,14 @@ export async function POST(req: NextRequest) {
       }
 
       const all = await listHarvestedTournaments(session.orgId, company);
-      const wanted = normalize(tournamentHint);
-      const found = all.find((t) => normalize(t.name) === wanted)
-        || all.find((t) => normalize(t.name).includes(wanted))
-        || all.find((t) => wanted.includes(normalize(t.name)));
+      const wantedList = extractHintCandidates(tournamentHint).map(normalize).filter(Boolean);
+      const found = wantedList
+        .map((wanted) =>
+          all.find((t) => normalize(t.name) === wanted)
+          || all.find((t) => normalize(t.name).includes(wanted))
+          || all.find((t) => wanted.includes(normalize(t.name)))
+        )
+        .find((item) => Boolean(item));
 
       if (found) {
         const hydrated = await getHarvestedTournament(session.orgId, found.id);

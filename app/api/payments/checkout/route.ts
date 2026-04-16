@@ -12,6 +12,14 @@ function required(name: string): string {
   return value;
 }
 
+function resolveAppUrl(req: NextRequest): string {
+  const configured = process.env.APP_BASE_URL?.trim();
+  if (configured) {
+    return configured.replace(/\/$/, "");
+  }
+  return req.nextUrl.origin;
+}
+
 export async function POST(req: NextRequest) {
   const session = readSessionFromRequest(req);
   if (!session) {
@@ -40,7 +48,7 @@ export async function POST(req: NextRequest) {
     }
 
     const stripe = new Stripe(required("STRIPE_SECRET_KEY"));
-    const appUrl = required("APP_BASE_URL");
+    const appUrl = resolveAppUrl(req);
 
     const checkout = await stripe.checkout.sessions.create({
       mode: "payment",

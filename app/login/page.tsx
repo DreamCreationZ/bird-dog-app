@@ -15,27 +15,44 @@ export default function LoginPage() {
     event.preventDefault();
     setLoading(true);
     setError("");
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15000);
+    try {
+      const res = await fetch("/api/session/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, password }),
+        signal: controller.signal
+      });
 
-    const res = await fetch("/api/session/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, email, password })
-    });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data?.error || "Login failed.");
+        return;
+      }
 
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setError(data?.error || "Login failed.");
+      router.replace("/bird-dog");
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        setError("Login timed out. Please check connection and try again.");
+        return;
+      }
+      setError("Unable to reach login service. Please check network and try again.");
+    } finally {
+      window.clearTimeout(timeout);
       setLoading(false);
-      return;
     }
-
-    router.replace("/bird-dog");
   }
 
   return (
     <main className="login-shell">
       <section className="login-card">
-        <h1>Project Bird Dog</h1>
+        <img
+          src="/branding/a-point-scout-logo.svg"
+          alt="A-POINT Scout"
+          style={{ width: 220, height: "auto", marginBottom: 8 }}
+        />
+        <h1>A-POINT Scout</h1>
         <p>Sign up or sign in with your scouting email. Org branding and vault partitioning are based on your domain.</p>
         <form onSubmit={onSubmit}>
           <label>

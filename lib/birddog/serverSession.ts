@@ -10,6 +10,20 @@ function getSecret() {
   return process.env.BIRD_DOG_SESSION_SECRET || "dev-only-secret-change-in-prod";
 }
 
+function shouldUseSecureCookie() {
+  const override = process.env.BIRD_DOG_COOKIE_SECURE;
+  if (override === "true") return true;
+  if (override === "false") return false;
+
+  if (process.env.NODE_ENV !== "production") return false;
+  const appUrl = process.env.APP_BASE_URL || "";
+  if (!appUrl) {
+    return Boolean(process.env.VERCEL || process.env.VERCEL_URL);
+  }
+  if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(appUrl)) return false;
+  return true;
+}
+
 function base64Url(input: string) {
   return Buffer.from(input).toString("base64url");
 }
@@ -62,7 +76,7 @@ export async function setSessionCookie(token: string) {
   cookieStore.set(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: shouldUseSecureCookie(),
     path: "/",
     maxAge: TTL_SECONDS
   });

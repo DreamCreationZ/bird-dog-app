@@ -2,8 +2,16 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Project Bird Dog",
-  description: "Offline-first baseball scouting cockpit"
+  title: "A-POINT Scout",
+  description: "Smart baseball scouting and coach travel orchestration",
+  icons: {
+    icon: [
+      { url: "/branding/a-point-scout-favicon.svg", type: "image/svg+xml" },
+      { url: "/branding/a-point-scout-icon.svg", type: "image/svg+xml" }
+    ],
+    apple: [{ url: "/branding/a-point-scout-icon.svg", type: "image/svg+xml" }],
+    shortcut: ["/branding/a-point-scout-favicon.svg"]
+  }
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -21,7 +21,6 @@ export default async function TeamDetailsPage({
         teamUrl: first(params.teamUrl),
         eventId: first(params.eventId),
         tournamentName: first(params.tournamentName),
-        tournamentIcon: first(params.tournamentIcon),
         returnTab: first(params.returnTab),
         returnInventorySlug: first(params.returnInventorySlug),
         returnTournamentId: first(params.returnTournamentId)

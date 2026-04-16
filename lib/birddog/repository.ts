@@ -219,6 +219,18 @@ export type CoachSchedule = {
   updated_at: string;
 };
 
+export type CoachLiveLocation = {
+  id: string;
+  org_id: string;
+  user_id: string;
+  coach_name: string;
+  latitude: number;
+  longitude: number;
+  accuracy_meters: number | null;
+  captured_at: string;
+  updated_at: string;
+};
+
 export async function upsertCoachSchedule(input: {
   orgId: string;
   userId: string;
@@ -290,6 +302,43 @@ export async function cleanupPastCoachSchedules(orgId: string) {
     },
     prefer: "return=minimal"
   }).catch(() => undefined);
+}
+
+export async function upsertCoachLiveLocation(input: {
+  orgId: string;
+  userId: string;
+  coachName: string;
+  latitude: number;
+  longitude: number;
+  accuracyMeters?: number | null;
+  capturedAtIso?: string;
+}) {
+  await supabaseRequest("coach_live_locations", {
+    method: "POST",
+    query: { on_conflict: "user_id" },
+    body: [{
+      org_id: input.orgId,
+      user_id: input.userId,
+      coach_name: input.coachName,
+      latitude: input.latitude,
+      longitude: input.longitude,
+      accuracy_meters: input.accuracyMeters ?? null,
+      captured_at: input.capturedAtIso || new Date().toISOString()
+    }],
+    prefer: "resolution=merge-duplicates,return=minimal"
+  });
+}
+
+export async function listCoachLiveLocations(orgId: string): Promise<CoachLiveLocation[]> {
+  const rows = (await supabaseRequest("coach_live_locations", {
+    query: {
+      org_id: `eq.${orgId}`,
+      select: "id,org_id,user_id,coach_name,latitude,longitude,accuracy_meters,captured_at,updated_at",
+      order: "captured_at.desc",
+      limit: "200"
+    }
+  })) as CoachLiveLocation[];
+  return rows;
 }
 
 export async function insertSyncBatch(input: {

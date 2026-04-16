@@ -63,6 +63,18 @@ create table if not exists public.coach_schedules (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.coach_live_locations (
+  id uuid primary key default gen_random_uuid(),
+  org_id text not null,
+  user_id text not null unique,
+  coach_name text not null,
+  latitude double precision not null,
+  longitude double precision not null,
+  accuracy_meters double precision,
+  captured_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 alter table public.coach_schedules
   add column if not exists desired_players jsonb not null default '[]'::jsonb;
 
@@ -170,6 +182,7 @@ create table if not exists public.harvested_rosters (
 
 create index if not exists idx_unlocks_org on public.org_tournament_unlocks (org_id, created_at desc);
 create index if not exists idx_coach_schedules_org on public.coach_schedules (org_id, updated_at desc);
+create index if not exists idx_coach_live_locations_org on public.coach_live_locations (org_id, captured_at desc);
 create index if not exists idx_scout_notes_org_created on public.scout_notes (org_id, created_at desc);
 create index if not exists idx_pulse_events_org_created on public.pulse_events (org_id, created_at desc);
 create index if not exists idx_harvest_jobs_org_created on public.harvest_jobs (org_id, created_at desc);
@@ -182,6 +195,7 @@ alter table public.scout_users enable row level security;
 alter table public.circuit_inventory enable row level security;
 alter table public.org_tournament_unlocks enable row level security;
 alter table public.coach_schedules enable row level security;
+alter table public.coach_live_locations enable row level security;
 alter table public.scout_notes enable row level security;
 alter table public.pulse_events enable row level security;
 alter table public.harvest_jobs enable row level security;
@@ -217,6 +231,14 @@ create policy "coach_schedules_org_read"
 
 create policy "coach_schedules_org_write"
   on public.coach_schedules for insert
+  with check (org_id = coalesce(auth.jwt() ->> 'org_id', ''));
+
+create policy "coach_live_locations_org_read"
+  on public.coach_live_locations for select
+  using (org_id = coalesce(auth.jwt() ->> 'org_id', ''));
+
+create policy "coach_live_locations_org_write"
+  on public.coach_live_locations for insert
   with check (org_id = coalesce(auth.jwt() ->> 'org_id', ''));
 
 create policy "scout_notes_org_read"

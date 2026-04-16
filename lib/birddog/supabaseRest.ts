@@ -27,6 +27,9 @@ type RequestOptions = {
 export async function supabaseRequest(path: string, options: RequestOptions = {}) {
   const method = options.method || "GET";
   const url = new URL(`${baseUrl()}/rest/${API_VERSION}/${path}`);
+  const timeoutMs = Number.parseInt(process.env.SUPABASE_REQUEST_TIMEOUT_MS || "12000", 10);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) ? timeoutMs : 12000);
 
   if (options.query) {
     Object.entries(options.query).forEach(([key, value]) => {
@@ -44,12 +47,23 @@ export async function supabaseRequest(path: string, options: RequestOptions = {}
     headers.Prefer = options.prefer;
   }
 
-  const res = await fetch(url.toString(), {
-    method,
-    headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-    cache: "no-store"
-  });
+  let res: Response;
+  try {
+    res = await fetch(url.toString(), {
+      method,
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      cache: "no-store",
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Supabase request timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!res.ok) {
     const text = await res.text();

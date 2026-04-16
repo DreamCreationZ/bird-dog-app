@@ -1,0 +1,29 @@
+<svg width="1200" height="760" viewBox="0 0 1200 760" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">A-POINT Scout Standard Logo</title>
+  <desc id="desc">Navy icon with A and diamond compass, with A-POINT and SCOUT text below.</desc>
+  <defs>
+    <linearGradient id="navyMetal" x1="415" y1="130" x2="765" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2a4e78"/>
+      <stop offset="1" stop-color="#133454"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="760" fill="#ffffff"/>
+
+  <path fill="url(#navyMetal)" d="M420 545L505 260H557L484 545H420ZM714 545L642 260H694L780 545H714ZM491 440L505 387H686L698 440H491Z"/>
+  <rect x="470" y="503" width="273" height="42" rx="6" fill="url(#navyMetal)"/>
+
+  <g transform="translate(0 6)">
+    <path d="M598 106L742 220L598 334L454 220L598 106Z" fill="none" stroke="url(#navyMetal)" stroke-width="14" stroke-linejoin="round"/>
+    <path d="M598 158C631 158 657 184 657 218C657 251 631 278 598 278C564 278 538 251 538 218C538 184 564 158 598 158Z" fill="none" stroke="url(#navyMetal)" stroke-width="10"/>
+    <path d="M598 173L620 218L598 263L576 218L598 173Z" fill="url(#navyMetal)"/>
+    <circle cx="598" cy="218" r="6" fill="#ffffff"/>
+    <line x1="598" y1="142" x2="598" y2="156" stroke="url(#navyMetal)" stroke-width="7" stroke-linecap="round"/>
+    <line x1="522" y1="218" x2="536" y2="218" stroke="url(#navyMetal)" stroke-width="7" stroke-linecap="round"/>
+    <line x1="660" y1="218" x2="674" y2="218" stroke="url(#navyMetal)" stroke-width="7" stroke-linecap="round"/>
+    <line x1="598" y1="280" x2="598" y2="294" stroke="url(#navyMetal)" stroke-width="7" stroke-linecap="round"/>
+  </g>
+
+  <text x="600" y="652" text-anchor="middle" fill="#102f4f" font-size="92" font-weight="800" font-family="Arial, Helvetica, sans-serif" letter-spacing="4">A-POINT</text>
+  <text x="600" y="716" text-anchor="middle" fill="#5f6f84" font-size="54" font-weight="700" font-family="Arial, Helvetica, sans-serif" letter-spacing="10">SCOUT</text>
+</svg>
