@@ -1,18 +1,26 @@
-<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A-POINT Scout Favicon">
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="APOINT SCOUT Favicon">
   <defs>
-    <linearGradient id="favNavy" x1="62" y1="22" x2="191" y2="223" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#2c5685"/>
-      <stop offset="1" stop-color="#15395d"/>
+    <linearGradient id="favNavy" x1="30" y1="18" x2="229" y2="246" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#13396d"/>
+      <stop offset="1" stop-color="#081d39"/>
+    </linearGradient>
+    <linearGradient id="favMetal" x1="58" y1="95" x2="194" y2="246" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f8f9fc"/>
+      <stop offset="1" stop-color="#c3ccda"/>
     </linearGradient>
   </defs>
 
-  <path fill="url(#favNavy)" d="M66 222L94 128H111L87 222H66ZM166 222L143 128H160L188 222H166ZM90 186L95 169H160L164 186H90Z"/>
-  <rect x="82" y="208" width="104" height="14" rx="2" fill="url(#favNavy)"/>
+  <rect x="6" y="6" width="244" height="244" rx="56" fill="url(#favNavy)"/>
+  <path fill="url(#favMetal)" d="M58 210L90 122H109L77 210H58Z"/>
+  <path fill="url(#favMetal)" d="M150 210L118 122H137L169 210H150Z"/>
+  <rect x="70" y="194" width="98" height="15" rx="2" fill="url(#favMetal)"/>
+  <path fill="url(#favMetal)" d="M90 178L95 163H141L147 178H90Z"/>
 
   <g transform="translate(0 -2)">
-    <path d="M128 35L174 72L128 109L82 72L128 35Z" fill="none" stroke="url(#favNavy)" stroke-width="7" stroke-linejoin="round"/>
-    <path d="M128 51C139 51 147 60 147 71C147 81 139 90 128 90C118 90 109 81 109 71C109 60 118 51 128 51Z" fill="none" stroke="url(#favNavy)" stroke-width="5"/>
-    <path d="M128 56L135 71L128 85L121 71L128 56Z" fill="url(#favNavy)"/>
-    <circle cx="128" cy="71" r="2" fill="#ffffff"/>
+    <path d="M118 40L158 72L118 104L78 72L118 40Z" fill="#123561" stroke="#edf2f8" stroke-width="4.5" stroke-linejoin="round"/>
+    <path d="M118 54C129 54 138 62 138 73C138 84 129 93 118 93C107 93 99 84 99 73C99 62 107 54 118 54Z" fill="none" stroke="#edf2f8" stroke-width="3.8"/>
+    <polygon points="118,73 132,64 123,78" fill="#f7f9fc"/>
+    <polygon points="118,73 104,82 113,68" fill="#bf1220"/>
+    <circle cx="118" cy="73" r="2.4" fill="#f7f9fc"/>
   </g>
 </svg>

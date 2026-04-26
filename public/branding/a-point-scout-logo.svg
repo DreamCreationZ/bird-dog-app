@@ -1,29 +1,37 @@
 <svg width="1200" height="760" viewBox="0 0 1200 760" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">A-POINT Scout Standard Logo</title>
-  <desc id="desc">Navy icon with A and diamond compass, with A-POINT and SCOUT text below.</desc>
+  <title id="title">APOINT SCOUT Logo</title>
+  <desc id="desc">Metallic A mark with a navy baseball-diamond compass and red needle, plus APOINT SCOUT wordmark.</desc>
   <defs>
-    <linearGradient id="navyMetal" x1="415" y1="130" x2="765" y2="560" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#2a4e78"/>
-      <stop offset="1" stop-color="#133454"/>
+    <linearGradient id="metal" x1="350" y1="240" x2="840" y2="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f8f8f8"/>
+      <stop offset="0.58" stop-color="#dfe3e9"/>
+      <stop offset="1" stop-color="#c5ccd6"/>
+    </linearGradient>
+    <linearGradient id="navy" x1="465" y1="94" x2="760" y2="325" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#143b70"/>
+      <stop offset="1" stop-color="#0a2445"/>
     </linearGradient>
   </defs>
 
   <rect width="1200" height="760" fill="#ffffff"/>
 
-  <path fill="url(#navyMetal)" d="M420 545L505 260H557L484 545H420ZM714 545L642 260H694L780 545H714ZM491 440L505 387H686L698 440H491Z"/>
-  <rect x="470" y="503" width="273" height="42" rx="6" fill="url(#navyMetal)"/>
+  <path fill="url(#metal)" d="M386 560L512 230H588L462 560H386Z"/>
+  <path fill="url(#metal)" d="M731 560L607 230H682L806 560H731Z"/>
+  <rect x="414" y="524" width="404" height="44" rx="7" fill="url(#metal)"/>
+  <path fill="url(#metal)" d="M504 443L522 392H676L694 443H504Z"/>
 
-  <g transform="translate(0 6)">
-    <path d="M598 106L742 220L598 334L454 220L598 106Z" fill="none" stroke="url(#navyMetal)" stroke-width="14" stroke-linejoin="round"/>
-    <path d="M598 158C631 158 657 184 657 218C657 251 631 278 598 278C564 278 538 251 538 218C538 184 564 158 598 158Z" fill="none" stroke="url(#navyMetal)" stroke-width="10"/>
-    <path d="M598 173L620 218L598 263L576 218L598 173Z" fill="url(#navyMetal)"/>
-    <circle cx="598" cy="218" r="6" fill="#ffffff"/>
-    <line x1="598" y1="142" x2="598" y2="156" stroke="url(#navyMetal)" stroke-width="7" stroke-linecap="round"/>
-    <line x1="522" y1="218" x2="536" y2="218" stroke="url(#navyMetal)" stroke-width="7" stroke-linecap="round"/>
-    <line x1="660" y1="218" x2="674" y2="218" stroke="url(#navyMetal)" stroke-width="7" stroke-linecap="round"/>
-    <line x1="598" y1="280" x2="598" y2="294" stroke="url(#navyMetal)" stroke-width="7" stroke-linecap="round"/>
+  <g>
+    <path d="M599 100L750 225L599 350L447 225L599 100Z" fill="url(#navy)" stroke="#eef2f8" stroke-width="12" stroke-linejoin="round"/>
+    <path d="M599 153C639 153 671 185 671 225C671 266 639 298 599 298C559 298 527 266 527 225C527 185 559 153 599 153Z" fill="none" stroke="#edf2f9" stroke-width="10"/>
+    <line x1="599" y1="132" x2="599" y2="149" stroke="#edf2f9" stroke-width="8" stroke-linecap="round"/>
+    <line x1="503" y1="225" x2="520" y2="225" stroke="#edf2f9" stroke-width="8" stroke-linecap="round"/>
+    <line x1="678" y1="225" x2="695" y2="225" stroke="#edf2f9" stroke-width="8" stroke-linecap="round"/>
+    <line x1="599" y1="301" x2="599" y2="319" stroke="#edf2f9" stroke-width="8" stroke-linecap="round"/>
+    <polygon points="598,225 650,191 614,245" fill="#f6f8fc"/>
+    <polygon points="598,225 548,258 583,205" fill="#c30f1c"/>
+    <circle cx="599" cy="225" r="7" fill="#f6f8fc"/>
   </g>
 
-  <text x="600" y="652" text-anchor="middle" fill="#102f4f" font-size="92" font-weight="800" font-family="Arial, Helvetica, sans-serif" letter-spacing="4">A-POINT</text>
-  <text x="600" y="716" text-anchor="middle" fill="#5f6f84" font-size="54" font-weight="700" font-family="Arial, Helvetica, sans-serif" letter-spacing="10">SCOUT</text>
+  <text x="600" y="648" text-anchor="middle" fill="#0e2d50" font-size="88" font-weight="800" font-family="Arial, Helvetica, sans-serif" letter-spacing="6">APOINT</text>
+  <text x="600" y="709" text-anchor="middle" fill="#4f6078" font-size="46" font-weight="700" font-family="Arial, Helvetica, sans-serif" letter-spacing="12">SCOUT</text>
 </svg>

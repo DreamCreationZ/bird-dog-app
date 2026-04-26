@@ -46,6 +46,7 @@ type InventoryTournament = {
   season: "summer" | "fall";
   company: "PG" | "PBR";
   locked: boolean;
+  isArchive?: boolean;
   harvestHint?: string;
   displayDate?: string;
   displayTeams?: string;
@@ -122,6 +123,15 @@ type OptimizedStop = ItineraryStop & {
 const CACHE_KEY = "bird_dog_tournament_cache";
 const PREVIEW_UNLOCK_ALL = process.env.NEXT_PUBLIC_BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
 const COACH_LOCATION_SHARING_KEY = "bird_dog:coach_location_sharing";
+const DEMO_FREE_TOURNAMENT_SLUGS = new Set(["2025-pg-16u-wwba-national-championship"]);
+
+function isTournamentLocked(item: InventoryTournament | null | undefined) {
+  if (!item) return true;
+  if (PREVIEW_UNLOCK_ALL) return false;
+  if (item.isArchive) return false;
+  if (DEMO_FREE_TOURNAMENT_SLUGS.has(item.slug)) return false;
+  return item.locked;
+}
 
 function timeLabel(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -558,7 +568,7 @@ export default function BirdDogPage() {
     () => inventory.find((item) => item.slug === selectedInventorySlug) || null,
     [inventory, selectedInventorySlug]
   );
-  const canAccessLockedPages = PREVIEW_UNLOCK_ALL || Boolean(selectedInventory && !selectedInventory.locked);
+  const canAccessLockedPages = Boolean(selectedInventory && !isTournamentLocked(selectedInventory));
 
   const games = selectedTournament?.games || [];
   const players = useMemo(() => uniquePlayers(games), [games]);
@@ -1302,6 +1312,7 @@ export default function BirdDogPage() {
   }
 
   async function openCheckoutForTournament(inventorySlug: string) {
+    setOpenError("");
     setUnlockingSlug(inventorySlug);
     try {
       const res = await fetch("/api/payments/checkout", {
@@ -1309,14 +1320,25 @@ export default function BirdDogPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ inventorySlug, returnTo: "/bird-dog" })
       });
-      if (!res.ok) return;
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = typeof data?.detail === "string" && data.detail ? `: ${data.detail}` : "";
+        setOpenError((data?.error || `Unable to open checkout (${res.status})`) + detail);
+        return;
+      }
       if (data?.checkoutUrl) {
-        window.open(data.checkoutUrl, "_blank", "noopener,noreferrer");
+        const popup = window.open(data.checkoutUrl, "_blank", "noopener,noreferrer");
+        if (!popup) {
+          window.location.href = data.checkoutUrl;
+        }
+        return;
       }
       if (data?.alreadyUnlocked) {
         await fetchInventory();
+        setOpenError("No payment needed. This tournament is already unlocked or available as archive access.");
+        return;
       }
+      setOpenError("Checkout URL missing.");
     } finally {
       setUnlockingSlug("");
     }
@@ -1678,6 +1700,8 @@ export default function BirdDogPage() {
   const showCoaches = activeTab === "coaches";
   const orgPrimary = user?.orgPrimary || "#1f3a5f";
   const orgAccent = user?.orgAccent || "#d7a316";
+  const orgLogoUrl = (user?.orgLogoUrl || "").trim() || "/branding/a-point-scout-icon.svg";
+  const orgDisplayName = user?.orgName || "Neutral Org";
   const bgValue = "#f9f8f4";
   const bgImageValue = `radial-gradient(circle at 10% 14%, ${alphaColor(orgPrimary, 0.14)} 0%, transparent 30%), radial-gradient(circle at 86% 22%, ${alphaColor(orgAccent, 0.18)} 0%, transparent 28%), linear-gradient(180deg, #fffef9 0%, #f3efe3 100%)`;
   const panelValue = "#fffdf8";
@@ -1766,6 +1790,26 @@ export default function BirdDogPage() {
 
       <section className="panel">
         <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <div className="brand-ribbon">
+            <div className="brand-ribbon-logo">
+              <img
+                src={orgLogoUrl}
+                alt={`${orgDisplayName} logo`}
+                onError={(event) => {
+                  const target = event.currentTarget;
+                  if (target.src.endsWith("/branding/a-point-scout-icon.svg")) return;
+                  target.src = "/branding/a-point-scout-icon.svg";
+                }}
+              />
+            </div>
+            <div>
+              <p className="brand-ribbon-title">APOINT SCOUT</p>
+              <p className="brand-ribbon-org">{orgDisplayName}</p>
+            </div>
+          </div>
+          <button className="secondary" onClick={() => setActiveTab("tournaments")}>Dashboard</button>
+        </div>
+        <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
           <h2>
             {showTournaments ? "Tournament Dashboard" : showNotes ? "Tournament Roster" : showSchedule ? "My Schedule" : "View Coaches Schedules"}
           </h2>
@@ -2108,7 +2152,7 @@ export default function BirdDogPage() {
         {openError ? <p className="muted">{openError}</p> : null}
         <div className="tournament-grid" style={{ marginTop: 12 }}>
           {inventory.length ? inventory.map((item) => {
-            const locked = item.locked && !PREVIEW_UNLOCK_ALL;
+            const locked = isTournamentLocked(item);
             const opened = selectedInventorySlug === item.slug;
             return (
               <article
@@ -2127,6 +2171,7 @@ export default function BirdDogPage() {
                 <p className="muted">{item.season.toUpperCase()} · {item.company}</p>
                 {item.displayCity ? <p className="small">{item.displayCity}</p> : null}
                 {item.displayTeams ? <p className="small">{item.displayTeams}</p> : null}
+                {item.isArchive ? <p className="small">🗂️ Archive Access (Free)</p> : null}
                 {locked ? <p className="small">🔒 Subscribe to Unlock</p> : null}
                 {openingSlug === item.slug ? <p className="small">Opening...</p> : null}
                 {unlockingSlug === item.slug ? <p className="small">Opening Checkout...</p> : null}

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { listCircuitInventory, listOrgUnlocks, seedCircuitInventory } from "@/lib/birddog/repository";
 import { INVENTORY_SEED, inventoryHarvestHint } from "@/lib/birddog/inventoryCatalog";
 import { bestGroupedEventMatch, fetchPgGroupedEvents } from "@/lib/birddog/pgGroupedEvents";
+import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 
 export async function GET(req: NextRequest) {
@@ -26,11 +27,14 @@ export async function GET(req: NextRequest) {
       inventory: inventory.map((item) => {
         const match = item.company === "PG" ? bestGroupedEventMatch(item.name, groupedEvents) : null;
         const seedMeta = seedMetaBySlug.get(item.slug);
+        const displayDate = match?.dateLabel || seedMeta?.displayDate || "";
+        const isArchive = isFreeTournamentAccess({ slug: item.slug, name: item.name, displayDate });
         return {
           ...item,
-          locked: previewUnlockAll ? false : !unlockedSet.has(item.slug),
+          locked: previewUnlockAll ? false : (isArchive ? false : !unlockedSet.has(item.slug)),
+          isArchive,
           harvestHint: inventoryHarvestHint(item),
-          displayDate: match?.dateLabel || seedMeta?.displayDate || "",
+          displayDate,
           displayTeams: match?.teamsLabel || seedMeta?.displayTeams || "",
           displayCity: match?.city || seedMeta?.displayCity || ""
         };

@@ -52,7 +52,7 @@ export default function SubscribePage() {
   return (
     <main className="login-shell">
       <section className="login-card">
-        <h1>A-POINT Scout Subscription</h1>
+        <h1>APOINT SCOUT Subscription</h1>
         <p>Unlock one tournament for your entire organization.</p>
         <p><strong>$500</strong> per tournament in test mode.</p>
         {error ? <p className="error-text">{error}</p> : null}

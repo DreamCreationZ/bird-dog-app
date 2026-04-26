@@ -114,6 +114,49 @@
   color: var(--org-accent);
 }
 
+.bd-root .brand-ribbon {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #d2c8b3;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fff 0%, #f7f2e6 100%);
+  padding: 8px 10px;
+  min-width: 240px;
+}
+
+.bd-root .brand-ribbon-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  border: 1px solid #cbc0aa;
+  background: #fff;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.bd-root .brand-ribbon-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.bd-root .brand-ribbon-title {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: #6c634f;
+  font-weight: 700;
+}
+
+.bd-root .brand-ribbon-org {
+  margin: 1px 0 0;
+  font-weight: 700;
+  color: #141414;
+}
+
 .bd-root .panel {
   background: var(--bd-panel);
   border: 1px solid var(--bd-line);

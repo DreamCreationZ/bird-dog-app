@@ -2,7 +2,7 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "A-POINT Scout",
+  title: "APOINT SCOUT",
   description: "Smart baseball scouting and coach travel orchestration",
   icons: {
     icon: [

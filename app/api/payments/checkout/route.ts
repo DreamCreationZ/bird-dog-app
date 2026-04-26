@@ -2,9 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { listCircuitInventory, listOrgUnlocks, seedCircuitInventory } from "@/lib/birddog/repository";
+import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
+import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 
 const AMOUNT_CENTS = 50000;
 export const runtime = "nodejs";
+const seedMetaBySlug = new Map(INVENTORY_SEED.map((item) => [item.slug, item]));
 
 function required(name: string): string {
   const value = process.env[name];
@@ -45,6 +48,10 @@ export async function POST(req: NextRequest) {
     }
     if (unlocked.includes(inventorySlug)) {
       return NextResponse.json({ alreadyUnlocked: true, redirectTo: "/bird-dog?subscription=active" });
+    }
+    const displayDate = seedMetaBySlug.get(inventorySlug)?.displayDate || "";
+    if (isFreeTournamentAccess({ slug: selected.slug, name: selected.name, displayDate })) {
+      return NextResponse.json({ alreadyUnlocked: true, redirectTo: "/bird-dog?subscription=archive" });
     }
 
     const stripe = new Stripe(required("STRIPE_SECRET_KEY"));

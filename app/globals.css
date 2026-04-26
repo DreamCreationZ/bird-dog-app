@@ -10,10 +10,18 @@ body {
 }
 
 .login-shell {
+  --login-primary: #1f3a5f;
+  --login-accent: #d7a316;
+  --login-primary-soft: rgba(31, 58, 95, 0.14);
+  --login-accent-soft: rgba(215, 163, 22, 0.2);
   min-height: 100vh;
   display: grid;
   place-items: center;
   padding: 16px;
+  background:
+    radial-gradient(circle at 12% 15%, var(--login-primary-soft) 0%, transparent 28%),
+    radial-gradient(circle at 87% 18%, var(--login-accent-soft) 0%, transparent 25%),
+    linear-gradient(180deg, #fffef9 0%, #f3efe3 100%);
 }
 
 .login-card {
@@ -22,7 +30,7 @@ body {
   border: 1px solid #d6cfbe;
   background: #fffdf8;
   padding: 18px;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.1);
 }
 
 .login-card form {
@@ -45,7 +53,7 @@ body {
 .login-card button {
   border: 0;
   border-radius: 10px;
-  background: #1f3a5f;
+  background: var(--login-primary);
   color: #fff;
   padding: 10px 14px;
   font-weight: 700;
@@ -61,4 +69,52 @@ body {
   color: #5a5548;
   margin: 0;
   font-size: 0.92rem;
+}
+
+.org-preview {
+  border: 1px solid #d8d1bf;
+  border-radius: 12px;
+  padding: 10px;
+  margin: 8px 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: linear-gradient(135deg, #ffffff 0%, #f8f3e8 100%);
+}
+
+.org-preview-mark {
+  width: 52px;
+  height: 52px;
+  border-radius: 10px;
+  border: 1px solid #c6baa1;
+  display: grid;
+  place-items: center;
+  background: #fff;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.org-preview-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.org-preview-mark span {
+  font-weight: 800;
+  color: #22344d;
+}
+
+.org-preview-title {
+  margin: 0;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6a624f;
+}
+
+.org-preview-name {
+  margin: 2px 0 0;
+  font-weight: 700;
+  color: #1a1a1a;
 }
