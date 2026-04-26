@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getHarvestedTournament, listHarvestedTournaments, listOrgUnlocks, upsertHarvestedTournament } from "@/lib/birddog/repository";
+import { getHarvestedTournament, listCircuitInventory, listHarvestedTournaments, listOrgUnlocks, upsertHarvestedTournament } from "@/lib/birddog/repository";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { scrapePgTournamentLive } from "@/lib/birddog/pgScraper";
+import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
+import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -43,8 +45,18 @@ export async function POST(req: NextRequest) {
   }
 
   const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
-  const unlocked: string[] = await listOrgUnlocks(session.orgId).catch(() => []);
-  if (!previewUnlockAll && !unlocked.includes(inventorySlug)) {
+  const [unlocked, inventory] = await Promise.all([
+    listOrgUnlocks(session.orgId).catch(() => [] as string[]),
+    listCircuitInventory().catch(() => [] as Array<{ slug: string; name: string }>)
+  ]);
+  const selected = inventory.find((item) => item.slug === inventorySlug);
+  const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
+  const isArchive = isFreeTournamentAccess({
+    slug: inventorySlug,
+    name: selected?.name || seedMeta?.name || tournamentHint || inventorySlug,
+    displayDate: seedMeta?.displayDate || ""
+  });
+  if (!previewUnlockAll && !isArchive && !unlocked.includes(inventorySlug)) {
     return NextResponse.json({ error: "Tournament is locked for your organization." }, { status: 402 });
   }
 
