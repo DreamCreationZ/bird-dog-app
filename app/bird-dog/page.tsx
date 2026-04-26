@@ -910,14 +910,13 @@ export default function BirdDogPage() {
   async function refreshTournamentByInventory(item: InventoryTournament) {
     try {
       const targetTournamentId = await resolveTournamentIdForItem(item);
-      const harvestHint = item.harvestHint || item.name;
       const liveOpen = await fetch("/api/harvest/open", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           company: item.company,
           inventorySlug: item.slug,
-          tournamentHint: harvestHint,
+          tournamentHint: item.name,
           tournamentId: targetTournamentId || undefined
         })
       });
@@ -1382,14 +1381,13 @@ export default function BirdDogPage() {
     setJobHint(item.name);
     try {
       const targetTournamentId = await resolveTournamentIdForItem(item);
-      const harvestHint = item.harvestHint || item.name;
       const liveOpen = await fetch("/api/harvest/open", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           company: item.company,
           inventorySlug: item.slug,
-          tournamentHint: harvestHint,
+          tournamentHint: item.name,
           tournamentId: targetTournamentId || undefined
         })
       });

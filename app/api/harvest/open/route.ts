@@ -93,7 +93,14 @@ export async function POST(req: NextRequest) {
       }
 
       const all = await listHarvestedTournaments(session.orgId, company);
-      const wantedList = extractHintCandidates(tournamentHint).map(normalize).filter(Boolean);
+      const wantedList = [
+        ...extractHintCandidates(tournamentHint),
+        selected?.name || "",
+        seedMeta?.name || "",
+        inventorySlug
+      ]
+        .map(normalize)
+        .filter(Boolean);
       const found = wantedList
         .map((wanted) =>
           all.find((t) => normalize(t.name) === wanted)
