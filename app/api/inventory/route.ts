@@ -5,6 +5,29 @@ import { bestGroupedEventMatch, fetchPgGroupedEvents } from "@/lib/birddog/pgGro
 import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 
+function fallbackInventory(previewUnlockAll: boolean) {
+  return INVENTORY_SEED.map((item) => {
+    const isArchive = isFreeTournamentAccess({
+      slug: item.slug,
+      name: item.name,
+      displayDate: item.displayDate || ""
+    });
+    return {
+      id: item.slug,
+      slug: item.slug,
+      name: item.name,
+      season: item.season,
+      company: item.company,
+      locked: previewUnlockAll ? false : !isArchive,
+      isArchive,
+      harvestHint: inventoryHarvestHint(item),
+      displayDate: item.displayDate || "",
+      displayTeams: item.displayTeams || "",
+      displayCity: item.displayCity || ""
+    };
+  });
+}
+
 export async function GET(req: NextRequest) {
   const session = readSessionFromRequest(req);
   if (!session) {
@@ -20,6 +43,14 @@ export async function GET(req: NextRequest) {
       listCircuitInventory(),
       listOrgUnlocks(session.orgId)
     ]);
+    if (!inventory.length) {
+      return NextResponse.json({
+        subscribed: false,
+        fallback: true,
+        warning: "Inventory table was empty. Showing seeded tournaments.",
+        inventory: fallbackInventory(previewUnlockAll)
+      });
+    }
     const unlockedSet = new Set(unlockedSlugs);
 
     return NextResponse.json({
@@ -41,6 +72,12 @@ export async function GET(req: NextRequest) {
       })
     });
   } catch (error) {
-    return NextResponse.json({ error: "Failed to load inventory", detail: String(error) }, { status: 500 });
+    return NextResponse.json({
+      subscribed: false,
+      fallback: true,
+      warning: "Failed to read inventory from database. Showing seeded tournaments.",
+      detail: String(error),
+      inventory: fallbackInventory(process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true")
+    });
   }
 }

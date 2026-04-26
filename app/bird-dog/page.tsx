@@ -886,12 +886,24 @@ export default function BirdDogPage() {
   }
 
   async function fetchInventory() {
+    setOpenError("");
     const res = await fetch("/api/inventory");
-    if (!res.ok) return [] as InventoryTournament[];
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      setOpenError(`Unable to load tournaments (${res.status}). ${text.slice(0, 180)}`);
+      setInventory([]);
+      return [] as InventoryTournament[];
+    }
     const data = await res.json();
     const nextInventory: InventoryTournament[] = data.inventory || [];
     setSubscribed(Boolean(data.subscribed));
     setInventory(nextInventory);
+    if (data?.warning) {
+      setOpenError(String(data.warning));
+    }
+    if (!nextInventory.length && !data?.warning) {
+      setOpenError("No tournaments available yet. Please refresh in a few seconds.");
+    }
     return nextInventory;
   }
 
