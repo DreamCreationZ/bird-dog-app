@@ -34,24 +34,29 @@ function parseEndDateFromLabel(label: string, year: number) {
 
   if (!cleaned) return null;
 
-  const parsedIso = Date.parse(cleaned);
-  if (Number.isFinite(parsedIso)) return new Date(parsedIso);
-
-  const range = cleaned.match(/^([A-Za-z]+)\s*(\d{1,2})\s*-\s*([A-Za-z]+)?\s*(\d{1,2})$/);
+  const range = cleaned.match(/^([A-Za-z]+)\s*(\d{1,2})\s*-\s*([A-Za-z]+)?\s*(\d{1,2})(?:,\s*(\d{4}))?$/);
   if (range) {
     const endMonthToken = range[3] || range[1];
     const endDay = Number.parseInt(range[4], 10);
+    const explicitYear = range[5] ? Number.parseInt(range[5], 10) : year;
     const endMonth = monthToIndex(endMonthToken);
     if (endMonth === null || !Number.isFinite(endDay)) return null;
-    return new Date(Date.UTC(year, endMonth, endDay, 23, 59, 59, 999));
+    return new Date(Date.UTC(explicitYear, endMonth, endDay, 23, 59, 59, 999));
   }
 
-  const single = cleaned.match(/^([A-Za-z]+)\s*(\d{1,2})$/);
+  const single = cleaned.match(/^([A-Za-z]+)\s*(\d{1,2})(?:,\s*(\d{4}))?$/);
   if (single) {
+    const explicitYear = single[3] ? Number.parseInt(single[3], 10) : year;
     const endMonth = monthToIndex(single[1]);
     const endDay = Number.parseInt(single[2], 10);
     if (endMonth === null || !Number.isFinite(endDay)) return null;
-    return new Date(Date.UTC(year, endMonth, endDay, 23, 59, 59, 999));
+    return new Date(Date.UTC(explicitYear, endMonth, endDay, 23, 59, 59, 999));
+  }
+
+  // For explicit date strings that include a 4-digit year, let Date.parse handle it.
+  if (/\b20\d{2}\b/.test(cleaned)) {
+    const parsedIso = Date.parse(cleaned);
+    if (Number.isFinite(parsedIso)) return new Date(parsedIso);
   }
 
   return null;

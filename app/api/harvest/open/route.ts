@@ -4,6 +4,7 @@ import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { scrapePgTournamentLive } from "@/lib/birddog/pgScraper";
 import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
 import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
+import { bestGroupedEventMatch, fetchPgGroupedEvents } from "@/lib/birddog/pgGroupedEvents";
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -51,11 +52,26 @@ export async function POST(req: NextRequest) {
   ]);
   const selected = inventory.find((item) => item.slug === inventorySlug);
   const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
-  const isArchive = isFreeTournamentAccess({
-    slug: inventorySlug,
-    name: selected?.name || seedMeta?.name || tournamentHint || inventorySlug,
-    displayDate: seedMeta?.displayDate || ""
-  });
+  const groupedEvents = company === "PG"
+    ? await fetchPgGroupedEvents("23065").catch(() => [])
+    : [];
+  const groupedMatch = selected?.name && groupedEvents.length
+    ? bestGroupedEventMatch(selected.name, groupedEvents)
+    : null;
+  const displayDate = groupedMatch?.dateLabel || seedMeta?.displayDate || "";
+  const archiveCandidates = [
+    selected?.name,
+    seedMeta?.name,
+    tournamentHint,
+    inventorySlug
+  ].filter(Boolean) as string[];
+  const isArchive = archiveCandidates.some((name) =>
+    isFreeTournamentAccess({
+      slug: inventorySlug,
+      name,
+      displayDate
+    })
+  );
   if (!previewUnlockAll && !isArchive && !unlocked.includes(inventorySlug)) {
     return NextResponse.json({ error: "Tournament is locked for your organization." }, { status: 402 });
   }
