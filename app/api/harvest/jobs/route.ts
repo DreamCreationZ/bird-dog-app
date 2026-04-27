@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHarvestJob, listHarvestJobs, listOrgUnlocks } from "@/lib/birddog/repository";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
+import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
+import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 
 export async function GET(req: NextRequest) {
   const session = readSessionFromRequest(req);
@@ -34,7 +36,17 @@ export async function POST(req: NextRequest) {
   try {
     const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
     const unlocked = await listOrgUnlocks(session.orgId);
-    if (!previewUnlockAll && !unlocked.includes(inventorySlug)) {
+    const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
+    const displayDate = seedMeta?.displayDate || "";
+    const archiveCandidates = [seedMeta?.name, tournamentHint, inventorySlug].filter(Boolean) as string[];
+    const isArchive = archiveCandidates.some((name) =>
+      isFreeTournamentAccess({
+        slug: inventorySlug,
+        name,
+        displayDate
+      })
+    );
+    if (!previewUnlockAll && !isArchive && !unlocked.includes(inventorySlug)) {
       return NextResponse.json({ error: "Tournament is locked for your organization." }, { status: 402 });
     }
 

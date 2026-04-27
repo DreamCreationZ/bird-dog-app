@@ -453,8 +453,9 @@ export default function TeamDetailsClient({ initialParams }: Props) {
   const [includeCompletedGames, setIncludeCompletedGames] = useState(
     process.env.NEXT_PUBLIC_BIRD_DOG_ALLOW_PAST_GAMES === "1"
   );
+  const bookingTestModeEnabled = process.env.NEXT_PUBLIC_BIRD_DOG_BOOKING_TEST_MODE === "1";
   const [bookingTestMode, setBookingTestMode] = useState(
-    process.env.NEXT_PUBLIC_BIRD_DOG_BOOKING_TEST_MODE !== "0"
+    bookingTestModeEnabled
   );
   const [paymentMethods, setPaymentMethods] = useState<SavedPaymentMethod[]>([]);
   const [bookingPaymentMode, setBookingPaymentMode] = useState<BookingPaymentMode>("card");
@@ -558,7 +559,9 @@ export default function TeamDetailsClient({ initialParams }: Props) {
         }
         if (typeof parsed.approvedPlan === "boolean") setApprovedPlan(parsed.approvedPlan);
         if (typeof parsed.includeCompletedGames === "boolean") setIncludeCompletedGames(parsed.includeCompletedGames);
-        if (typeof parsed.bookingTestMode === "boolean") setBookingTestMode(parsed.bookingTestMode);
+        if (typeof parsed.bookingTestMode === "boolean") {
+          setBookingTestMode(bookingTestModeEnabled ? parsed.bookingTestMode : false);
+        }
         if (parsed.bookingPaymentMode === "card" || parsed.bookingPaymentMode === "upi") {
           setBookingPaymentMode(parsed.bookingPaymentMode);
         }
@@ -580,7 +583,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
     } catch {
       // Ignore corrupted planner cache.
     }
-  }, [plannerCacheKey]);
+  }, [bookingTestModeEnabled, plannerCacheKey]);
 
   async function loadPaymentMethods(input?: { showStatus?: boolean }) {
     setPaymentMethodsLoading(true);
@@ -786,6 +789,14 @@ export default function TeamDetailsClient({ initialParams }: Props) {
 
   useEffect(() => {
     scheduleRowsRef.current = scheduleRows;
+  }, [scheduleRows]);
+
+  useEffect(() => {
+    if (!scheduleRows.length) return;
+    const hasUpcomingGame = scheduleRows.some((game, idx) => parseScheduleDateTime(game, idx).getTime() >= Date.now());
+    if (!hasUpcomingGame) {
+      setIncludeCompletedGames(true);
+    }
   }, [scheduleRows]);
 
   useEffect(() => {
@@ -1433,8 +1444,8 @@ export default function TeamDetailsClient({ initialParams }: Props) {
         setGeneratedSteps([]);
         setPlannerStatus(
           latest
-            ? `All listed games for ${initialParams.teamName} are already completed (latest game: ${latest.toLocaleString()}). Schedule generation is only available for upcoming games.`
-            : `All listed games for ${initialParams.teamName} are already completed. Schedule generation is only available for upcoming games.`
+            ? `All listed games for ${initialParams.teamName} are completed (latest game: ${latest.toLocaleString()}). Turn on "Include completed matches" to generate a retrospective route.`
+            : `All listed games for ${initialParams.teamName} are completed. Turn on "Include completed matches" to generate a retrospective route.`
         );
         return;
       }
@@ -1474,8 +1485,8 @@ export default function TeamDetailsClient({ initialParams }: Props) {
       if (includeCompletedGames) {
         setPlannerStatus(
           skippedPastCount
-            ? `Test mode enabled: included ${skippedPastCount} completed game(s). Generated ${nextSteps.length} coach steps for ${selectedRoster.length} selected players.`
-            : `Test mode enabled: generated ${nextSteps.length} coach steps for ${selectedRoster.length} selected players.`
+            ? `Included ${skippedPastCount} completed game(s). Generated ${nextSteps.length} coach steps for ${selectedRoster.length} selected players.`
+            : `Generated ${nextSteps.length} coach steps for ${selectedRoster.length} selected players using completed games.`
         );
       } else {
         setPlannerStatus(
@@ -1680,7 +1691,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
         to: String(leg.to || ""),
         mode: String(leg.mode || "")
       })),
-      bookingTestMode
+      bookingTestModeEnabled && bookingTestMode
     );
 
     setBookingLoading(true);
@@ -1711,7 +1722,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
           teamName: initialParams.teamName,
           tournamentName: initialParams.tournamentName,
           travelLegs: prepared.legs,
-          bookingTestMode,
+          bookingTestMode: bookingTestModeEnabled && bookingTestMode,
           traveler
         })
       });
@@ -2019,7 +2030,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
             checked={includeCompletedGames}
             onChange={(e) => setIncludeCompletedGames(e.target.checked)}
           />
-          Include completed matches (Test mode)
+          Include completed matches
         </label>
         <div className="row wrap">
           <button
@@ -2114,14 +2125,16 @@ export default function TeamDetailsClient({ initialParams }: Props) {
             Use "Authorize UPI Payment" to open secure checkout. After success, return and click Book Approved Travel.
           </p>
         )}
-        <label className="row" style={{ gap: 8, marginBottom: 8 }}>
-          <input
-            type="checkbox"
-            checked={bookingTestMode}
-            onChange={(e) => setBookingTestMode(e.target.checked)}
-          />
-          Booking Test Mode (shift past itinerary dates into future for OTA provider testing)
-        </label>
+        {bookingTestModeEnabled ? (
+          <label className="row" style={{ gap: 8, marginBottom: 8 }}>
+            <input
+              type="checkbox"
+              checked={bookingTestMode}
+              onChange={(e) => setBookingTestMode(e.target.checked)}
+            />
+            Shift itinerary dates forward for provider sandbox mode
+          </label>
+        ) : null}
         <div className="panel" style={{ marginTop: 8, background: "#f8f5ec" }}>
           <h3 style={{ marginTop: 0 }}>Traveler Profile (for OTA booking)</h3>
           <div className="grid2">
@@ -2235,47 +2248,6 @@ export default function TeamDetailsClient({ initialParams }: Props) {
         </section>
       ) : null}
 
-      <section className="panel grid2">
-        <div>
-          <h2>Hands-Free Notes</h2>
-          <div className="row wrap">
-            {recorderState === "recording" && recordingTarget === "team" ? (
-              <button type="button" className="danger" onClick={stopMic}>Stop Mic</button>
-            ) : (
-              <button
-                type="button"
-                onClick={startMic}
-                disabled={recorderState === "recording" && recordingTarget !== "team"}
-              >
-                Start Mic
-              </button>
-            )}
-            <button className="secondary" type="button" onClick={saveTeamNote}>Save Note</button>
-          </div>
-          <label>
-            Live Transcript
-            <textarea
-              rows={4}
-              value={transcript}
-              onChange={(e) => setTranscript(e.target.value)}
-              placeholder="Transcript appears here."
-            />
-          </label>
-          {teamAudioDraftUrl ? <audio controls src={teamAudioDraftUrl} style={{ width: "100%", marginBottom: 8 }} /> : null}
-          <div className="log-list" style={{ maxHeight: 180 }}>
-            {teamNotes.length ? teamNotes.map((note) => (
-              <article key={note.id} className="log-card">
-                <p><strong>{new Date(note.createdAt).toLocaleString()}</strong></p>
-                <p>{note.transcript}</p>
-                {note.audioUrl ? <audio controls src={note.audioUrl} style={{ width: "100%" }} /> : null}
-              </article>
-            )) : null}
-          </div>
-        </div>
-        <div>
-          <h2>Optimized Path</h2>
-        </div>
-      </section>
     </main>
   );
 }

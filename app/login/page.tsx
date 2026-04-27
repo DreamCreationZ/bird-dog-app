@@ -73,7 +73,7 @@ export default function LoginPage() {
           style={{ width: 220, height: "auto", marginBottom: 8 }}
         />
         <h1>APOINT SCOUT</h1>
-        <p>Sign up or sign in with your scouting email. Org branding and vault partitioning are based on your domain.</p>
+        <p>Sign up or sign in with your scouting email.</p>
         <div className="org-preview">
           <div className="org-preview-mark">
             {org.logoUrl ? (

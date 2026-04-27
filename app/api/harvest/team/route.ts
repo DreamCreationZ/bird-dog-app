@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getHarvestedTournament, listOrgUnlocks } from "@/lib/birddog/repository";
 import { resolvePgTeamUrl, scrapePgTeamLive } from "@/lib/birddog/pgScraper";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
+import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
+import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -81,7 +83,17 @@ export async function POST(req: NextRequest) {
 
   const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
   const unlocked: string[] = await listOrgUnlocks(session.orgId).catch(() => []);
-  if (!previewUnlockAll && !unlocked.includes(inventorySlug)) {
+  const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
+  const displayDate = seedMeta?.displayDate || "";
+  const archiveCandidates = [seedMeta?.name, inventorySlug, tournamentId, teamName].filter(Boolean) as string[];
+  const isArchive = archiveCandidates.some((name) =>
+    isFreeTournamentAccess({
+      slug: inventorySlug,
+      name,
+      displayDate
+    })
+  );
+  if (!previewUnlockAll && !isArchive && !unlocked.includes(inventorySlug)) {
     return NextResponse.json({ error: "Tournament is locked for your organization." }, { status: 402 });
   }
 
