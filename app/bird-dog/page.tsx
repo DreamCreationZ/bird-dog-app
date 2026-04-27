@@ -661,6 +661,13 @@ export default function BirdDogPage() {
       } catch {
         if (!mounted) return;
         setCompanies(["PG", "PBR"]);
+        setOpenError("Live harvest feed is temporarily unavailable. Showing inventory fallback.");
+        await Promise.allSettled([
+          fetchInventory(),
+          fetchJobs(),
+          fetchSchedules(),
+          fetchLiveLocations()
+        ]);
       }
     }
     void boot();
