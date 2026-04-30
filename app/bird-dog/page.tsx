@@ -1705,8 +1705,13 @@ export default function BirdDogPage() {
   }
 
   async function logout() {
-    await fetch("/api/session/logout", { method: "POST" });
-    router.replace("/login");
+    try {
+      await fetch("/api/session/logout", { method: "POST", cache: "no-store" });
+    } catch {
+      // Even if API call fails, force user to login screen.
+    } finally {
+      window.location.href = "/login";
+    }
   }
 
   const itinerary = useMemo(() => buildPath(games, watchlistSet), [games, watchlistSet]);
