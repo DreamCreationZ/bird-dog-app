@@ -4,6 +4,8 @@ import { TouchEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Game, ItineraryStop, Player, PulseEvent, ScoutNote, SessionUser, Tournament } from "@/lib/birddog/types";
 import { loadHarvestDataset, loadHarvestOverview, loadHarvestTournament } from "@/lib/birddog/clientHarvest";
+import { INVENTORY_SEED, inventoryHarvestHint } from "@/lib/birddog/inventoryCatalog";
+import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 
 type RecorderState = "idle" | "recording";
 
@@ -131,6 +133,28 @@ function isTournamentLocked(item: InventoryTournament | null | undefined) {
   if (item.isArchive) return false;
   if (DEMO_FREE_TOURNAMENT_SLUGS.has(item.slug)) return false;
   return item.locked;
+}
+
+function fallbackInventoryClient(): InventoryTournament[] {
+  return INVENTORY_SEED.map((item) => {
+    const isArchive = isFreeTournamentAccess({
+      slug: item.slug,
+      name: item.name,
+      displayDate: item.displayDate || ""
+    });
+    return {
+      slug: item.slug,
+      name: item.name,
+      season: item.season,
+      company: item.company,
+      locked: PREVIEW_UNLOCK_ALL ? false : !isArchive,
+      isArchive,
+      harvestHint: inventoryHarvestHint(item),
+      displayDate: item.displayDate || "",
+      displayTeams: item.displayTeams || "",
+      displayCity: item.displayCity || ""
+    };
+  });
 }
 
 function timeLabel(iso: string) {
@@ -898,18 +922,22 @@ export default function BirdDogPage() {
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       setOpenError(`Unable to load tournaments (${res.status}). ${text.slice(0, 180)}`);
-      setInventory([]);
-      return [] as InventoryTournament[];
+      const fallback = fallbackInventoryClient();
+      setInventory(fallback);
+      return fallback;
     }
     const data = await res.json();
     const nextInventory: InventoryTournament[] = data.inventory || [];
     setSubscribed(Boolean(data.subscribed));
+    if (!nextInventory.length) {
+      const fallback = fallbackInventoryClient();
+      setInventory(fallback);
+      setOpenError("Live inventory was empty. Showing default tournament list.");
+      return fallback;
+    }
     setInventory(nextInventory);
     if (data?.warning) {
       setOpenError(String(data.warning));
-    }
-    if (!nextInventory.length && !data?.warning) {
-      setOpenError("No tournaments available yet. Please refresh in a few seconds.");
     }
     return nextInventory;
   }
