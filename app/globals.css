@@ -4,9 +4,9 @@
 
 body {
   margin: 0;
-  background: #f3f0e7;
-  color: #111;
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  background: #070d1a;
+  color: #edf3ff;
+  font-family: "Avenir Next", "Segoe UI", "IBM Plex Sans", sans-serif;
 }
 
 .login-shell {
@@ -19,18 +19,20 @@ body {
   place-items: center;
   padding: 16px;
   background:
-    radial-gradient(circle at 12% 15%, var(--login-primary-soft) 0%, transparent 28%),
-    radial-gradient(circle at 87% 18%, var(--login-accent-soft) 0%, transparent 25%),
-    linear-gradient(180deg, #fffef9 0%, #f3efe3 100%);
+    radial-gradient(circle at 10% 15%, var(--login-primary-soft) 0%, transparent 31%),
+    radial-gradient(circle at 88% 14%, var(--login-accent-soft) 0%, transparent 28%),
+    linear-gradient(175deg, #050a15 0%, #0a1427 44%, #0b1322 100%);
 }
 
 .login-card {
   width: min(540px, 100%);
   border-radius: 16px;
-  border: 1px solid #d6cfbe;
-  background: #fffdf8;
+  border: 1px solid rgba(214, 202, 170, 0.38);
+  background: linear-gradient(155deg, rgba(28, 50, 84, 0.44), rgba(10, 18, 35, 0.94));
   padding: 18px;
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.4);
+  color: #f4f8ff;
+  backdrop-filter: blur(8px);
 }
 
 .login-card form {
@@ -45,15 +47,17 @@ body {
 
 .login-card input {
   width: 100%;
-  border: 1px solid #bbb39f;
+  border: 1px solid rgba(172, 193, 226, 0.38);
   border-radius: 10px;
   padding: 10px;
+  background: rgba(9, 18, 33, 0.84);
+  color: #f2f7ff;
 }
 
 .login-card button {
-  border: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 10px;
-  background: var(--login-primary);
+  background: linear-gradient(140deg, var(--login-primary), rgba(13, 30, 56, 0.95));
   color: #fff;
   padding: 10px 14px;
   font-weight: 700;
@@ -61,35 +65,35 @@ body {
 }
 
 .error-text {
-  color: #9f1919;
+  color: #ff8595;
   margin: 0;
 }
 
 .login-card .muted {
-  color: #5a5548;
+  color: rgba(214, 226, 245, 0.82);
   margin: 0;
   font-size: 0.92rem;
 }
 
 .org-preview {
-  border: 1px solid #d8d1bf;
+  border: 1px solid rgba(182, 203, 236, 0.36);
   border-radius: 12px;
   padding: 10px;
   margin: 8px 0 12px;
   display: flex;
   align-items: center;
   gap: 10px;
-  background: linear-gradient(135deg, #ffffff 0%, #f8f3e8 100%);
+  background: linear-gradient(135deg, rgba(11, 22, 38, 0.88) 0%, rgba(17, 32, 55, 0.86) 100%);
 }
 
 .org-preview-mark {
   width: 52px;
   height: 52px;
   border-radius: 10px;
-  border: 1px solid #c6baa1;
+  border: 1px solid rgba(169, 190, 224, 0.38);
   display: grid;
   place-items: center;
-  background: #fff;
+  background: rgba(8, 16, 30, 0.95);
   overflow: hidden;
   flex-shrink: 0;
 }
@@ -102,7 +106,7 @@ body {
 
 .org-preview-mark span {
   font-weight: 800;
-  color: #22344d;
+  color: #d9e8ff;
 }
 
 .org-preview-title {
@@ -110,11 +114,11 @@ body {
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #6a624f;
+  color: rgba(201, 216, 241, 0.78);
 }
 
 .org-preview-name {
   margin: 2px 0 0;
   font-weight: 700;
-  color: #1a1a1a;
+  color: #f7fbff;
 }

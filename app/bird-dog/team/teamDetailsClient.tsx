@@ -125,6 +125,11 @@ type SavedPaymentMethod = {
   label: string;
 };
 
+type SessionUserTheme = {
+  orgPrimary?: string;
+  orgAccent?: string;
+};
+
 type BookingPaymentMode = "card" | "upi";
 
 type PlannerCacheState = {
@@ -193,6 +198,23 @@ function parseJsonSafe<T>(raw: string | null, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function hexToRgb(hex: string) {
+  const raw = hex.replace("#", "").trim();
+  const full = raw.length === 3 ? raw.split("").map((ch) => `${ch}${ch}`).join("") : raw;
+  if (!/^[\da-f]{6}$/i.test(full)) return null;
+  return {
+    r: Number.parseInt(full.slice(0, 2), 16),
+    g: Number.parseInt(full.slice(2, 4), 16),
+    b: Number.parseInt(full.slice(4, 6), 16)
+  };
+}
+
+function alphaColor(hex: string, alpha: number) {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return `rgba(31,58,95,${alpha})`;
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
 }
 
 function safe(value: string) {
@@ -435,6 +457,7 @@ function prepareBookingLegsForProvider(
 }
 
 export default function TeamDetailsClient({ initialParams }: Props) {
+  const [sessionTheme, setSessionTheme] = useState<SessionUserTheme | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [scheduleRows, setScheduleRows] = useState<TeamScheduleRow[]>([]);
@@ -461,7 +484,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
   const [bookingPaymentMode, setBookingPaymentMode] = useState<BookingPaymentMode>("card");
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState("");
   const [paymentMethodsLoading, setPaymentMethodsLoading] = useState(false);
-  const [paymentMethodSetupLoading, setPaymentMethodSetupLoading] = useState(false);
+  const [paymentSetupReturnTo, setPaymentSetupReturnTo] = useState("/bird-dog/team");
   const [upiCheckoutLoading, setUpiCheckoutLoading] = useState(false);
   const [upiAuthorized, setUpiAuthorized] = useState(false);
   const bookingPaymentRequired = process.env.NEXT_PUBLIC_BIRD_DOG_REQUIRE_BOOKING_PAYMENT !== "0";
@@ -526,10 +549,35 @@ export default function TeamDetailsClient({ initialParams }: Props) {
   );
 
   useEffect(() => {
+    let mounted = true;
+    async function loadSessionTheme() {
+      try {
+        const res = await fetch("/api/session/me");
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ({}));
+        if (!mounted) return;
+        setSessionTheme(data?.user || null);
+      } catch {
+        if (!mounted) return;
+        setSessionTheme(null);
+      }
+    }
+    void loadSessionTheme();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     const param = new URLSearchParams(window.location.search).get("allowPast");
     if (param === "1") setIncludeCompletedGames(true);
     if (param === "0") setIncludeCompletedGames(false);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setPaymentSetupReturnTo(`${window.location.pathname}${window.location.search}`);
   }, []);
 
   useEffect(() => {
@@ -760,8 +808,15 @@ export default function TeamDetailsClient({ initialParams }: Props) {
 
   function goBackOneStep() {
     const qs = new URLSearchParams(window.location.search);
-    const nextTab = "tournaments";
-    const nextInventory = initialParams.returnInventorySlug || initialParams.inventorySlug || qs.get("inventorySlug") || "";
+    const requestedTab = (
+      initialParams.returnTab
+      || qs.get("returnTab")
+      || qs.get("tab")
+      || "notes"
+    ).toLowerCase();
+    const allowedTabs = new Set(["tournaments", "notes", "schedule", "coaches"]);
+    const nextTab = allowedTabs.has(requestedTab) ? requestedTab : "notes";
+    const nextInventory = initialParams.returnInventorySlug || qs.get("returnInventorySlug") || initialParams.inventorySlug || qs.get("inventorySlug") || "";
     const nextTournament = initialParams.returnTournamentId || qs.get("returnTournamentId") || qs.get("tournamentId") || "";
     const nextParams = new URLSearchParams();
     nextParams.set("tab", nextTab);
@@ -1557,32 +1612,6 @@ export default function TeamDetailsClient({ initialParams }: Props) {
     }
   }
 
-  async function openPaymentMethodSetup() {
-    setPaymentMethodSetupLoading(true);
-    try {
-      const returnTo = typeof window === "undefined"
-        ? "/bird-dog/team"
-        : `${window.location.pathname}${window.location.search}`;
-      const res = await fetch("/api/payments/methods/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          returnTo
-        })
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok || !body?.checkoutUrl) {
-        setBookingStatus(body?.error || `Unable to open payment setup (${res.status}).`);
-        return;
-      }
-      window.location.assign(body.checkoutUrl);
-    } catch (error) {
-      setBookingStatus(error instanceof Error ? error.message : "Unable to open payment setup.");
-    } finally {
-      setPaymentMethodSetupLoading(false);
-    }
-  }
-
   async function openUpiCheckout() {
     setUpiCheckoutLoading(true);
     const popup = typeof window === "undefined" ? null : window.open("", "_blank");
@@ -1759,9 +1788,31 @@ export default function TeamDetailsClient({ initialParams }: Props) {
 
   const paymentReady = !bookingPaymentRequired
     || (bookingPaymentMode === "card" ? Boolean(selectedPaymentMethodId) : upiAuthorized);
+  const orgPrimary = sessionTheme?.orgPrimary || "#1f3a5f";
+  const orgAccent = sessionTheme?.orgAccent || "#d7a316";
+  const bgValue = "#060b16";
+  const bgImageValue = `radial-gradient(circle at 12% 14%, ${alphaColor(orgPrimary, 0.28)} 0%, transparent 33%), radial-gradient(circle at 88% 16%, ${alphaColor(orgAccent, 0.2)} 0%, transparent 28%), linear-gradient(175deg, #060b16 0%, #0a1326 46%, #0b1322 100%)`;
+  const panelValue = `linear-gradient(155deg, ${alphaColor(orgPrimary, 0.22)} 0%, rgba(10, 18, 34, 0.92) 72%)`;
+  const inkValue = "#edf3ff";
+  const lineValue = alphaColor(orgAccent, 0.34);
+  const cardInkValue = "#f8fbff";
+  const cardMutedValue = "rgba(214, 226, 245, 0.8)";
 
   return (
-    <main className="bd-root">
+    <main
+      className="bd-root"
+      style={{
+        ["--org-primary" as string]: orgPrimary,
+        ["--org-accent" as string]: orgAccent,
+        ["--bd-bg" as string]: bgValue,
+        ["--bd-bg-image" as string]: bgImageValue,
+        ["--bd-panel" as string]: panelValue,
+        ["--bd-ink" as string]: inkValue,
+        ["--bd-line" as string]: lineValue,
+        ["--bd-card-ink" as string]: cardInkValue,
+        ["--bd-card-muted" as string]: cardMutedValue
+      }}
+    >
       <section className="panel">
         <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
           <button
@@ -2025,14 +2076,17 @@ export default function TeamDetailsClient({ initialParams }: Props) {
           >
             Approve Recommendation
           </button>
-          <button
-            className="secondary"
-            type="button"
-            disabled={paymentMethodSetupLoading}
-            onClick={() => void openPaymentMethodSetup()}
+          <form
+            action="/api/payments/methods/checkout"
+            method="GET"
+            onSubmit={() => setBookingStatus("Opening secure payment setup...")}
+            style={{ margin: 0 }}
           >
-            {paymentMethodSetupLoading ? "Opening Payment..." : "Add / Manage Payment Methods"}
-          </button>
+            <input type="hidden" name="returnTo" value={paymentSetupReturnTo} />
+            <button className="secondary" type="submit">
+              Add / Manage Payment Methods
+            </button>
+          </form>
           <button
             className="secondary"
             type="button"
@@ -2112,7 +2166,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
             Shift itinerary dates forward for provider sandbox mode
           </label>
         ) : null}
-        <div className="panel" style={{ marginTop: 8, background: "#f8f5ec" }}>
+        <div className="panel" style={{ marginTop: 8 }}>
           <h3 style={{ marginTop: 0 }}>Traveler Profile (for OTA booking)</h3>
           <div className="grid2">
             <label>

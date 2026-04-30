@@ -267,7 +267,60 @@ export const HARVEST_DATA: HarvesterDataset[] = [
   }
 ];
 
+const DOMAIN_THEME_PALETTES = [
+  { primary: "#123D79", accent: "#F1C45B" },
+  { primary: "#6E1A2A", accent: "#F5D16B" },
+  { primary: "#0F4B45", accent: "#BEE6CC" },
+  { primary: "#4F1C66", accent: "#E2B9FF" },
+  { primary: "#7A2A17", accent: "#F6C29A" },
+  { primary: "#1A355B", accent: "#A7CDF8" }
+] as const;
+
+function hashDomain(input: string) {
+  let hash = 0;
+  for (let idx = 0; idx < input.length; idx += 1) {
+    hash = (hash * 31 + input.charCodeAt(idx)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function toTitleCaseWord(word: string) {
+  if (!word) return "";
+  return `${word.slice(0, 1).toUpperCase()}${word.slice(1).toLowerCase()}`;
+}
+
+function createFallbackOrgFromDomain(domain: string): OrgBrand {
+  const cleanDomain = domain.trim().toLowerCase();
+  const palette = DOMAIN_THEME_PALETTES[hashDomain(cleanDomain) % DOMAIN_THEME_PALETTES.length];
+  const root = cleanDomain.split(".")[0] || "scout";
+  const label = root
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => toTitleCaseWord(part))
+    .join(" ")
+    .trim() || "Scout";
+  const orgId = root.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "default";
+  const initials = label
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((part) => part[0]?.toUpperCase() || "")
+    .join("") || "ORG";
+
+  return {
+    orgId: `domain-${orgId}`,
+    name: `${label} Athletics`,
+    domain: cleanDomain,
+    primary: palette.primary,
+    accent: palette.accent,
+    logoText: initials
+  };
+}
+
 export function getOrgByEmail(email: string) {
-  const domain = email.split("@")[1]?.toLowerCase() || "";
-  return ORGS.find((org) => org.domain && domain.endsWith(org.domain)) || ORGS.find((org) => org.orgId === "default")!;
+  const domain = email.split("@")[1]?.toLowerCase().trim() || "";
+  const known = ORGS.find((org) => org.domain && domain.endsWith(org.domain));
+  if (known) return known;
+  if (domain) return createFallbackOrgFromDomain(domain);
+  return ORGS.find((org) => org.orgId === "default")!;
 }

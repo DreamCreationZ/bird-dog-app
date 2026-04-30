@@ -21,14 +21,15 @@ export default async function PaymentMethodSavedPage({
   const returnTo = withPmSuccess(safeReturnPath(query.returnTo));
 
   return (
-    <main style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 16, background: "#f7f4ea" }}>
+    <main style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 16, background: "linear-gradient(175deg, #050a15 0%, #0a1427 44%, #0b1322 100%)" }}>
       <section
         style={{
           width: "min(560px, 100%)",
-          background: "#fffdf8",
-          border: "1px solid #d4ccb9",
+          background: "linear-gradient(155deg, rgba(28, 50, 84, 0.44), rgba(10, 18, 35, 0.94))",
+          border: "1px solid rgba(214, 202, 170, 0.38)",
           borderRadius: 12,
-          padding: 20
+          padding: 20,
+          color: "#f4f8ff"
         }}
       >
         <h1 style={{ marginTop: 0, marginBottom: 10 }}>Card Details Saved</h1>
@@ -39,7 +40,7 @@ export default async function PaymentMethodSavedPage({
           href={returnTo}
           style={{
             display: "inline-block",
-            background: "#1f3a5f",
+            background: "linear-gradient(140deg, #1f3a5f, rgba(13, 30, 56, 0.95))",
             color: "#fff",
             textDecoration: "none",
             borderRadius: 8,

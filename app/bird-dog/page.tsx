@@ -1719,13 +1719,13 @@ export default function BirdDogPage() {
   const orgAccent = user?.orgAccent || "#d7a316";
   const orgLogoUrl = (user?.orgLogoUrl || "").trim() || "/branding/a-point-scout-icon.svg";
   const orgDisplayName = user?.orgName || "Neutral Org";
-  const bgValue = "#f9f8f4";
-  const bgImageValue = `radial-gradient(circle at 10% 14%, ${alphaColor(orgPrimary, 0.14)} 0%, transparent 30%), radial-gradient(circle at 86% 22%, ${alphaColor(orgAccent, 0.18)} 0%, transparent 28%), linear-gradient(180deg, #fffef9 0%, #f3efe3 100%)`;
-  const panelValue = "#fffdf8";
-  const inkValue = "#111111";
-  const lineValue = "#d8d2c4";
-  const cardInkValue = "#161616";
-  const cardMutedValue = "#4c4638";
+  const bgValue = "#060b16";
+  const bgImageValue = `radial-gradient(circle at 12% 14%, ${alphaColor(orgPrimary, 0.28)} 0%, transparent 33%), radial-gradient(circle at 88% 16%, ${alphaColor(orgAccent, 0.2)} 0%, transparent 28%), linear-gradient(175deg, #060b16 0%, #0a1326 46%, #0b1322 100%)`;
+  const panelValue = `linear-gradient(155deg, ${alphaColor(orgPrimary, 0.22)} 0%, rgba(10, 18, 34, 0.92) 72%)`;
+  const inkValue = "#edf3ff";
+  const lineValue = alphaColor(orgAccent, 0.34);
+  const cardInkValue = "#f8fbff";
+  const cardMutedValue = "rgba(214, 226, 245, 0.8)";
 
   if (authLoading) {
     return <main className="bd-root"><p>Loading session...</p></main>;
@@ -2043,7 +2043,7 @@ export default function BirdDogPage() {
             </div>
           </div>
           <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
-          <div className="panel" style={{ marginTop: 8, background: "#f8f5ec" }}>
+          <div className="panel" style={{ marginTop: 8 }}>
             <div className="row wrap">
               <label>
                 Search Coach
