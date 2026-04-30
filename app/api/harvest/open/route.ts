@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getHarvestedTournament, listCircuitInventory, listHarvestedTournaments, listOrgUnlocks, upsertHarvestedTournament } from "@/lib/birddog/repository";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { scrapePgTournamentLive } from "@/lib/birddog/pgScraper";
-import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
+import { INVENTORY_SEED, inventoryHarvestHint } from "@/lib/birddog/inventoryCatalog";
 import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 import { bestGroupedEventMatch, fetchPgGroupedEvents } from "@/lib/birddog/pgGroupedEvents";
 
@@ -116,6 +116,39 @@ export async function POST(req: NextRequest) {
           tournament: hydrated || found,
           source: "imported_dataset"
         });
+      }
+
+      // Archive/free tournaments must still be openable even when imported data is missing.
+      if (company === "PG" && isArchive) {
+        const scrapeHint = tournamentHint || inventoryHarvestHint({
+          slug: inventorySlug,
+          name: selected?.name || seedMeta?.name || "Perfect Game Tournament",
+          company
+        });
+        try {
+          const scrapedTournament = await scrapePgTournamentLive(scrapeHint);
+          try {
+            const dbId = await upsertHarvestedTournament({
+              orgId: session.orgId,
+              company,
+              tournament: scrapedTournament
+            });
+            const hydrated = await getHarvestedTournament(session.orgId, dbId);
+            return NextResponse.json({
+              ok: true,
+              tournament: hydrated || scrapedTournament,
+              source: "archive_live_fallback"
+            });
+          } catch {
+            return NextResponse.json({
+              ok: true,
+              tournament: scrapedTournament,
+              source: "archive_live_fallback"
+            });
+          }
+        } catch {
+          // If live scrape fails, continue to 409 response below.
+        }
       }
 
       return NextResponse.json({

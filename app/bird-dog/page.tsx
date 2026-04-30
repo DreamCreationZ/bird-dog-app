@@ -952,7 +952,7 @@ export default function BirdDogPage() {
       const payload = {
         company: item.company,
         inventorySlug: item.slug,
-        tournamentHint: item.name,
+        tournamentHint: item.harvestHint || item.name,
         tournamentId: targetTournamentId || undefined
       };
       const attemptOpen = () =>
@@ -1435,7 +1435,7 @@ export default function BirdDogPage() {
       const payload = {
         company: item.company,
         inventorySlug: item.slug,
-        tournamentHint: item.name,
+        tournamentHint: item.harvestHint || item.name,
         tournamentId: targetTournamentId || undefined
       };
       const attemptOpen = () =>
@@ -1467,10 +1467,11 @@ export default function BirdDogPage() {
           setOpenError("Tournament data is not imported yet. Opened the Perfect Game page in a new tab.");
           return;
         }
+        const detail = typeof data?.detail === "string" && data.detail ? ` (${data.detail})` : "";
         if (liveOpen.status === 401) {
-          throw new Error("Session verification failed. Please sign in again.");
+          throw new Error(`Session verification failed. Please sign in again.${detail}`);
         }
-        throw new Error(data?.error || "Unable to load tournament details");
+        throw new Error(data?.error ? `${data.error}${detail}` : `Unable to load tournament details (${liveOpen.status}).${detail}`);
       }
       const data = await liveOpen.json();
       const openedTournament = data?.tournament as Tournament | undefined;
