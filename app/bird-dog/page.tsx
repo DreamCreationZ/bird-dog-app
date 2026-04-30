@@ -588,9 +588,13 @@ export default function BirdDogPage() {
     () => tournaments.find((t) => t.id === selectedTournamentId) || null,
     [tournaments, selectedTournamentId]
   );
+  const displayInventory = useMemo(
+    () => (inventory.length ? inventory : fallbackInventoryClient()),
+    [inventory]
+  );
   const selectedInventory = useMemo(
-    () => inventory.find((item) => item.slug === selectedInventorySlug) || null,
-    [inventory, selectedInventorySlug]
+    () => displayInventory.find((item) => item.slug === selectedInventorySlug) || null,
+    [displayInventory, selectedInventorySlug]
   );
   const canAccessLockedPages = Boolean(selectedInventory && !isTournamentLocked(selectedInventory));
 
@@ -2196,7 +2200,7 @@ export default function BirdDogPage() {
         {inventoryRefreshing ? <p className="muted small">Syncing latest data from Perfect Game...</p> : null}
         {openError ? <p className="muted">{openError}</p> : null}
         <div className="tournament-grid" style={{ marginTop: 12 }}>
-          {inventory.length ? inventory.map((item) => {
+          {displayInventory.length ? displayInventory.map((item) => {
             const locked = isTournamentLocked(item);
             const opened = selectedInventorySlug === item.slug;
             return (
