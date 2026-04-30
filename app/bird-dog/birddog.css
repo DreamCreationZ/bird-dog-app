@@ -318,11 +318,11 @@
 }
 
 .bd-root .tile-card {
-  border: 1px solid #c8bfad;
+  border: 1px solid #32507a;
   border-radius: 10px;
-  background: #fffcf5;
+  background: #dce6f5;
   padding: 8px;
-  color: var(--bd-card-ink, #161616);
+  color: #111111;
   text-align: center;
   cursor: pointer;
   transition: transform 0.12s ease, box-shadow 0.12s ease;
@@ -334,8 +334,8 @@
 }
 
 .bd-root .tile-card.opened-card {
-  border-color: var(--org-primary);
-  box-shadow: inset 0 0 0 1px var(--org-accent);
+  border-color: #233e66;
+  box-shadow: inset 0 0 0 1px rgba(17, 17, 17, 0.16);
 }
 
 .bd-root .tile-icon {
@@ -358,7 +358,7 @@
 
 .bd-root .tile-card .muted,
 .bd-root .tile-card .small {
-  color: var(--bd-card-muted, #4c4638);
+  color: #111111;
 }
 
 .bd-root .muted {
