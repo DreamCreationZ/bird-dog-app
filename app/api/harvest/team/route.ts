@@ -82,6 +82,7 @@ export async function POST(req: NextRequest) {
   }
 
   const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
+  const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   const unlocked: string[] = await listOrgUnlocks(session.orgId).catch(() => []);
   const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
   const displayDate = seedMeta?.displayDate || "";
@@ -103,7 +104,7 @@ export async function POST(req: NextRequest) {
 
     if (dataMode !== "live" || !allowLiveScrape) {
       const tournament = tournamentId
-        ? await getHarvestedTournament(session.orgId, tournamentId)
+        ? (hasSupabaseConfig ? await getHarvestedTournament(session.orgId, tournamentId).catch(() => null) : null)
         : null;
 
       const targetTeamName = teamName

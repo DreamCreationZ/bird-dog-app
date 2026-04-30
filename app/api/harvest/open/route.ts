@@ -46,6 +46,7 @@ export async function POST(req: NextRequest) {
   }
 
   const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
+  const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   const [unlocked, inventory] = await Promise.all([
     listOrgUnlocks(session.orgId).catch(() => [] as string[]),
     listCircuitInventory().catch(() => [] as Array<{ slug: string; name: string }>)
@@ -81,7 +82,7 @@ export async function POST(req: NextRequest) {
     const allowLiveScrape = process.env.BIRD_DOG_ALLOW_PG_LIVE_SCRAPE === "true";
 
     if (dataMode !== "live" || !allowLiveScrape) {
-      if (tournamentId) {
+      if (hasSupabaseConfig && tournamentId) {
         const tournamentById = await getHarvestedTournament(session.orgId, tournamentId);
         if (tournamentById) {
           return NextResponse.json({
@@ -92,30 +93,32 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const all = await listHarvestedTournaments(session.orgId, company);
-      const wantedList = [
-        ...extractHintCandidates(tournamentHint),
-        selected?.name || "",
-        seedMeta?.name || "",
-        inventorySlug
-      ]
-        .map(normalize)
-        .filter(Boolean);
-      const found = wantedList
-        .map((wanted) =>
-          all.find((t) => normalize(t.name) === wanted)
-          || all.find((t) => normalize(t.name).includes(wanted))
-          || all.find((t) => wanted.includes(normalize(t.name)))
-        )
-        .find((item) => Boolean(item));
+      if (hasSupabaseConfig) {
+        const all = await listHarvestedTournaments(session.orgId, company).catch(() => []);
+        const wantedList = [
+          ...extractHintCandidates(tournamentHint),
+          selected?.name || "",
+          seedMeta?.name || "",
+          inventorySlug
+        ]
+          .map(normalize)
+          .filter(Boolean);
+        const found = wantedList
+          .map((wanted) =>
+            all.find((t) => normalize(t.name) === wanted)
+            || all.find((t) => normalize(t.name).includes(wanted))
+            || all.find((t) => wanted.includes(normalize(t.name)))
+          )
+          .find((item) => Boolean(item));
 
-      if (found) {
-        const hydrated = await getHarvestedTournament(session.orgId, found.id);
-        return NextResponse.json({
-          ok: true,
-          tournament: hydrated || found,
-          source: "imported_dataset"
-        });
+        if (found) {
+          const hydrated = await getHarvestedTournament(session.orgId, found.id).catch(() => null);
+          return NextResponse.json({
+            ok: true,
+            tournament: hydrated || found,
+            source: "imported_dataset"
+          });
+        }
       }
 
       // Archive/free tournaments must still be openable even when imported data is missing.
@@ -151,6 +154,13 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      if (!hasSupabaseConfig) {
+        return NextResponse.json({
+          error: "Tournament data source is not configured.",
+          detail: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY."
+        }, { status: 503 });
+      }
+
       return NextResponse.json({
         error: "Tournament not available in imported dataset yet.",
         detail: "Live PG scraping is disabled. Import this tournament into Supabase first.",
@@ -163,6 +173,13 @@ export async function POST(req: NextRequest) {
     }
 
     const scrapedTournament = await scrapePgTournamentLive(tournamentHint);
+    if (!hasSupabaseConfig) {
+      return NextResponse.json({
+        ok: true,
+        tournament: scrapedTournament,
+        source: "pg_live_scrape_no_db"
+      });
+    }
     const dbId = await upsertHarvestedTournament({
       orgId: session.orgId,
       company,
