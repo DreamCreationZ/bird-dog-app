@@ -949,16 +949,28 @@ export default function BirdDogPage() {
   async function refreshTournamentByInventory(item: InventoryTournament) {
     try {
       const targetTournamentId = await resolveTournamentIdForItem(item);
-      const liveOpen = await fetch("/api/harvest/open", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          company: item.company,
-          inventorySlug: item.slug,
-          tournamentHint: item.name,
-          tournamentId: targetTournamentId || undefined
-        })
-      });
+      const payload = {
+        company: item.company,
+        inventorySlug: item.slug,
+        tournamentHint: item.name,
+        tournamentId: targetTournamentId || undefined
+      };
+      const attemptOpen = () =>
+        fetch("/api/harvest/open", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      let liveOpen = await attemptOpen();
+      if (liveOpen.status === 401) {
+        const sessionCheck = await fetch("/api/session/me", { cache: "no-store" });
+        if (!sessionCheck.ok) {
+          setOpenError("Session expired. Please sign in again.");
+          router.replace("/login");
+          return;
+        }
+        liveOpen = await attemptOpen();
+      }
       if (!liveOpen.ok) return;
       const data = await liveOpen.json();
       const openedTournament = data?.tournament as Tournament | undefined;
@@ -1420,16 +1432,28 @@ export default function BirdDogPage() {
     setJobHint(item.name);
     try {
       const targetTournamentId = await resolveTournamentIdForItem(item);
-      const liveOpen = await fetch("/api/harvest/open", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          company: item.company,
-          inventorySlug: item.slug,
-          tournamentHint: item.name,
-          tournamentId: targetTournamentId || undefined
-        })
-      });
+      const payload = {
+        company: item.company,
+        inventorySlug: item.slug,
+        tournamentHint: item.name,
+        tournamentId: targetTournamentId || undefined
+      };
+      const attemptOpen = () =>
+        fetch("/api/harvest/open", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      let liveOpen = await attemptOpen();
+      if (liveOpen.status === 401) {
+        const sessionCheck = await fetch("/api/session/me", { cache: "no-store" });
+        if (!sessionCheck.ok) {
+          setOpenError("Session expired. Please sign in again.");
+          router.replace("/login");
+          return;
+        }
+        liveOpen = await attemptOpen();
+      }
       if (!liveOpen.ok) {
         const data = await liveOpen.json().catch(() => ({}));
         if (liveOpen.status === 409 && item.company === "PG") {
@@ -1442,6 +1466,9 @@ export default function BirdDogPage() {
           }
           setOpenError("Tournament data is not imported yet. Opened the Perfect Game page in a new tab.");
           return;
+        }
+        if (liveOpen.status === 401) {
+          throw new Error("Session verification failed. Please sign in again.");
         }
         throw new Error(data?.error || "Unable to load tournament details");
       }
