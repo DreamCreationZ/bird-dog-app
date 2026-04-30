@@ -22,7 +22,8 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => ({}));
-  const returnTo = String(body?.returnTo || "/bird-dog").trim() || "/bird-dog";
+  const returnToRaw = String(body?.returnTo || "/bird-dog").trim() || "/bird-dog";
+  const returnTo = returnToRaw.startsWith("/") ? returnToRaw : "/bird-dog";
 
   try {
     const stripe = stripeClient();
@@ -36,8 +37,8 @@ export async function POST(req: NextRequest) {
     }
 
     const appUrl = resolveAppUrl(req);
-    const successUrl = withQuery(`${appUrl}${returnTo}`, "pmSetup", "success");
-    const cancelUrl = withQuery(`${appUrl}${returnTo}`, "pmSetup", "cancelled");
+    const successUrl = withQuery(withQuery(`${appUrl}/payments/methods/saved`, "returnTo", returnTo), "pmSetup", "success");
+    const cancelUrl = withQuery(withQuery(`${appUrl}/payments/methods/cancelled`, "returnTo", returnTo), "pmSetup", "cancelled");
 
     const checkout = await stripe.checkout.sessions.create({
       mode: "setup",

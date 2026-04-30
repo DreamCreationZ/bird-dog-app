@@ -36,8 +36,8 @@ export async function findOrCreateStripeCustomer(input: {
     const match = listed.data.find((item) => {
       if (item.deleted) return false;
       const idMatch = item.metadata?.bird_user_id === user.userId;
-      const orgMatch = item.metadata?.bird_org_id === user.orgId;
-      return idMatch || orgMatch;
+      const emailMatch = Boolean(item.email) && item.email?.toLowerCase() === user.email?.toLowerCase();
+      return idMatch || emailMatch;
     });
     if (match) return match;
   }

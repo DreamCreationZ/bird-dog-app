@@ -626,7 +626,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
     const pmSetup = params.get("pmSetup");
     const travelPayment = params.get("travelPayment");
     if (pmSetup === "success") {
-      setBookingStatus("Payment method saved. Select it below and click Book Approved Travel.");
+      setBookingStatus("Your card details are saved. Please continue with booking using the saved card.");
     } else if (pmSetup === "cancelled") {
       setBookingStatus("Payment method setup cancelled.");
     }
@@ -1559,14 +1559,6 @@ export default function TeamDetailsClient({ initialParams }: Props) {
 
   async function openPaymentMethodSetup() {
     setPaymentMethodSetupLoading(true);
-    const popup = typeof window === "undefined" ? null : window.open("", "_blank");
-    if (popup) {
-      try {
-        popup.document.write("<title>Opening payment setup...</title><p style='font-family:Arial,sans-serif;padding:12px;'>Opening secure payment setup...</p>");
-      } catch {
-        // Ignore popup rendering issues.
-      }
-    }
     try {
       const returnTo = typeof window === "undefined"
         ? "/bird-dog/team"
@@ -1580,26 +1572,11 @@ export default function TeamDetailsClient({ initialParams }: Props) {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || !body?.checkoutUrl) {
-        if (popup && !popup.closed) popup.close();
         setBookingStatus(body?.error || `Unable to open payment setup (${res.status}).`);
         return;
       }
-      if (popup && !popup.closed) {
-        popup.location.href = body.checkoutUrl;
-        try {
-          popup.focus();
-        } catch {
-          // Ignore focus errors.
-        }
-      } else {
-        const opened = window.open(body.checkoutUrl, "_blank");
-        if (!opened) {
-          window.location.assign(body.checkoutUrl);
-        }
-      }
-      setBookingStatus("Payment setup opened in a new tab. Complete it, then return here and click Refresh Methods.");
+      window.location.assign(body.checkoutUrl);
     } catch (error) {
-      if (popup && !popup.closed) popup.close();
       setBookingStatus(error instanceof Error ? error.message : "Unable to open payment setup.");
     } finally {
       setPaymentMethodSetupLoading(false);
