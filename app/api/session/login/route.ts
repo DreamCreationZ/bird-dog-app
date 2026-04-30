@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
       email: user.email
     });
   } catch (error) {
-    return NextResponse.json({ error: "Failed to initialize scout account", detail: String(error) }, { status: 500 });
+    console.error("Failed to upsert scout user during login. Continuing with session fallback.", error);
   }
 
   const token = createSessionToken(user);
