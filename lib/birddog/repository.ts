@@ -111,17 +111,6 @@ export async function seedCircuitInventory() {
     company: item.company
   }));
 
-  const keep = payload.map((item) => `"${item.slug}"`).join(",");
-  if (keep) {
-    await supabaseRequest("circuit_inventory", {
-      method: "DELETE",
-      query: {
-        slug: `not.in.(${keep})`
-      },
-      prefer: "return=minimal"
-    });
-  }
-
   await supabaseRequest("circuit_inventory", {
     method: "POST",
     query: { on_conflict: "slug" },

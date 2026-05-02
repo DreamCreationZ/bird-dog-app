@@ -36,10 +36,11 @@ function sign(value: string) {
   return createHmac("sha256", getSecret()).update(value).digest("base64url");
 }
 
-export function createSessionToken(user: SessionUser) {
+export function createSessionToken(user: SessionUser, options?: { ttlSeconds?: number }) {
+  const ttl = options?.ttlSeconds && options.ttlSeconds > 0 ? options.ttlSeconds : TTL_SECONDS;
   const payload = {
     ...user,
-    exp: Math.floor(Date.now() / 1000) + TTL_SECONDS
+    exp: Math.floor(Date.now() / 1000) + ttl
   };
   const encoded = base64Url(JSON.stringify(payload));
   const signature = sign(encoded);
@@ -71,14 +72,15 @@ export function readSessionFromRequest(req: NextRequest): SessionUser | null {
   return verifySessionToken(token);
 }
 
-export async function setSessionCookie(token: string) {
+export async function setSessionCookie(token: string, options?: { maxAgeSeconds?: number }) {
+  const maxAge = options?.maxAgeSeconds && options.maxAgeSeconds > 0 ? options.maxAgeSeconds : TTL_SECONDS;
   const cookieStore = await cookies();
   cookieStore.set(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
     secure: shouldUseSecureCookie(),
     path: "/",
-    maxAge: TTL_SECONDS
+    maxAge
   });
 }
 

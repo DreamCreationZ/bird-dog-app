@@ -62,6 +62,8 @@ export type SessionUser = {
   orgPrimary?: string;
   orgAccent?: string;
   orgLogoUrl?: string;
+  isAdmin?: boolean;
+  authMethod?: "admin" | "password" | "password_mfa" | "passkey";
 };
 
 export type ScoutNote = {

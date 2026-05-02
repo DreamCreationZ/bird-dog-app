@@ -64,6 +64,17 @@ body {
   cursor: pointer;
 }
 
+.login-card .secondary-btn {
+  background: rgba(9, 19, 36, 0.72);
+  border: 1px solid rgba(176, 197, 230, 0.35);
+  color: #dce7fb;
+}
+
+.login-card button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .error-text {
   color: #ff8595;
   margin: 0;
