@@ -61,6 +61,29 @@ type PlanItem = {
   detail: string;
 };
 
+type PlanWorkflowStatus = "draft" | "pending_approval" | "approved";
+
+type BookingReviewDraft = {
+  travelLegs: Array<{
+    at: string;
+    from: string;
+    to: string;
+    mode: string;
+  }>;
+  traveler: {
+    firstName: string;
+    lastName: string;
+    dateOfBirth: string;
+    gender: "MALE" | "FEMALE" | "UNSPECIFIED";
+    email: string;
+    phone: string;
+    countryCallingCode: string;
+    nationality: string;
+  };
+  teamName: string;
+  tournamentName: string;
+};
+
 type DesiredPlayer = {
   playerId: string;
   selectionKey?: string;
@@ -159,6 +182,8 @@ const PREVIEW_UNLOCK_ALL =
   && process.env.NODE_ENV !== "production";
 const COACH_LOCATION_SHARING_KEY = "bird_dog:coach_location_sharing";
 const LOCAL_SCHEDULE_FALLBACK_KEY = "bird_dog:local_schedule_fallback:v1";
+const PLAN_WORKFLOW_STATUS_KEY_PREFIX = "bird_dog:plan_workflow_status:v1";
+const BOOKING_REVIEW_DRAFT_KEY = "bird_dog:booking_review_draft:v1";
 const DEMO_FREE_TOURNAMENT_SLUGS = new Set(["2025-pg-16u-wwba-national-championship"]);
 
 function isTournamentLocked(item: InventoryTournament | null | undefined) {
@@ -253,6 +278,10 @@ function safeLocalRemove(key: string) {
   } catch {
     // Ignore storage errors.
   }
+}
+
+function isPlanWorkflowStatus(value: string | null | undefined): value is PlanWorkflowStatus {
+  return value === "draft" || value === "pending_approval" || value === "approved";
 }
 
 function localScheduleFallbackKey(user: SessionUser | null) {
@@ -724,7 +753,7 @@ export default function BirdDogPage() {
   const [desiredPlayers, setDesiredPlayers] = useState<DesiredPlayer[]>([]);
   const [desiredPlayerId, setDesiredPlayerId] = useState("");
   const [myGeneratedPlan, setMyGeneratedPlan] = useState<PlanItem[]>([]);
-  const [planWorkflowStatus, setPlanWorkflowStatus] = useState<"draft" | "pending_approval" | "approved">("draft");
+  const [planWorkflowStatus, setPlanWorkflowStatus] = useState<PlanWorkflowStatus>("draft");
   const [planWorkflowNote, setPlanWorkflowNote] = useState("");
   const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false);
 
@@ -741,6 +770,12 @@ export default function BirdDogPage() {
     [displayInventory, selectedInventorySlug]
   );
   const canAccessLockedPages = Boolean(selectedInventory && !isTournamentLocked(selectedInventory));
+  const planWorkflowStatusKey = useMemo(() => {
+    if (!user) return "";
+    const scopeSlug = selectedInventorySlug || "inventory";
+    const scopeTournament = selectedTournamentId || "tournament";
+    return `${PLAN_WORKFLOW_STATUS_KEY_PREFIX}:${user.orgId}:${user.userId}:${scopeSlug}:${scopeTournament}`;
+  }, [selectedInventorySlug, selectedTournamentId, user]);
 
   const games = selectedTournament?.games || [];
   const players = useMemo(() => uniquePlayers(games), [games]);
@@ -775,6 +810,16 @@ export default function BirdDogPage() {
   const tournamentPlayerIndexKeyRef = useRef("");
   const tournamentPlayerIndexLoadingRef = useRef<Promise<TournamentPlayerIndexRow[]> | null>(null);
   const autoPlannerRef = useRef<{ busy: boolean; key: string }>({ busy: false, key: "" });
+
+  function setAndPersistPlanWorkflowStatus(next: PlanWorkflowStatus) {
+    setPlanWorkflowStatus(next);
+    if (!planWorkflowStatusKey) return;
+    if (next === "draft") {
+      safeLocalRemove(planWorkflowStatusKey);
+      return;
+    }
+    safeLocalSet(planWorkflowStatusKey, next);
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -1405,7 +1450,15 @@ export default function BirdDogPage() {
     setDesiredPlayers(mine.desired_players || []);
     const generated = mine.generated_plan || [];
     setMyGeneratedPlan(generated);
-    setPlanWorkflowStatus(generated.length ? "pending_approval" : "draft");
+    const persistedRaw = planWorkflowStatusKey ? safeLocalGet(planWorkflowStatusKey) : null;
+    const persisted = isPlanWorkflowStatus(persistedRaw) ? persistedRaw : null;
+    const nextStatus: PlanWorkflowStatus = generated.length
+      ? (persisted === "approved" ? "approved" : "pending_approval")
+      : "draft";
+    setPlanWorkflowStatus(nextStatus);
+    if (nextStatus === "draft" && planWorkflowStatusKey) {
+      safeLocalRemove(planWorkflowStatusKey);
+    }
   }
 
   async function fetchSchedules() {
@@ -1888,7 +1941,7 @@ export default function BirdDogPage() {
       }];
     });
     autoPlannerRef.current.key = "";
-    setPlanWorkflowStatus("draft");
+    setAndPersistPlanWorkflowStatus("draft");
     setPlanWorkflowNote("Player selection updated. Recommendation is regenerating.");
   }
 
@@ -2133,7 +2186,7 @@ export default function BirdDogPage() {
       };
       setScheduleForm(nextForm);
       setMyGeneratedPlan(finalPlan);
-      setPlanWorkflowStatus("pending_approval");
+      setAndPersistPlanWorkflowStatus("pending_approval");
       setPlanWorkflowNote(
         options?.autoRun
           ? "Recommendation auto-created. Approve recommendation to continue booking."
@@ -2162,7 +2215,7 @@ export default function BirdDogPage() {
       setPlanWorkflowNote("No recommendation available to approve.");
       return;
     }
-    setPlanWorkflowStatus("approved");
+    setAndPersistPlanWorkflowStatus("approved");
     void saveSchedule(myGeneratedPlan, desiredPlayers);
     setPlanWorkflowNote("Recommendation approved. Booking is now enabled.");
   }
@@ -2198,7 +2251,7 @@ export default function BirdDogPage() {
     }
     const fullName = String(user?.name || "").trim();
     const parts = fullName.split(/\s+/).filter(Boolean);
-    const traveler = {
+    const traveler: BookingReviewDraft["traveler"] = {
       firstName: parts[0] || "Coach",
       lastName: parts.slice(1).join(" ") || "User",
       dateOfBirth: "1990-01-01",
@@ -2208,28 +2261,19 @@ export default function BirdDogPage() {
       countryCallingCode: "1",
       nationality: "US"
     };
-
-    setPlanWorkflowNote("Booking approved recommendation...");
-    const res = await fetch("/api/bookings/approve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        teamName: selectedTournament?.name || "",
-        tournamentName: selectedTournament?.name || tournamentViewTitle || "",
-        travelLegs,
-        traveler
-      })
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setPlanWorkflowNote(body?.error || `Booking failed (${res.status}).`);
-      return;
+    const reviewDraft: BookingReviewDraft = {
+      teamName: selectedTournament?.name || "",
+      tournamentName: selectedTournament?.name || tournamentViewTitle || "",
+      travelLegs,
+      traveler
+    };
+    try {
+      window.sessionStorage.setItem(BOOKING_REVIEW_DRAFT_KEY, JSON.stringify(reviewDraft));
+      setPlanWorkflowNote("Opening booking review for all approved travel legs...");
+      router.push(`/bookings/review?returnTo=${encodeURIComponent("/bird-dog?tab=schedule")}`);
+    } catch {
+      setPlanWorkflowNote("Unable to open booking review. Please refresh the page and retry.");
     }
-    const results = Array.isArray(body?.results) ? body.results : [];
-    const booked = results.filter((item: { status?: string }) => item.status === "booked").length;
-    const quoted = results.filter((item: { status?: string }) => item.status === "quoted").length;
-    const failed = results.filter((item: { status?: string }) => item.status === "failed").length;
-    setPlanWorkflowNote(`Booking run complete. Booked: ${booked}, Quoted: ${quoted}, Failed: ${failed}.`);
   }
 
   function downloadPdfLikeReport(title: string, headers: string[], rows: string[][]) {
@@ -2292,8 +2336,7 @@ export default function BirdDogPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const detail = typeof data?.detail === "string" && data.detail ? `: ${data.detail}` : "";
-        setOpenError((data?.error || `Unable to open checkout (${res.status})`) + detail);
+        setOpenError(data?.error || `Unable to open checkout (${res.status})`);
         return;
       }
       if (data?.checkoutUrl) {
@@ -2301,8 +2344,12 @@ export default function BirdDogPage() {
         return;
       }
       if (data?.alreadyUnlocked) {
+        if (typeof data?.redirectTo === "string" && data.redirectTo.startsWith("/")) {
+          window.location.assign(data.redirectTo);
+          return;
+        }
         await fetchInventory();
-        setOpenError("No payment needed. This tournament is already unlocked or available as archive access.");
+        setOpenError(data?.freeUnlock ? "Test mode active: tournament unlocked at $0." : "No payment needed. This tournament is already unlocked or available as archive access.");
         return;
       }
       setOpenError("Checkout URL missing.");
@@ -2438,14 +2485,14 @@ export default function BirdDogPage() {
       return [...prev, { playerId: desiredPlayerId, selectionKey, name: match.name, team: match.school || "Unknown Team" }];
     });
     autoPlannerRef.current.key = "";
-    setPlanWorkflowStatus("draft");
+    setAndPersistPlanWorkflowStatus("draft");
     setPlanWorkflowNote("Target player updated. Recommendation is regenerating.");
   }
 
   function removeDesiredPlayer(selectionKey: string) {
     setDesiredPlayers((prev) => prev.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey));
     autoPlannerRef.current.key = "";
-    setPlanWorkflowStatus("draft");
+    setAndPersistPlanWorkflowStatus("draft");
     setPlanWorkflowNote("Target player removed. Recommendation is regenerating.");
   }
 

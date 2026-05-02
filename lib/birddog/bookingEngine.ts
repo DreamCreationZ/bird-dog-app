@@ -30,6 +30,7 @@ type BookingInput = {
   traveler: TravelerProfile;
   teamName: string;
   tournamentName: string;
+  quoteOnly?: boolean;
 };
 
 function hasValue(value: string | undefined | null) {
@@ -215,7 +216,7 @@ async function amadeusNearestAirportCode(baseUrl: string, token: string, locatio
   return amadeusResolveIata(baseUrl, token, locationHint);
 }
 
-async function bookViaAmadeus(leg: TravelLeg, traveler: TravelerProfile): Promise<BookingResult> {
+async function bookViaAmadeus(leg: TravelLeg, traveler: TravelerProfile, quoteOnly?: boolean): Promise<BookingResult> {
   const config = getAmadeusConfig();
   if (!config) {
     return { provider: "amadeus", status: "skipped", leg, detail: "Amadeus credentials are not configured." };
@@ -263,12 +264,14 @@ async function bookViaAmadeus(leg: TravelLeg, traveler: TravelerProfile): Promis
     const selectedOffer = searchJson.data[0];
     const price = selectedOffer?.price?.total || "";
 
-    if (!config.liveBookingEnabled || !travelerReady(traveler)) {
+    if (quoteOnly || !config.liveBookingEnabled || !travelerReady(traveler)) {
       return {
         provider: "amadeus",
         status: "quoted",
         leg,
-        detail: `Offer found ${origin} -> ${destination}${price ? ` ($${price})` : ""}. Airports mapped from trip locations. Enable AMADEUS_ENABLE_LIVE_BOOKING=true for ticketing.`,
+        detail: quoteOnly
+          ? `Quote found ${origin} -> ${destination}${price ? ` ($${price})` : ""}.`
+          : `Offer found ${origin} -> ${destination}${price ? ` ($${price})` : ""}. Airports mapped from trip locations. Enable AMADEUS_ENABLE_LIVE_BOOKING=true for ticketing.`,
         price
       };
     }
@@ -356,7 +359,8 @@ async function bookViaEndpointProvider(
   config: EndpointProviderConfig,
   leg: TravelLeg,
   traveler: TravelerProfile,
-  context: { teamName: string; tournamentName: string }
+  context: { teamName: string; tournamentName: string },
+  quoteOnly?: boolean
 ): Promise<BookingResult> {
   if (!config.endpoint) {
     return {
@@ -378,7 +382,8 @@ async function bookViaEndpointProvider(
       body: JSON.stringify({
         traveler,
         leg,
-        context
+        context,
+        quoteOnly: Boolean(quoteOnly)
       }),
       cache: "no-store"
     });
@@ -397,7 +402,9 @@ async function bookViaEndpointProvider(
       };
     }
     const normalized = String(parsed?.status || "").toLowerCase();
-    const status: BookingResult["status"] = normalized === "booked" ? "booked" : normalized === "quoted" ? "quoted" : "booked";
+    const status: BookingResult["status"] = quoteOnly
+      ? "quoted"
+      : (normalized === "booked" ? "booked" : normalized === "quoted" ? "quoted" : "booked");
     return {
       provider: config.provider,
       status,
@@ -419,26 +426,27 @@ async function bookViaEndpointProvider(
 async function bookFlightLeg(
   leg: TravelLeg,
   traveler: TravelerProfile,
-  context: { teamName: string; tournamentName: string }
+  context: { teamName: string; tournamentName: string },
+  quoteOnly?: boolean
 ) {
   const providers = parseProviders(process.env.BIRD_DOG_FLIGHT_PROVIDERS, ["amadeus", "sabre"]);
   const attempts: BookingResult[] = [];
   for (const provider of providers) {
     let result: BookingResult;
     if (provider === "amadeus") {
-      result = await bookViaAmadeus(leg, traveler);
+      result = await bookViaAmadeus(leg, traveler, quoteOnly);
     } else if (provider === "sabre") {
       result = await bookViaEndpointProvider({
         provider: "sabre",
         endpoint: process.env.SABRE_BOOKING_API_URL || "",
         apiKey: process.env.SABRE_API_KEY || ""
-      }, leg, traveler, context);
+      }, leg, traveler, context, quoteOnly);
     } else {
       result = await bookViaEndpointProvider({
         provider,
         endpoint: process.env.BIRD_DOG_FLIGHT_PROVIDER_ENDPOINT || "",
         apiKey: process.env.BIRD_DOG_FLIGHT_PROVIDER_API_KEY || ""
-      }, leg, traveler, context);
+      }, leg, traveler, context, quoteOnly);
     }
     attempts.push(result);
     if (result.status === "booked" || result.status === "quoted") {
@@ -456,7 +464,8 @@ async function bookFlightLeg(
 async function bookBusLeg(
   leg: TravelLeg,
   traveler: TravelerProfile,
-  context: { teamName: string; tournamentName: string }
+  context: { teamName: string; tournamentName: string },
+  quoteOnly?: boolean
 ) {
   const providers = parseProviders(process.env.BIRD_DOG_BUS_PROVIDERS, ["redbus", "flixbus", "bus"]);
   const attempts: BookingResult[] = [];
@@ -473,7 +482,7 @@ async function bookBusLeg(
       endpoint = process.env.BUS_BOOKING_API_URL || "";
       apiKey = process.env.BUS_BOOKING_API_KEY || "";
     }
-    const result = await bookViaEndpointProvider({ provider, endpoint, apiKey }, leg, traveler, context);
+    const result = await bookViaEndpointProvider({ provider, endpoint, apiKey }, leg, traveler, context, quoteOnly);
     attempts.push(result);
     if (result.status === "booked" || result.status === "quoted") {
       return result;
@@ -488,7 +497,7 @@ async function bookBusLeg(
 }
 
 export async function executeTravelBookings(input: BookingInput) {
-  if (!travelerReady(input.traveler)) {
+  if (!input.quoteOnly && !travelerReady(input.traveler)) {
     throw new Error("Traveler profile is incomplete for OTA booking.");
   }
 
@@ -502,11 +511,11 @@ export async function executeTravelBookings(input: BookingInput) {
     const leg = normalizeLeg(rawLeg);
     if (!leg.from || !leg.to || !leg.mode) continue;
     if (isFlightMode(leg.mode)) {
-      results.push(await bookFlightLeg(leg, input.traveler, context));
+      results.push(await bookFlightLeg(leg, input.traveler, context, input.quoteOnly));
       continue;
     }
     if (isBusMode(leg.mode)) {
-      results.push(await bookBusLeg(leg, input.traveler, context));
+      results.push(await bookBusLeg(leg, input.traveler, context, input.quoteOnly));
       continue;
     }
     results.push({

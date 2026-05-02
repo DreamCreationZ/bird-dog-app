@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   const travelLegs = parseLegs(body?.travelLegs);
+  const quoteOnly = Boolean(body?.quoteOnly);
   if (!travelLegs.length) {
     return NextResponse.json({ error: "No valid travel legs found." }, { status: 400 });
   }
@@ -45,9 +46,10 @@ export async function POST(req: NextRequest) {
       travelLegs,
       traveler,
       teamName: String(body?.teamName || ""),
-      tournamentName: String(body?.tournamentName || "")
+      tournamentName: String(body?.tournamentName || ""),
+      quoteOnly
     });
-    return NextResponse.json({ ok: true, results });
+    return NextResponse.json({ ok: true, quoteOnly, results });
   } catch (error) {
     return NextResponse.json({
       error: "Failed to execute OTA bookings.",
