@@ -5,7 +5,7 @@ import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
 import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 
-const DEFAULT_UNLOCK_AMOUNT_CENTS = 0;
+const DEFAULT_UNLOCK_AMOUNT_CENTS = 50000;
 const FALLBACK_UNLOCK_COOKIE = "bird_dog_fallback_unlocks";
 const FALLBACK_UNLOCK_TTL_SECONDS = 60 * 60 * 24 * 90;
 export const runtime = "nodejs";
