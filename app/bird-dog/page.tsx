@@ -2360,7 +2360,7 @@ export default function BirdDogPage() {
     setOpenError("");
     setUnlockingSlug(inventorySlug);
     const checkoutWindow = typeof window !== "undefined"
-      ? window.open("", "_blank", "noopener,noreferrer")
+      ? window.open("", "_blank")
       : null;
     if (checkoutWindow) {
       try {
@@ -2388,9 +2388,16 @@ export default function BirdDogPage() {
         return;
       }
       if (data?.checkoutUrl) {
-        if (checkoutWindow && !checkoutWindow.closed) {
-          checkoutWindow.location.href = data.checkoutUrl;
-        } else {
+        if (checkoutWindow) {
+          try {
+            checkoutWindow.location.href = data.checkoutUrl;
+            checkoutWindow.focus();
+            return;
+          } catch {
+            // Continue to fallback below when direct navigation fails.
+          }
+        }
+        if (!checkoutWindow) {
           const popup = window.open(data.checkoutUrl, "_blank", "noopener,noreferrer");
           if (!popup) {
             setOpenError("Popup was blocked. Please allow popups for this site and try Subscribe to Unlock again.");
