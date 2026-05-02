@@ -30,6 +30,12 @@ function shouldUseSecureCookie(req: NextRequest) {
   return req.nextUrl.protocol === "https:";
 }
 
+function isSupabaseConfigError(error: unknown) {
+  const text = String(error || "");
+  return text.includes("Missing environment variable: SUPABASE_URL")
+    || text.includes("Missing environment variable: SUPABASE_SERVICE_ROLE_KEY");
+}
+
 export async function POST(req: NextRequest) {
   const user = readSessionFromRequest(req);
   if (!user) {
@@ -66,18 +72,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Checkout session does not belong to this user." }, { status: 403 });
     }
 
-    const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+    const hasSupabaseConfig = Boolean(
+      process.env.SUPABASE_URL?.trim()
+      && process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
+    );
     if (hasSupabaseConfig) {
-      await unlockTournamentForOrg({
-        orgId,
-        userId,
-        inventorySlug,
-        stripeSessionId: checkout.id,
-        stripePaymentIntentId: typeof checkout.payment_intent === "string" ? checkout.payment_intent : null,
-        amountCents: Number(checkout.amount_total || 0)
-      });
-
-      return NextResponse.json({ ok: true, unlocked: true, inventorySlug, persistence: "database" });
+      try {
+        await unlockTournamentForOrg({
+          orgId,
+          userId,
+          inventorySlug,
+          stripeSessionId: checkout.id,
+          stripePaymentIntentId: typeof checkout.payment_intent === "string" ? checkout.payment_intent : null,
+          amountCents: Number(checkout.amount_total || 0)
+        });
+        return NextResponse.json({ ok: true, unlocked: true, inventorySlug, persistence: "database" });
+      } catch (unlockError) {
+        if (!isSupabaseConfigError(unlockError)) {
+          throw unlockError;
+        }
+      }
     }
 
     const fallbackUnlocks = parseFallbackUnlockCookie(req.cookies.get(FALLBACK_UNLOCK_COOKIE)?.value);

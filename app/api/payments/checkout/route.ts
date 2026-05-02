@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
-import { listCircuitInventory, listOrgUnlocks, seedCircuitInventory } from "@/lib/birddog/repository";
 import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
 import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 
@@ -55,36 +54,16 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
     const cookieUnlocked = fallbackUnlockedSlugs(req);
-
-    let inventory: Array<{ slug: string; name: string }> = [];
-    let unlocked: string[] = [];
-
-    if (hasSupabaseConfig) {
-      await seedCircuitInventory();
-      const [inventoryRows, unlockedRows] = await Promise.all([
-        listCircuitInventory(),
-        listOrgUnlocks(session.orgId)
-      ]);
-      inventory = inventoryRows;
-      unlocked = unlockedRows;
-    } else {
-      inventory = INVENTORY_SEED.map((item) => ({ slug: item.slug, name: item.name }));
-      unlocked = Array.from(cookieUnlocked);
-    }
-
-    const selected = inventory.find((item) => item.slug === inventorySlug);
-    if (!selected) {
-      return NextResponse.json({ error: "Tournament not found" }, { status: 404 });
-    }
-    if (unlocked.includes(inventorySlug) || cookieUnlocked.has(inventorySlug)) {
+    const selected = seedMetaBySlug.get(inventorySlug) || null;
+    if (cookieUnlocked.has(inventorySlug)) {
       return NextResponse.json({ alreadyUnlocked: true, redirectTo: "/bird-dog?subscription=active" });
     }
-    const displayDate = seedMetaBySlug.get(inventorySlug)?.displayDate || "";
-    if (isFreeTournamentAccess({ slug: selected.slug, name: selected.name, displayDate })) {
+    const displayDate = selected?.displayDate || "";
+    if (selected && isFreeTournamentAccess({ slug: inventorySlug, name: selected.name, displayDate })) {
       return NextResponse.json({ alreadyUnlocked: true, redirectTo: "/bird-dog?subscription=archive" });
     }
+    const tournamentName = selected?.name || inventorySlug;
 
     const stripe = new Stripe(required("STRIPE_SECRET_KEY"));
     const appUrl = resolveAppUrl(req);
@@ -110,7 +89,7 @@ export async function POST(req: NextRequest) {
             unit_amount: AMOUNT_CENTS,
             product_data: {
               name: "Bird Dog Tournament Unlock",
-              description: `Unlock ${selected.name} for this organization`
+              description: `Unlock ${tournamentName} for this organization`
             }
           }
         }
