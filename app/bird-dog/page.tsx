@@ -728,7 +728,7 @@ export default function BirdDogPage() {
       } catch {
         if (!mounted) return;
         setCompanies(["PG", "PBR"]);
-        setOpenError("Live harvest feed is temporarily unavailable. Showing inventory fallback.");
+        setOpenError("");
         await Promise.allSettled([
           fetchInventory(),
           fetchJobs(),
@@ -1001,11 +1001,11 @@ export default function BirdDogPage() {
     if (!nextInventory.length) {
       const fallback = fallbackInventoryClient();
       setInventory(fallback);
-      setOpenError("Live inventory was empty. Showing default tournament list.");
+      setOpenError("");
       return fallback;
     }
     setInventory(nextInventory);
-    if (data?.warning) {
+    if (data?.warning && !data?.fallback) {
       setOpenError(String(data.warning));
     }
     return nextInventory;
@@ -1070,6 +1070,56 @@ export default function BirdDogPage() {
     } catch {
       return "";
     }
+  }
+
+  function applyOpenedTournament(openedTournament: Tournament) {
+    setTournaments((prev) => {
+      const filtered = prev.filter((t) => t.id !== openedTournament.id);
+      return [openedTournament, ...filtered];
+    });
+    setSelectedTournamentId(openedTournament.id);
+    setSelectedGameId(openedTournament.games?.[0]?.id || "");
+    setTournamentViewTitle(openedTournament.name);
+    setActiveTab("notes");
+  }
+
+  async function openTournamentFromExistingData(item: InventoryTournament, targetTournamentId?: string) {
+    const wanted = normalizeTournamentName(item.name);
+    const inMemoryMatch = tournaments.find((t) => {
+      const normalized = normalizeTournamentName(t.name);
+      return normalized === wanted || normalized.includes(wanted) || wanted.includes(normalized);
+    });
+    if (inMemoryMatch) {
+      applyOpenedTournament(inMemoryMatch);
+      return true;
+    }
+
+    const tryOpenById = async (candidateId: string) => {
+      const details = await loadHarvestTournament(item.company, candidateId).catch(() => null);
+      if (details) {
+        applyOpenedTournament(details);
+        return true;
+      }
+      return false;
+    };
+
+    if (targetTournamentId) {
+      const opened = await tryOpenById(targetTournamentId);
+      if (opened) return true;
+    }
+
+    const dataset = await loadHarvestDataset(item.company).catch(() => null);
+    if (!dataset?.tournaments?.length) return false;
+    const match = dataset.tournaments.find((t) => {
+      const normalized = normalizeTournamentName(t.name);
+      return normalized === wanted || normalized.includes(wanted) || wanted.includes(normalized);
+    });
+    if (!match) return false;
+
+    const opened = await tryOpenById(match.id);
+    if (opened) return true;
+    applyOpenedTournament(match);
+    return true;
   }
 
   async function refreshFromPerfectGame(includeOpenedTournament: boolean) {
@@ -1852,6 +1902,16 @@ export default function BirdDogPage() {
       }
       if (!liveOpen.ok) {
         const data = await liveOpen.json().catch(() => ({}));
+        const detailText = typeof data?.detail === "string" ? data.detail : "";
+        const missingSupabaseConfig = liveOpen.status === 503
+          && /SUPABASE_URL|SUPABASE_SERVICE_ROLE_KEY/i.test(detailText);
+        if (missingSupabaseConfig) {
+          const openedFromLocal = await openTournamentFromExistingData(item, targetTournamentId || undefined);
+          if (openedFromLocal) {
+            setOpenError("");
+            return;
+          }
+        }
         if (liveOpen.status === 409 && item.company === "PG") {
           await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
           const pgUrl = perfectGameUrlForItem(item);
@@ -1874,14 +1934,7 @@ export default function BirdDogPage() {
       if (!openedTournament) {
         throw new Error("Tournament data was empty.");
       }
-      setTournaments((prev) => {
-        const filtered = prev.filter((t) => t.id !== openedTournament.id);
-        return [openedTournament, ...filtered];
-      });
-      setSelectedTournamentId(openedTournament.id);
-      setSelectedGameId(openedTournament.games?.[0]?.id || "");
-      setTournamentViewTitle(openedTournament.name);
-      setActiveTab("notes");
+      applyOpenedTournament(openedTournament);
     } catch (error) {
       setOpenError(error instanceof Error ? error.message : "Failed to open tournament.");
       await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
@@ -2180,6 +2233,22 @@ export default function BirdDogPage() {
   const showSchedule = activeTab === "schedule";
   const showNotes = activeTab === "notes";
   const showCoaches = activeTab === "coaches";
+  const canGoBackInApp = Boolean(viewingSchedule) || !showTournaments;
+  function goBackInApp() {
+    if (viewingSchedule) {
+      setViewingSchedule(null);
+      return;
+    }
+    if (showNotes) {
+      setActiveTab("tournaments");
+      return;
+    }
+    if (showSchedule || showCoaches) {
+      setActiveTab(selectedTournament ? "notes" : "tournaments");
+      return;
+    }
+    setActiveTab("tournaments");
+  }
   const orgPrimary = user?.orgPrimary || "#1f3a5f";
   const orgAccent = user?.orgAccent || "#d7a316";
   const orgLogoUrl = (user?.orgLogoUrl || "").trim() || "/branding/a-point-scout-icon.svg";
@@ -2264,7 +2333,7 @@ export default function BirdDogPage() {
                 void fetchSchedules();
               }}
             >
-              View Coaches Schedules
+              Coaches Schedules
             </button>
           </div>
         ) : null}
@@ -2293,9 +2362,12 @@ export default function BirdDogPage() {
         </div>
         <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
           <h2>
-            {showTournaments ? "Tournament Dashboard" : showNotes ? "Tournament Roster" : showSchedule ? "My Schedule" : "View Coaches Schedules"}
+            {showTournaments ? "Tournament Dashboard" : showNotes ? "Tournament Roster" : showSchedule ? "My Schedule" : "Coaches Schedules"}
           </h2>
-          <button className="secondary" onClick={() => void logout()}>Log Out</button>
+          <div className="row wrap" style={{ gap: 8 }}>
+            {canGoBackInApp ? <button className="secondary" onClick={goBackInApp}>Back</button> : null}
+            <button className="secondary" onClick={() => void logout()}>Log Out</button>
+          </div>
         </div>
         <p className="muted">
           {showTournaments
@@ -2304,7 +2376,7 @@ export default function BirdDogPage() {
               ? "Open team roster and schedule details."
               : showSchedule
                 ? "Build and save your own travel schedule."
-                : "See other coaches schedules in your organization."}
+                : "See coaches schedules from your university domain."}
         </p>
       </section>
 

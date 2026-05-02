@@ -28,6 +28,7 @@ type TeamScheduleRow = {
 type TeamRosterRow = {
   no: string;
   name: string;
+  team?: string;
   position: string;
   height?: string;
   weight?: string;
@@ -277,7 +278,54 @@ function pickOpponent(teamName: string, homeTeam: string, awayTeam: string) {
 }
 
 function rosterRowKey(row: TeamRosterRow) {
-  return `${row.no || "x"}::${String(row.name || "").toLowerCase()}`;
+  return `${row.no || "x"}::${String(row.name || "").toLowerCase()}::${normalizeTeamName(row.team || "")}`;
+}
+
+function normalizeSearchText(value: string) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function rosterSearchHaystack(row: TeamRosterRow) {
+  return normalizeSearchText(
+    `${row.no} ${row.name} ${row.team || ""} ${row.position} ${row.height || ""} ${row.weight || ""} ${row.batsThrows || ""} ${row.grad || ""} ${row.school || ""} ${row.hometown || ""} ${row.rank || ""} ${row.commitment || ""}`
+  );
+}
+
+function rosterSearchScore(row: TeamRosterRow, query: string, tokens: string[]) {
+  const name = normalizeSearchText(row.name);
+  const team = normalizeSearchText(row.team || "");
+  const hometown = normalizeSearchText(row.hometown || "");
+
+  let score = 0;
+  if (name === query) score += 500;
+  if (name.startsWith(query)) score += 320;
+  if (name.includes(query)) score += 220;
+  if (team.startsWith(query)) score += 200;
+  if (team.includes(query)) score += 160;
+  if (hometown.includes(query)) score += 120;
+
+  for (const token of tokens) {
+    if (!token) continue;
+    if (name.includes(token)) {
+      score += 35;
+    } else if (team.includes(token)) {
+      score += 28;
+    } else if (hometown.includes(token)) {
+      score += 24;
+    }
+  }
+  return score;
+}
+
+function ensureRosterTeam(rows: TeamRosterRow[], fallbackTeam: string) {
+  const team = String(fallbackTeam || "").trim();
+  return rows.map((row) => ({
+    ...row,
+    team: String(row.team || team || "").trim()
+  }));
 }
 
 function parseScheduleDateTime(row: TeamScheduleRow, index: number) {
@@ -755,7 +803,8 @@ export default function TeamDetailsClient({ initialParams }: Props) {
     }
     const data = await res.json();
     const schedule = Array.isArray(data?.schedule) ? data.schedule as TeamScheduleRow[] : [];
-    const roster = Array.isArray(data?.roster) ? data.roster as TeamRosterRow[] : [];
+    const rosterRaw = Array.isArray(data?.roster) ? data.roster as TeamRosterRow[] : [];
+    const roster = ensureRosterTeam(rosterRaw, initialParams.teamName);
     return { schedule, roster };
   }
 
@@ -765,8 +814,9 @@ export default function TeamDetailsClient({ initialParams }: Props) {
       const cacheKey = teamDetailsCacheKey(initialParams);
       const cached = readTeamDetailsCache(cacheKey);
       if (cached) {
+        const cachedRoster = ensureRosterTeam(cached.roster, initialParams.teamName);
         setScheduleRows(cached.schedule);
-        setRosterRows(cached.roster);
+        setRosterRows(cachedRoster);
         setLoading(false);
         return;
       }
@@ -824,6 +874,18 @@ export default function TeamDetailsClient({ initialParams }: Props) {
     if (nextTournament) nextParams.set("tournamentId", nextTournament);
     const target = `/bird-dog?${nextParams.toString()}`;
     window.location.assign(target);
+  }
+
+  function goToCoachScheduleTab() {
+    const nextParams = new URLSearchParams();
+    nextParams.set("tab", "schedule");
+    if (initialParams.returnInventorySlug || initialParams.inventorySlug) {
+      nextParams.set("inventorySlug", initialParams.returnInventorySlug || initialParams.inventorySlug);
+    }
+    if (initialParams.returnTournamentId) {
+      nextParams.set("tournamentId", initialParams.returnTournamentId);
+    }
+    window.location.assign(`/bird-dog?${nextParams.toString()}`);
   }
 
   const notesStorageKey = useMemo(
@@ -1441,9 +1503,10 @@ export default function TeamDetailsClient({ initialParams }: Props) {
       if (hasChange) {
         compareAndAlertScheduleChanges(previous, data.schedule);
         setScheduleRows(data.schedule);
-        setRosterRows(data.roster.length ? data.roster : rosterRowsRef.current);
+        const mergedRoster = ensureRosterTeam(data.roster.length ? data.roster : rosterRowsRef.current, initialParams.teamName);
+        setRosterRows(mergedRoster);
         scheduleFingerprintRef.current = nextFingerprint;
-        writeTeamDetailsCache(teamDetailsCacheKey(initialParams), { schedule: data.schedule, roster: data.roster.length ? data.roster : rosterRowsRef.current });
+        writeTeamDetailsCache(teamDetailsCacheKey(initialParams), { schedule: data.schedule, roster: mergedRoster });
         if (approvedPlan) {
           setPlannerStatus("Perfect Game updated this team schedule. Approve regenerate to modify travel bookings.");
         }
@@ -1568,7 +1631,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
     const desiredPlayers = selectedRoster.map((row) => ({
       playerId: rosterRowKey(row),
       name: row.name,
-      team: initialParams.teamName
+      team: row.team || initialParams.teamName
     }));
 
     const payload = {
@@ -1609,6 +1672,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
       }
     } else {
       setBookingStatus("Approved. Enter traveler profile to create real bookings.");
+      goToCoachScheduleTab();
     }
   }
 
@@ -1759,6 +1823,9 @@ export default function TeamDetailsClient({ initialParams }: Props) {
         parts.push("Only local-transfer legs were detected (cab/walk). No OTA flight/bus leg required for this run.");
       }
       setBookingStatus(parts.join(" "));
+      if (booked || quoted) {
+        goToCoachScheduleTab();
+      }
     } catch (error) {
       setBookingStatus(error instanceof Error ? error.message : "Booking request failed.");
     } finally {
@@ -1779,12 +1846,25 @@ export default function TeamDetailsClient({ initialParams }: Props) {
   }, [scheduleRows, scheduleSearch]);
 
   const filteredRoster = useMemo(() => {
-    const query = rosterSearch.trim().toLowerCase();
+    const query = normalizeSearchText(rosterSearch);
     if (!query) return rosterRows;
-    return rosterRows.filter((row) =>
-      `${row.no} ${row.name} ${row.position} ${row.height || ""} ${row.weight || ""} ${row.batsThrows || ""} ${row.grad || ""} ${row.school} ${row.hometown || ""} ${row.rank || ""} ${row.commitment || ""}`.toLowerCase().includes(query)
-    );
+    const tokens = query.split(" ").filter(Boolean);
+    return rosterRows
+      .map((row, index) => ({
+        row,
+        index,
+        haystack: rosterSearchHaystack(row),
+        score: rosterSearchScore(row, query, tokens)
+      }))
+      .filter((entry) => tokens.every((token) => entry.haystack.includes(token)))
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .map((entry) => entry.row);
   }, [rosterRows, rosterSearch]);
+
+  const smartRosterResults = useMemo(() => {
+    if (!rosterSearch.trim()) return [];
+    return filteredRoster.slice(0, 20);
+  }, [filteredRoster, rosterSearch]);
 
   const paymentReady = !bookingPaymentRequired
     || (bookingPaymentMode === "card" ? Boolean(selectedPaymentMethodId) : upiAuthorized);
@@ -1933,10 +2013,11 @@ export default function TeamDetailsClient({ initialParams }: Props) {
             type="button"
             onClick={() => downloadPdfLikeReport(
               `Tournament Roster - ${initialParams.teamName}`,
-              ["No.", "Name", "Pos", "Ht", "Wt", "B/T", "Grad", "School", "Hometown", "Rank", "Commitment", "Notes"],
+              ["No.", "Name", "Team", "Pos", "Ht", "Wt", "B/T", "Grad", "School", "Hometown", "Rank", "Commitment", "Notes"],
               filteredRoster.map((row, idx) => [
                 row.no || String(idx + 1),
                 row.name,
+                row.team || initialParams.teamName || "-",
                 row.position || "-",
                 row.height || "-",
                 row.weight || "-",
@@ -1958,9 +2039,44 @@ export default function TeamDetailsClient({ initialParams }: Props) {
           <input
             value={rosterSearch}
             onChange={(e) => setRosterSearch(e.target.value)}
-            placeholder="Search no, player name, position, HS"
+            placeholder="Search player, hometown, or team name"
           />
         </label>
+        {rosterSearch.trim() ? (
+          <div className="table-wrap" style={{ marginTop: 8 }}>
+            <table className="roster-table">
+              <thead>
+                <tr>
+                  <th>Best</th>
+                  <th>Player</th>
+                  <th>Hometown</th>
+                  <th>Team</th>
+                </tr>
+              </thead>
+              <tbody>
+                {smartRosterResults.length ? smartRosterResults.map((row, idx) => (
+                  <tr key={`quick-${row.no}-${row.name}-${idx}`}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        disabled={loading || !!error}
+                        checked={selectedPlayers.includes(rosterRowKey(row))}
+                        onChange={() => toggleBestPlayer(row)}
+                      />
+                    </td>
+                    <td>{row.name || "-"}</td>
+                    <td>{row.hometown || "-"}</td>
+                    <td>{row.team || initialParams.teamName || "-"}</td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={4}>No players found for this search in the current unlocked team roster.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
         <div className="table-wrap" style={{ marginTop: 8 }}>
           <table className="roster-table">
             <thead>
@@ -1968,6 +2084,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
                 <th>Best</th>
                 <th>No.</th>
                 <th>Name</th>
+                <th>Team</th>
                 <th>Pos</th>
                 <th>Ht</th>
                 <th>Wt</th>
@@ -1993,6 +2110,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
                   </td>
                   <td>{row.no || idx + 1}</td>
                   <td>{row.name}</td>
+                  <td>{row.team || initialParams.teamName || "-"}</td>
                   <td>{row.position || "-"}</td>
                   <td>{row.height || "-"}</td>
                   <td>{row.weight || "-"}</td>
@@ -2028,7 +2146,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={13}>No roster rows found yet for this team.</td>
+                  <td colSpan={14}>No roster rows found yet for this team.</td>
                 </tr>
               )}
             </tbody>

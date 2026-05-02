@@ -36,6 +36,15 @@ export async function GET(req: NextRequest) {
 
   try {
     const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
+    const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+    if (!hasSupabaseConfig) {
+      return NextResponse.json({
+        subscribed: false,
+        fallback: true,
+        source: "seed_inventory",
+        inventory: fallbackInventory(previewUnlockAll)
+      });
+    }
     const seedMetaBySlug = new Map(INVENTORY_SEED.map((item) => [item.slug, item]));
     await seedCircuitInventory();
     const groupedEvents = await fetchPgGroupedEvents("23065").catch(() => []);
@@ -72,11 +81,22 @@ export async function GET(req: NextRequest) {
       })
     });
   } catch (error) {
+    const detail = String(error || "");
+    const missingConfig = detail.includes("Missing environment variable: SUPABASE_URL")
+      || detail.includes("Missing environment variable: SUPABASE_SERVICE_ROLE_KEY");
+    if (missingConfig) {
+      return NextResponse.json({
+        subscribed: false,
+        fallback: true,
+        source: "seed_inventory",
+        inventory: fallbackInventory(process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true")
+      });
+    }
     return NextResponse.json({
       subscribed: false,
       fallback: true,
       warning: "Failed to read inventory from database. Showing seeded tournaments.",
-      detail: String(error),
+      detail,
       inventory: fallbackInventory(process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true")
     });
   }

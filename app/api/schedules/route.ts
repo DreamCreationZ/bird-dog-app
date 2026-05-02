@@ -23,23 +23,18 @@ function sameDomain(a: string | null | undefined, b: string | null | undefined) 
   return Boolean(da) && da === db;
 }
 
-function redactCrossDomainSchedules(viewerEmail: string, schedules: Awaited<ReturnType<typeof listCoachSchedules>>) {
-  return schedules.map((item) => {
-    const allowed = sameDomain(viewerEmail, item.coach_email);
-    if (allowed) return item;
-    return {
-      ...item,
-      coach_name: "External Coach",
-      coach_email: maskEmail(item.coach_email),
-      flight_source: null,
-      flight_destination: null,
-      flight_arrival_time: null,
-      hotel_name: null,
-      notes: null,
-      desired_players: [],
-      generated_plan: []
-    };
-  });
+function sameDomainSchedulesOnly(
+  viewerEmail: string,
+  viewerUserId: string,
+  schedules: Awaited<ReturnType<typeof listCoachSchedules>>
+) {
+  return schedules.filter((item) => {
+    if (item.user_id === viewerUserId) return true;
+    return sameDomain(viewerEmail, item.coach_email);
+  }).map((item) => ({
+    ...item,
+    coach_email: item.coach_email || maskEmail(item.coach_email)
+  }));
 }
 
 export async function GET(req: NextRequest) {
@@ -51,7 +46,7 @@ export async function GET(req: NextRequest) {
   try {
     await cleanupPastCoachSchedules(session.orgId);
     const schedules = await listCoachSchedules(session.orgId);
-    return NextResponse.json({ schedules: redactCrossDomainSchedules(session.email, schedules) });
+    return NextResponse.json({ schedules: sameDomainSchedulesOnly(session.email, session.userId, schedules) });
   } catch (error) {
     return NextResponse.json({ error: "Failed to load schedules", detail: String(error) }, { status: 500 });
   }
@@ -81,7 +76,7 @@ export async function POST(req: NextRequest) {
     });
 
     const schedules = await listCoachSchedules(session.orgId);
-    return NextResponse.json({ ok: true, schedules: redactCrossDomainSchedules(session.email, schedules) });
+    return NextResponse.json({ ok: true, schedules: sameDomainSchedulesOnly(session.email, session.userId, schedules) });
   } catch (error) {
     return NextResponse.json({ error: "Failed to save schedule", detail: String(error) }, { status: 500 });
   }

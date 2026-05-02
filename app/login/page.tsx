@@ -43,7 +43,8 @@ type LoginResult = {
 
 export default function LoginPage() {
   const router = useRouter();
-  const [name, setName] = useState("Scout User");
+  const [firstName, setFirstName] = useState("Scout");
+  const [lastName, setLastName] = useState("User");
   const [email, setEmail] = useState("scout@lsu.edu");
   const [password, setPassword] = useState("");
   const [codeOne, setCodeOne] = useState("");
@@ -56,6 +57,7 @@ export default function LoginPage() {
   const [fallbackCodes, setFallbackCodes] = useState<FallbackCodes | null>(null);
 
   const org = useMemo(() => getOrgByEmail(email), [email]);
+  const fullName = `${firstName} ${lastName}`.trim() || "Scout User";
 
   async function startLogin(event: FormEvent) {
     event.preventDefault();
@@ -69,7 +71,7 @@ export default function LoginPage() {
       const res = await fetch("/api/session/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "start", name, email, password }),
+        body: JSON.stringify({ mode: "start", name: fullName, email, password }),
         signal: controller.signal
       });
 
@@ -111,7 +113,7 @@ export default function LoginPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           mode: "verify",
-          name,
+          name: fullName,
           email,
           password,
           codeOne,
@@ -165,7 +167,7 @@ export default function LoginPage() {
           user: {
             id: userId,
             name: email.toLowerCase(),
-            displayName: name || "Coach"
+            displayName: fullName || "Coach"
           },
           pubKeyCredParams: [{ type: "public-key", alg: -7 }],
           authenticatorSelection: {
@@ -229,7 +231,7 @@ export default function LoginPage() {
       const res = await fetch("/api/session/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "start", biometric: true, name, email })
+        body: JSON.stringify({ mode: "start", biometric: true, name: fullName, email })
       });
       const data = (await res.json().catch(() => ({}))) as LoginResult;
       if (!res.ok) {
@@ -287,8 +289,12 @@ export default function LoginPage() {
         {stage === "credentials" ? (
           <form onSubmit={startLogin}>
             <label>
-              Full Name
-              <input value={name} onChange={(e) => setName(e.target.value)} required />
+              First Name
+              <input value={firstName} onChange={(e) => setFirstName(e.target.value)} required />
+            </label>
+            <label>
+              Last Name
+              <input value={lastName} onChange={(e) => setLastName(e.target.value)} required />
             </label>
             <label>
               Email

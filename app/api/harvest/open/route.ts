@@ -154,6 +154,24 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      if (!hasSupabaseConfig && company === "PG") {
+        const scrapeHint = tournamentHint || inventoryHarvestHint({
+          slug: inventorySlug,
+          name: selected?.name || seedMeta?.name || "Perfect Game Tournament",
+          company
+        });
+        try {
+          const scrapedTournament = await scrapePgTournamentLive(scrapeHint);
+          return NextResponse.json({
+            ok: true,
+            tournament: scrapedTournament,
+            source: "pg_live_emergency_fallback"
+          });
+        } catch {
+          // Continue to config error below if live fallback fails.
+        }
+      }
+
       if (!hasSupabaseConfig) {
         return NextResponse.json({
           error: "Tournament data source is not configured.",
