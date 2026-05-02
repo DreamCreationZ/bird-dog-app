@@ -63,6 +63,7 @@ type PlanItem = {
 
 type DesiredPlayer = {
   playerId: string;
+  selectionKey?: string;
   name: string;
   team: string;
   hometown?: string;
@@ -153,8 +154,11 @@ type OptimizedStop = ItineraryStop & {
 };
 
 const CACHE_KEY = "bird_dog_tournament_cache";
-const PREVIEW_UNLOCK_ALL = process.env.NEXT_PUBLIC_BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
+const PREVIEW_UNLOCK_ALL =
+  process.env.NEXT_PUBLIC_BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
+  && process.env.NODE_ENV !== "production";
 const COACH_LOCATION_SHARING_KEY = "bird_dog:coach_location_sharing";
+const LOCAL_SCHEDULE_FALLBACK_KEY = "bird_dog:local_schedule_fallback:v1";
 const DEMO_FREE_TOURNAMENT_SLUGS = new Set(["2025-pg-16u-wwba-national-championship"]);
 
 function isTournamentLocked(item: InventoryTournament | null | undefined) {
@@ -249,6 +253,11 @@ function safeLocalRemove(key: string) {
   } catch {
     // Ignore storage errors.
   }
+}
+
+function localScheduleFallbackKey(user: SessionUser | null) {
+  if (!user) return "";
+  return `${LOCAL_SCHEDULE_FALLBACK_KEY}:${user.orgId}:${user.userId}`;
 }
 
 function toRadians(value: number) {
@@ -400,6 +409,33 @@ function normalizeTournamentName(value: string) {
 
 function normalizeSmartSearch(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function smartPlayerSelectionKey(teamId: string, playerId: string) {
+  return `${teamId}::${playerId}`;
+}
+
+function desiredPlayerSelectionKey(item: DesiredPlayer) {
+  return item.selectionKey || item.playerId;
+}
+
+function withHotelReturnLeg(plan: PlanItem[], hotelName: string) {
+  const cleanHotel = hotelName.trim();
+  if (!cleanHotel) return plan;
+  if (plan.some((step) => /^return to hotel$/i.test(step.title))) return plan;
+  const lastAt = plan[plan.length - 1]?.at || "";
+  const lastMs = Date.parse(lastAt);
+  const returnAt = Number.isFinite(lastMs)
+    ? new Date(lastMs + 30 * 60 * 1000).toISOString()
+    : new Date().toISOString();
+  return [
+    ...plan,
+    {
+      at: returnAt,
+      title: "Return to hotel",
+      detail: cleanHotel
+    }
+  ];
 }
 
 function travelModeByDistance(km: number) {
@@ -611,7 +647,7 @@ export default function BirdDogPage() {
   const [coachFilterDate, setCoachFilterDate] = useState("");
   const [coachFilterMeetMode, setCoachFilterMeetMode] = useState<"all" | "common" | "none">("all");
   const [scheduleForm, setScheduleForm] = useState({
-    flightSource: "",
+    flightSource: "Bangalore, Karnataka, India",
     flightDestination: "",
     flightArrivalTime: "",
     hotelName: "",
@@ -628,6 +664,9 @@ export default function BirdDogPage() {
   const [desiredPlayers, setDesiredPlayers] = useState<DesiredPlayer[]>([]);
   const [desiredPlayerId, setDesiredPlayerId] = useState("");
   const [myGeneratedPlan, setMyGeneratedPlan] = useState<PlanItem[]>([]);
+  const [planWorkflowStatus, setPlanWorkflowStatus] = useState<"draft" | "pending_approval" | "approved">("draft");
+  const [planWorkflowNote, setPlanWorkflowNote] = useState("");
+  const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false);
 
   const selectedTournament = useMemo(
     () => tournaments.find((t) => t.id === selectedTournamentId) || null,
@@ -675,6 +714,7 @@ export default function BirdDogPage() {
   const tournamentPlayerIndexRef = useRef<TournamentPlayerIndexRow[]>([]);
   const tournamentPlayerIndexKeyRef = useRef("");
   const tournamentPlayerIndexLoadingRef = useRef<Promise<TournamentPlayerIndexRow[]> | null>(null);
+  const autoPlannerRef = useRef<{ busy: boolean; key: string }>({ busy: false, key: "" });
 
   useEffect(() => {
     let mounted = true;
@@ -837,6 +877,27 @@ export default function BirdDogPage() {
   }, [selectedTournamentId, selectedInventorySlug]);
 
   useEffect(() => {
+    if (activeTab !== "schedule") return;
+    if (!desiredPlayers.length) {
+      autoPlannerRef.current.key = "";
+      return;
+    }
+    if (planWorkflowStatus === "approved") return;
+    const planKey = desiredPlayers
+      .map((item) => desiredPlayerSelectionKey(item))
+      .sort()
+      .join("|");
+    if (!planKey) return;
+    if (autoPlannerRef.current.busy) return;
+    if (autoPlannerRef.current.key === planKey && myGeneratedPlan.length) return;
+    autoPlannerRef.current.busy = true;
+    autoPlannerRef.current.key = planKey;
+    void generateScheduleFromSmartPlayers({ keepActiveTab: true, autoRun: true }).finally(() => {
+      autoPlannerRef.current.busy = false;
+    });
+  }, [activeTab, desiredPlayers, myGeneratedPlan.length, planWorkflowStatus]);
+
+  useEffect(() => {
     if (!canAccessLockedPages) {
       setSourceSuggestions([]);
       setDestinationSuggestions([]);
@@ -933,6 +994,7 @@ export default function BirdDogPage() {
     if (params.get("payment") !== "success") return;
 
     const checkoutSessionId = params.get("session_id") || "";
+    const returnInventorySlug = params.get("inventorySlug") || "";
     const finalize = async () => {
       if (checkoutSessionId) {
         const confirmRes = await fetch("/api/payments/confirm", {
@@ -946,7 +1008,13 @@ export default function BirdDogPage() {
           setOpenError(`${data?.error || "Payment confirmation failed."}${detail}`);
         }
       }
-      await fetchInventory();
+      const nextInventory = await fetchInventory();
+      if (returnInventorySlug) {
+        const paidItem = nextInventory.find((item) => item.slug === returnInventorySlug);
+        if (paidItem && !isTournamentLocked(paidItem)) {
+          setSelectedInventorySlug(returnInventorySlug);
+        }
+      }
       setActiveTab("tournaments");
       const next = new URL(window.location.href);
       next.searchParams.delete("payment");
@@ -1196,6 +1264,59 @@ export default function BirdDogPage() {
     pullTriggeredRef.current = false;
   }
 
+  function readLocalFallbackSchedule(): CoachSchedule | null {
+    const key = localScheduleFallbackKey(user);
+    if (!key) return null;
+    const raw = safeLocalGet(key);
+    if (!raw) return null;
+    const parsed = parseJsonSafe<CoachSchedule | null>(raw, null);
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      id: String(parsed.id || `local-${user?.userId || "coach"}`),
+      user_id: String(parsed.user_id || user?.userId || ""),
+      coach_name: String(parsed.coach_name || user?.name || "Coach"),
+      coach_email: String(parsed.coach_email || user?.email || ""),
+      flight_source: parsed.flight_source ? String(parsed.flight_source) : null,
+      flight_destination: parsed.flight_destination ? String(parsed.flight_destination) : null,
+      flight_arrival_time: parsed.flight_arrival_time ? String(parsed.flight_arrival_time) : null,
+      hotel_name: parsed.hotel_name ? String(parsed.hotel_name) : null,
+      notes: parsed.notes ? String(parsed.notes) : null,
+      desired_players: Array.isArray(parsed.desired_players) ? parsed.desired_players : [],
+      generated_plan: Array.isArray(parsed.generated_plan) ? parsed.generated_plan : [],
+      updated_at: String(parsed.updated_at || new Date().toISOString())
+    };
+  }
+
+  function writeLocalFallbackSchedule(schedule: CoachSchedule) {
+    const key = localScheduleFallbackKey(user);
+    if (!key) return;
+    safeLocalSet(key, JSON.stringify(schedule));
+  }
+
+  function buildLocalFallbackSchedule(
+    formState = scheduleForm,
+    desiredState = desiredPlayers,
+    generatedState = myGeneratedPlan
+  ): CoachSchedule | null {
+    if (!user) return null;
+    const rawArrival = String(formState.flightArrivalTime || "").trim();
+    const normalizedArrival = rawArrival ? localInputToOffsetIso(rawArrival) : null;
+    return {
+      id: `local-${user.userId}`,
+      user_id: user.userId,
+      coach_name: user.name,
+      coach_email: user.email,
+      flight_source: formState.flightSource?.trim() || null,
+      flight_destination: formState.flightDestination?.trim() || null,
+      flight_arrival_time: normalizedArrival,
+      hotel_name: formState.hotelName?.trim() || null,
+      notes: formState.notes?.trim() || null,
+      desired_players: desiredState,
+      generated_plan: generatedState,
+      updated_at: new Date().toISOString()
+    };
+  }
+
   useEffect(() => {
     if (!online || !user || activeTab !== "tournaments") return;
     function onScroll() {
@@ -1216,21 +1337,35 @@ export default function BirdDogPage() {
     if (!mine) return;
 
     setScheduleForm({
-      flightSource: mine.flight_source || "",
+      flightSource: mine.flight_source || "Bangalore, Karnataka, India",
       flightDestination: mine.flight_destination || "",
       flightArrivalTime: toInputDateTime(mine.flight_arrival_time),
       hotelName: mine.hotel_name || "",
       notes: mine.notes || ""
     });
     setDesiredPlayers(mine.desired_players || []);
-    setMyGeneratedPlan(mine.generated_plan || []);
+    const generated = mine.generated_plan || [];
+    setMyGeneratedPlan(generated);
+    setPlanWorkflowStatus(generated.length ? "pending_approval" : "draft");
   }
 
   async function fetchSchedules() {
     const res = await fetch("/api/schedules");
-    if (!res.ok) return;
+    if (!res.ok) {
+      const local = readLocalFallbackSchedule();
+      if (local) {
+        setSchedules([local]);
+        hydrateMySchedule([local]);
+        setPlanWorkflowNote("Cloud schedule sync is unavailable. Showing your local saved recommendation.");
+      }
+      return;
+    }
     const data = await res.json();
-    const scheduleList: CoachSchedule[] = data.schedules || [];
+    const remoteList: CoachSchedule[] = data.schedules || [];
+    const local = readLocalFallbackSchedule();
+    const scheduleList = local && !remoteList.some((item) => item.user_id === local.user_id)
+      ? [local, ...remoteList]
+      : remoteList;
     setSchedules(scheduleList);
     hydrateMySchedule(scheduleList);
   }
@@ -1354,10 +1489,31 @@ export default function BirdDogPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+      const local = buildLocalFallbackSchedule(
+        activeForm,
+        desiredOverride ?? desiredPlayers,
+        generatedPlan ?? myGeneratedPlan
+      );
+      if (local) {
+        writeLocalFallbackSchedule(local);
+        setSchedules((prev) => [local, ...prev.filter((item) => item.user_id !== local.user_id)]);
+        hydrateMySchedule([local]);
+        setPlanWorkflowNote("Saved locally. Cloud sync is unavailable, but your recommendation is ready.");
+      }
+      return;
+    }
 
     const data = await res.json();
     const scheduleList: CoachSchedule[] = data.schedules || [];
+    const local = buildLocalFallbackSchedule(
+      activeForm,
+      desiredOverride ?? desiredPlayers,
+      generatedPlan ?? myGeneratedPlan
+    );
+    if (local) {
+      writeLocalFallbackSchedule(local);
+    }
     setSchedules(scheduleList);
     hydrateMySchedule(scheduleList);
   }
@@ -1377,7 +1533,7 @@ export default function BirdDogPage() {
     setActiveTab("schedule");
     setViewingSchedule(null);
     setScheduleForm({
-      flightSource: item.flight_source || "",
+      flightSource: item.flight_source || "Bangalore, Karnataka, India",
       flightDestination: item.flight_destination || "",
       flightArrivalTime: toInputDateTime(item.flight_arrival_time),
       hotelName: item.hotel_name || "",
@@ -1454,7 +1610,7 @@ export default function BirdDogPage() {
     return fromHint || "";
   }
 
-  function viewTeamScheduleAndRoster(team: TeamRef) {
+  function viewTeamScheduleAndRoster(team: TeamRef, returnTab: "notes" | "schedule" = "notes") {
     const params = new URLSearchParams();
     params.set("inventorySlug", selectedInventorySlug);
     params.set("teamId", team.id);
@@ -1462,7 +1618,7 @@ export default function BirdDogPage() {
     params.set("teamUrl", team.href || "");
     params.set("eventId", currentEventNumber());
     params.set("tournamentName", selectedTournament?.name || tournamentViewTitle || "");
-    params.set("returnTab", "notes");
+    params.set("returnTab", returnTab);
     params.set("returnInventorySlug", selectedInventorySlug);
     params.set("returnTournamentId", selectedTournamentId);
     router.push(`/bird-dog/team?${params.toString()}`);
@@ -1659,12 +1815,14 @@ export default function BirdDogPage() {
   }
 
   function toggleSmartPlayerSelection(item: SmartPlayerResult) {
+    const selectionKey = smartPlayerSelectionKey(item.teamId, item.playerId);
     setDesiredPlayers((prev) => {
-      if (prev.some((row) => row.playerId === item.playerId)) {
-        return prev.filter((row) => row.playerId !== item.playerId);
+      if (prev.some((row) => desiredPlayerSelectionKey(row) === selectionKey)) {
+        return prev.filter((row) => desiredPlayerSelectionKey(row) !== selectionKey);
       }
       return [...prev, {
         playerId: item.playerId,
+        selectionKey,
         name: item.name,
         team: item.teamName,
         hometown: item.hometown
@@ -1710,7 +1868,8 @@ export default function BirdDogPage() {
     });
     if (!location) return null;
 
-    let label = "Current location";
+    const coordLabel = `${location.coords.latitude.toFixed(4)}, ${location.coords.longitude.toFixed(4)}`;
+    let label = `Current location (${coordLabel})`;
     try {
       const reverse = await fetch(`/api/maps/reverse-geocode?lat=${location.coords.latitude}&lng=${location.coords.longitude}`, {
         cache: "no-store"
@@ -1744,7 +1903,7 @@ export default function BirdDogPage() {
     return String(teamMatch?.from || player.team || "Tournament Venue").trim();
   }
 
-  async function buildOptimizedCoachPlan(targetPlayers: DesiredPlayer[]) {
+  async function buildOptimizedCoachPlan(targetPlayers: DesiredPlayer[], preferredSourceText?: string) {
     const grouped = new Map<string, { destination: string; players: DesiredPlayer[]; point: GeoLocation | null }>();
     targetPlayers.forEach((player) => {
       const destination = destinationForPlayer(player);
@@ -1763,9 +1922,10 @@ export default function BirdDogPage() {
       point: await geocodeForRoute(stop.destination)
     })));
 
+    const manualSource = String(preferredSourceText || scheduleForm.flightSource || "").trim();
     const startPoint =
       await detectCoachStartPoint()
-      || (scheduleForm.flightSource.trim() ? await geocodeForRoute(scheduleForm.flightSource.trim()) : null);
+      || (manualSource ? await geocodeForRoute(manualSource) : null);
 
     const unvisited = [...geocoded];
     const ordered: typeof geocoded = [];
@@ -1791,7 +1951,7 @@ export default function BirdDogPage() {
       if (latest?.point) current = latest.point;
     }
 
-    const fallbackStartLabel = scheduleForm.flightSource.trim() || "Current location";
+    const fallbackStartLabel = manualSource || "Current location";
     let cursorMs = Date.now() + 15 * 60 * 1000;
     const travelPlan: PlanItem[] = [];
     let prevLabel = startPoint?.label || fallbackStartLabel;
@@ -1839,41 +1999,145 @@ export default function BirdDogPage() {
       });
     }
 
+    const unresolvedStops = geocoded.filter((stop) => !stop.point).length;
     return {
       plan: travelPlan,
       sourceLabel: startPoint?.label || fallbackStartLabel,
-      firstDestination: ordered[0]?.point?.label || ordered[0]?.destination || ""
+      firstDestination: ordered[0]?.point?.label || ordered[0]?.destination || "",
+      usedLiveLocation: Boolean(startPoint),
+      unresolvedStops
     };
   }
 
-  async function generateScheduleFromSmartPlayers() {
+  async function suggestHotelForDestination(destination: string) {
+    const cleanDestination = destination.trim();
+    if (!cleanDestination) return "";
+    try {
+      const res = await fetch(`/api/maps/hotels?destination=${encodeURIComponent(cleanDestination)}`, { cache: "no-store" });
+      const data = await res.json().catch(() => ({}));
+      const hotels = Array.isArray(data?.hotels) ? data.hotels as HotelSuggestion[] : [];
+      if (hotels.length) {
+        setHotelSuggestions(hotels);
+        return hotels[0]?.name || "";
+      }
+    } catch {
+      // Ignore and use fallback label.
+    }
+    return `Recommended hotel near ${cleanDestination}`;
+  }
+
+  function bestTeamForBooking() {
+    const teams = selectedTournament?.teams || [];
+    if (!teams.length) return null;
+    for (const desired of desiredPlayers) {
+      const wanted = normalizeSmartSearch(desired.team || "");
+      if (!wanted) continue;
+      const match = teams.find((team) => {
+        const normalized = normalizeSmartSearch(team.name || "");
+        return normalized === wanted || normalized.includes(wanted) || wanted.includes(normalized);
+      });
+      if (match) return match;
+    }
+    return teams[0] || null;
+  }
+
+  async function generateScheduleFromSmartPlayers(options?: { keepActiveTab?: boolean; autoRun?: boolean }) {
     if (!desiredPlayers.length) {
-      setPlayerSearchStatus("Select at least one player, then generate schedule.");
+      const msg = "Select at least one player, then generate schedule.";
+      setPlayerSearchStatus(msg);
+      setPlanWorkflowNote(msg);
       return;
     }
     setPlayerSearchStatus(`Generating optimized route for ${desiredPlayers.length} selected players...`);
     try {
-      const optimized = await buildOptimizedCoachPlan(desiredPlayers);
+      const rawSource = scheduleForm.flightSource.trim();
+      const preferredSource = rawSource && !/^current location$/i.test(rawSource)
+        ? rawSource
+        : "Bangalore, Karnataka, India";
+
+      const optimized = await buildOptimizedCoachPlan(desiredPlayers, preferredSource);
       if (!optimized.plan.length) {
-        setPlayerSearchStatus("Could not generate route. Try selecting players with valid hometown/team city.");
+        const msg = "Could not generate route. Try selecting players with valid hometown/team city.";
+        setPlayerSearchStatus(msg);
+        setPlanWorkflowNote(msg);
         return;
       }
 
+      const destination = (scheduleForm.flightDestination || optimized.firstDestination || "").trim();
+      const hotelName = scheduleForm.hotelName.trim() || await suggestHotelForDestination(destination);
+      const finalPlan = withHotelReturnLeg(optimized.plan, hotelName);
+
       const nextForm = {
         ...scheduleForm,
-        flightSource: scheduleForm.flightSource || optimized.sourceLabel,
-        flightDestination: scheduleForm.flightDestination || optimized.firstDestination,
-        flightArrivalTime: scheduleForm.flightArrivalTime || toInputDateTime(optimized.plan[0]?.at || new Date().toISOString()),
-        notes: scheduleForm.notes || "Auto-generated optimized coach route from current location to selected players."
+        flightSource: optimized.usedLiveLocation ? optimized.sourceLabel : preferredSource,
+        flightDestination: destination,
+        flightArrivalTime: scheduleForm.flightArrivalTime || toInputDateTime(finalPlan[0]?.at || new Date().toISOString()),
+        hotelName,
+        notes: scheduleForm.notes || "Auto-generated Bangalore-to-tournament coach route with travel + hotel recommendation."
       };
       setScheduleForm(nextForm);
-      setMyGeneratedPlan(optimized.plan);
-      await saveSchedule(optimized.plan, desiredPlayers, nextForm);
-      setActiveTab("schedule");
-      setPlayerSearchStatus(`Optimized route generated. Review travel legs in My Schedule.`);
+      setMyGeneratedPlan(finalPlan);
+      setPlanWorkflowStatus("pending_approval");
+      setPlanWorkflowNote(
+        options?.autoRun
+          ? "Recommendation auto-created. Coach can verify and approve to continue booking."
+          : "Recommendation created. Submit for coach verification, then approve to enable booking."
+      );
+      await saveSchedule(finalPlan, desiredPlayers, nextForm);
+      if (options?.keepActiveTab !== false) {
+        setActiveTab("schedule");
+      }
+      const locationStatus = optimized.usedLiveLocation
+        ? "Current location detected."
+        : "Using Bangalore as start city.";
+      const unresolvedStatus = optimized.unresolvedStops
+        ? ` ${optimized.unresolvedStops} destination(s) could not be geocoded; fallback travel estimates were used.`
+        : "";
+      setPlayerSearchStatus(`Optimized route generated. ${locationStatus}${unresolvedStatus} Hotel recommendation added.`);
     } catch {
-      setPlayerSearchStatus("Route generation failed. Please allow location access and retry.");
+      const msg = "Route generation failed. Please allow location access and retry.";
+      setPlayerSearchStatus(msg);
+      setPlanWorkflowNote(msg);
     }
+  }
+
+  function submitForCoachVerification() {
+    if (!myGeneratedPlan.length) {
+      setPlanWorkflowNote("Generate recommendation first.");
+      return;
+    }
+    setPlanWorkflowStatus("pending_approval");
+    setPlanWorkflowNote("Recommendation submitted for coach verification.");
+  }
+
+  function coachApproveRecommendation() {
+    if (!myGeneratedPlan.length) {
+      setPlanWorkflowNote("No recommendation available to approve.");
+      return;
+    }
+    setPlanWorkflowStatus("approved");
+    void saveSchedule(myGeneratedPlan, desiredPlayers);
+    const team = bestTeamForBooking();
+    if (team) {
+      setPlanWorkflowNote("Recommendation approved. Opening booking flow...");
+      viewTeamScheduleAndRoster(team, "schedule");
+      return;
+    }
+    setPlanWorkflowNote("Recommendation approved. Booking is now enabled.");
+  }
+
+  function bookApprovedRecommendation() {
+    if (planWorkflowStatus !== "approved") {
+      setPlanWorkflowNote("Approve recommendation first, then booking will start.");
+      return;
+    }
+    const team = bestTeamForBooking();
+    if (!team) {
+      setPlanWorkflowNote("Could not determine a team for booking. Open a tournament team and retry.");
+      return;
+    }
+    setPlanWorkflowNote("Opening booking flow for approved recommendation...");
+    viewTeamScheduleAndRoster(team, "schedule");
   }
 
   function downloadPdfLikeReport(title: string, headers: string[], rows: string[][]) {
@@ -1923,10 +2187,16 @@ export default function BirdDogPage() {
     setOpenError("");
     setUnlockingSlug(inventorySlug);
     try {
+      const returnToParams = new URLSearchParams({
+        tab: "tournaments"
+      });
       const res = await fetch("/api/payments/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ inventorySlug, returnTo: "/bird-dog" })
+        body: JSON.stringify({
+          inventorySlug,
+          returnTo: `/bird-dog?${returnToParams.toString()}`
+        })
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -1935,10 +2205,7 @@ export default function BirdDogPage() {
         return;
       }
       if (data?.checkoutUrl) {
-        const popup = window.open(data.checkoutUrl, "_blank", "noopener,noreferrer");
-        if (!popup) {
-          window.location.href = data.checkoutUrl;
-        }
+        window.location.assign(data.checkoutUrl);
         return;
       }
       if (data?.alreadyUnlocked) {
@@ -2014,13 +2281,7 @@ export default function BirdDogPage() {
         }
         if (liveOpen.status === 409 && item.company === "PG") {
           await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
-          const pgUrl = perfectGameUrlForItem(item);
-          const popup = window.open(pgUrl, "_blank", "noopener,noreferrer");
-          if (!popup) {
-            setOpenError("Tournament data is not imported yet, and popup was blocked. Please allow popups and tap again.");
-            return;
-          }
-          setOpenError("Tournament data is not imported yet. Opened the Perfect Game page in a new tab.");
+          setOpenError("Tournament data is still importing. Please stay here and tap Refresh in a few seconds.");
           return;
         }
         const detail = typeof data?.detail === "string" && data.detail ? ` (${data.detail})` : "";
@@ -2079,14 +2340,15 @@ export default function BirdDogPage() {
     if (!desiredPlayerId) return;
     const match = playersById.get(desiredPlayerId);
     if (!match) return;
+    const selectionKey = `manual:${desiredPlayerId}`;
     setDesiredPlayers((prev) => {
-      if (prev.some((item) => item.playerId === desiredPlayerId)) return prev;
-      return [...prev, { playerId: desiredPlayerId, name: match.name, team: match.school || "Unknown Team" }];
+      if (prev.some((item) => item.playerId === desiredPlayerId || desiredPlayerSelectionKey(item) === selectionKey)) return prev;
+      return [...prev, { playerId: desiredPlayerId, selectionKey, name: match.name, team: match.school || "Unknown Team" }];
     });
   }
 
-  function removeDesiredPlayer(playerId: string) {
-    setDesiredPlayers((prev) => prev.filter((item) => item.playerId !== playerId));
+  function removeDesiredPlayer(selectionKey: string) {
+    setDesiredPlayers((prev) => prev.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey));
   }
 
   function sendPulse() {
@@ -2285,7 +2547,7 @@ export default function BirdDogPage() {
     );
   }, [selectedTournament?.teams, teamsSearchQuery]);
   const desiredPlayerIdSet = useMemo(
-    () => new Set(desiredPlayers.map((item) => item.playerId)),
+    () => new Set(desiredPlayers.map((item) => desiredPlayerSelectionKey(item))),
     [desiredPlayers]
   );
   const myCoachSchedule = useMemo(
@@ -2475,7 +2737,7 @@ export default function BirdDogPage() {
             : showNotes
               ? "Open team roster and schedule details."
               : showSchedule
-                ? "Build and save your own travel schedule."
+                ? "Auto-generate coach travel recommendation, verify, approve, and proceed to booking."
                 : "See coaches schedules from your university domain."}
         </p>
       </section>
@@ -2484,122 +2746,204 @@ export default function BirdDogPage() {
       <section className="panel grid2">
         <div>
           <h2>Coach Schedule</h2>
-          <label>
-            Flight Source
-            <input
-              value={scheduleForm.flightSource}
-              onChange={(e) => setScheduleForm((p) => ({ ...p, flightSource: e.target.value }))}
-              placeholder="Type city or airport (example: Rotterdam)"
-            />
-            {sourceSuggestions.length ? (
-              <div className="log-list" style={{ maxHeight: 130, marginTop: 6 }}>
-                {sourceSuggestions.map((option) => (
-                  <button
-                    key={option.placeId || option.label}
-                    type="button"
-                    className="secondary"
-                    style={{ textAlign: "left", width: "100%" }}
-                    onClick={() => {
-                      setScheduleForm((p) => ({ ...p, flightSource: option.label }));
-                      setSourceSuggestions([]);
-                    }}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </label>
-          <label>
-            Flight Destination
-            <input
-              value={scheduleForm.flightDestination}
-              onChange={(e) => setScheduleForm((p) => ({ ...p, flightDestination: e.target.value }))}
-              placeholder="Type city or airport (example: Bangalore)"
-            />
-            {destinationSuggestions.length ? (
-              <div className="log-list" style={{ maxHeight: 130, marginTop: 6 }}>
-                {destinationSuggestions.map((option) => (
-                  <button
-                    key={option.placeId || option.label}
-                    type="button"
-                    className="secondary"
-                    style={{ textAlign: "left", width: "100%" }}
-                    onClick={() => {
-                      setScheduleForm((p) => ({ ...p, flightDestination: option.label }));
-                      setDestinationSuggestions([]);
-                    }}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </label>
-          <label>
-            Flight Arrival Time
-            <input type="datetime-local" value={scheduleForm.flightArrivalTime} onChange={(e) => setScheduleForm((p) => ({ ...p, flightArrivalTime: e.target.value }))} />
-          </label>
-          <label>
-            Hotel
-            <input
-              value={scheduleForm.hotelName}
-              onChange={(e) => setScheduleForm((p) => ({ ...p, hotelName: e.target.value }))}
-              placeholder="Select hotel or type custom name"
-            />
-          </label>
-          {hotelSuggestions.length ? (
-            <div className="panel" style={{ padding: 10 }}>
-              <p><strong>Suggested Hotels</strong></p>
-              <div className="log-list" style={{ maxHeight: 140 }}>
-                {hotelSuggestions.map((hotel) => {
-                  const checked = scheduleForm.hotelName === hotel.name;
-                  return (
-                    <label key={hotel.placeId || `${hotel.name}-${hotel.address}`} className="row" style={{ alignItems: "center", gap: 8 }}>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => setScheduleForm((p) => ({ ...p, hotelName: checked ? "" : hotel.name }))}
-                      />
-                      <span>{hotel.name} - {hotel.address}</span>
-                    </label>
-                  );
-                })}
-              </div>
+          <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <p className="muted" style={{ margin: 0 }}>
+              Schedule is auto-created from selected players, coach location (fallback Bangalore), and hotel recommendation.
+            </p>
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => setScheduleEditorOpen((prev) => !prev)}
+            >
+              {scheduleEditorOpen ? "Close Edit Details" : "Edit Details"}
+            </button>
+          </div>
+          {!scheduleEditorOpen ? (
+            <div className="panel" style={{ marginTop: 6, marginBottom: 8 }}>
+              <p className="muted" style={{ margin: 0 }}>
+                Flight Source: {scheduleForm.flightSource || "Bangalore, Karnataka, India"}
+              </p>
+              <p className="muted" style={{ margin: "4px 0 0 0" }}>
+                Flight Destination: {scheduleForm.flightDestination || "Will be auto-detected from selected players"}
+              </p>
+              <p className="muted" style={{ margin: "4px 0 0 0" }}>
+                Hotel: {scheduleForm.hotelName || "Will be auto-suggested"}
+              </p>
             </div>
-          ) : null}
-          <label>
-            Notes
-            <textarea rows={3} value={scheduleForm.notes} onChange={(e) => setScheduleForm((p) => ({ ...p, notes: e.target.value }))} />
-          </label>
-          <label>
-            Target Player
-            <div className="row wrap">
-              <select value={desiredPlayerId} onChange={(e) => setDesiredPlayerId(e.target.value)}>
-                {players.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name} ({p.school || "Unknown Team"})</option>
-                ))}
-              </select>
-              <button className="secondary" type="button" onClick={addDesiredPlayer}>Add Player</button>
-            </div>
-          </label>
+          ) : (
+            <>
+              <label>
+                Flight Source
+                <input
+                  value={scheduleForm.flightSource}
+                  onChange={(e) => setScheduleForm((p) => ({ ...p, flightSource: e.target.value }))}
+                  placeholder="Type city or airport"
+                />
+                {sourceSuggestions.length ? (
+                  <div className="log-list" style={{ maxHeight: 130, marginTop: 6 }}>
+                    {sourceSuggestions.map((option) => (
+                      <button
+                        key={option.placeId || option.label}
+                        type="button"
+                        className="secondary"
+                        style={{ textAlign: "left", width: "100%" }}
+                        onClick={() => {
+                          setScheduleForm((p) => ({ ...p, flightSource: option.label }));
+                          setSourceSuggestions([]);
+                        }}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </label>
+              <label>
+                Flight Destination
+                <input
+                  value={scheduleForm.flightDestination}
+                  onChange={(e) => setScheduleForm((p) => ({ ...p, flightDestination: e.target.value }))}
+                  placeholder="Type city or airport"
+                />
+                {destinationSuggestions.length ? (
+                  <div className="log-list" style={{ maxHeight: 130, marginTop: 6 }}>
+                    {destinationSuggestions.map((option) => (
+                      <button
+                        key={option.placeId || option.label}
+                        type="button"
+                        className="secondary"
+                        style={{ textAlign: "left", width: "100%" }}
+                        onClick={() => {
+                          setScheduleForm((p) => ({ ...p, flightDestination: option.label }));
+                          setDestinationSuggestions([]);
+                        }}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </label>
+              <label>
+                Flight Arrival Time
+                <input type="datetime-local" value={scheduleForm.flightArrivalTime} onChange={(e) => setScheduleForm((p) => ({ ...p, flightArrivalTime: e.target.value }))} />
+              </label>
+              <label>
+                Hotel
+                <input
+                  value={scheduleForm.hotelName}
+                  onChange={(e) => setScheduleForm((p) => ({ ...p, hotelName: e.target.value }))}
+                  placeholder="Select hotel or type custom name"
+                />
+              </label>
+              {hotelSuggestions.length ? (
+                <div className="panel" style={{ padding: 10 }}>
+                  <p><strong>Suggested Hotels</strong></p>
+                  <div className="log-list" style={{ maxHeight: 140 }}>
+                    {hotelSuggestions.map((hotel) => {
+                      const checked = scheduleForm.hotelName === hotel.name;
+                      return (
+                        <label key={hotel.placeId || `${hotel.name}-${hotel.address}`} className="row" style={{ alignItems: "center", gap: 8 }}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => setScheduleForm((p) => ({ ...p, hotelName: checked ? "" : hotel.name }))}
+                          />
+                          <span>{hotel.name} - {hotel.address}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+              <label>
+                Notes
+                <textarea rows={3} value={scheduleForm.notes} onChange={(e) => setScheduleForm((p) => ({ ...p, notes: e.target.value }))} />
+              </label>
+              <label>
+                Target Player
+                <div className="row wrap">
+                  <select value={desiredPlayerId} onChange={(e) => setDesiredPlayerId(e.target.value)}>
+                    {players.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name} ({p.school || "Unknown Team"})</option>
+                    ))}
+                  </select>
+                  <button className="secondary" type="button" onClick={addDesiredPlayer}>Add Player</button>
+                </div>
+              </label>
+              <div className="row wrap">
+                <button onClick={() => void saveSchedule()}>Save My Schedule</button>
+                <button className="secondary" onClick={() => void addSchedule()}>Add Schedule</button>
+                <button className="secondary" onClick={() => void fetchSchedules()}>Refresh</button>
+              </div>
+            </>
+          )}
           {desiredPlayers.length ? (
             <div className="log-list" style={{ maxHeight: 140, marginTop: 8 }}>
               {desiredPlayers.map((item) => (
-                <article className="log-card" key={item.playerId}>
+                <article className="log-card" key={desiredPlayerSelectionKey(item)}>
                   <p><strong>{item.name}</strong></p>
                   <p>Team: {item.team}</p>
                   {item.hometown ? <p>Hometown: {item.hometown}</p> : null}
-                  <button className="secondary" type="button" onClick={() => removeDesiredPlayer(item.playerId)}>Remove</button>
+                  <button className="secondary" type="button" onClick={() => removeDesiredPlayer(desiredPlayerSelectionKey(item))}>Remove</button>
                 </article>
               ))}
             </div>
           ) : <p className="muted">Add players to guide schedule generation.</p>}
-          <div className="row wrap">
-            <button onClick={() => void saveSchedule()}>Save My Schedule</button>
-            <button className="secondary" onClick={() => void addSchedule()}>Add Schedule</button>
-            <button className="secondary" onClick={() => void fetchSchedules()}>Refresh</button>
+          <div className="row wrap" style={{ marginTop: 8 }}>
+            <button
+              className="secondary"
+              type="button"
+              disabled={!desiredPlayers.length}
+              onClick={() => void generateScheduleFromSmartPlayers({ keepActiveTab: true })}
+            >
+              Auto Generate Recommendation
+            </button>
+            <button
+              className="secondary"
+              type="button"
+              disabled={!myGeneratedPlan.length}
+              onClick={submitForCoachVerification}
+            >
+              Submit For Coach Verification
+            </button>
+            <button
+              className="secondary"
+              type="button"
+              disabled={!myGeneratedPlan.length || planWorkflowStatus !== "pending_approval"}
+              onClick={coachApproveRecommendation}
+            >
+              Coach Approve Recommendation
+            </button>
+            <button
+              type="button"
+              disabled={planWorkflowStatus !== "approved"}
+              onClick={bookApprovedRecommendation}
+            >
+              Book Approved Travel
+            </button>
           </div>
+          <p className="muted" style={{ marginTop: 8 }}>
+            Workflow status: {planWorkflowStatus === "draft" ? "Draft" : planWorkflowStatus === "pending_approval" ? "Pending coach verification" : "Approved"}
+          </p>
+          {planWorkflowNote ? <p className="muted" style={{ marginTop: 4 }}>{planWorkflowNote}</p> : null}
+          {myGeneratedPlan.length ? (
+            <div className="panel" style={{ marginTop: 10 }}>
+              <h3 style={{ marginTop: 0 }}>My Route Recommendations</h3>
+              <div className="log-list" style={{ maxHeight: 260 }}>
+                {myGeneratedPlan.map((plan, idx) => (
+                  <article className="log-card" key={`${plan.at}-${idx}`}>
+                    <p><strong>{dateLabel(plan.at)} {timeLabel(plan.at)} - {plan.title}</strong></p>
+                    <p>{plan.detail}</p>
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="muted" style={{ marginTop: 8 }}>
+              Recommendation will appear here after selected players are processed. You can also tap Auto Generate Recommendation.
+            </p>
+          )}
         </div>
 
         <div>
@@ -2894,14 +3238,14 @@ export default function BirdDogPage() {
                 className="secondary"
                 type="button"
                 onClick={() => void runTournamentPlayerSearch()}
-                disabled={playerSearchLoading || !canAccessLockedPages}
+                disabled={playerSearchLoading}
               >
                 {playerSearchLoading ? "Searching..." : "Search Players"}
               </button>
               <button
                 type="button"
                 onClick={() => void generateScheduleFromSmartPlayers()}
-                disabled={!desiredPlayers.length || !canAccessLockedPages}
+                disabled={!desiredPlayers.length}
               >
                 Generate My Schedule
               </button>
@@ -2924,7 +3268,7 @@ export default function BirdDogPage() {
                         <td>
                           <input
                             type="checkbox"
-                            checked={desiredPlayerIdSet.has(item.playerId)}
+                            checked={desiredPlayerIdSet.has(smartPlayerSelectionKey(item.teamId, item.playerId))}
                             onChange={() => toggleSmartPlayerSelection(item)}
                           />
                         </td>

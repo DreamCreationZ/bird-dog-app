@@ -45,7 +45,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
+  const previewUnlockAll =
+    process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
+    && process.env.NODE_ENV !== "production";
   const cookieUnlockedSet = fallbackUnlockedSlugs(req);
 
   try {
