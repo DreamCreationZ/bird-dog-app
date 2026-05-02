@@ -5,7 +5,18 @@ import { bestGroupedEventMatch, fetchPgGroupedEvents } from "@/lib/birddog/pgGro
 import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 
-function fallbackInventory(previewUnlockAll: boolean) {
+const FALLBACK_UNLOCK_COOKIE = "bird_dog_fallback_unlocks";
+
+function fallbackUnlockedSlugs(req: NextRequest) {
+  const raw = req.cookies.get(FALLBACK_UNLOCK_COOKIE)?.value || "";
+  const values = raw
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return new Set(values);
+}
+
+function fallbackInventory(previewUnlockAll: boolean, unlockedSet: Set<string>) {
   return INVENTORY_SEED.map((item) => {
     const isArchive = isFreeTournamentAccess({
       slug: item.slug,
@@ -18,7 +29,7 @@ function fallbackInventory(previewUnlockAll: boolean) {
       name: item.name,
       season: item.season,
       company: item.company,
-      locked: previewUnlockAll ? false : !isArchive,
+      locked: previewUnlockAll ? false : (isArchive ? false : !unlockedSet.has(item.slug)),
       isArchive,
       harvestHint: inventoryHarvestHint(item),
       displayDate: item.displayDate || "",
@@ -34,15 +45,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
+  const cookieUnlockedSet = fallbackUnlockedSlugs(req);
+
   try {
-    const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
     const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
     if (!hasSupabaseConfig) {
       return NextResponse.json({
-        subscribed: false,
+        subscribed: previewUnlockAll || cookieUnlockedSet.size > 0,
         fallback: true,
         source: "seed_inventory",
-        inventory: fallbackInventory(previewUnlockAll)
+        inventory: fallbackInventory(previewUnlockAll, cookieUnlockedSet)
       });
     }
     const seedMetaBySlug = new Map(INVENTORY_SEED.map((item) => [item.slug, item]));
@@ -54,13 +67,13 @@ export async function GET(req: NextRequest) {
     ]);
     if (!inventory.length) {
       return NextResponse.json({
-        subscribed: false,
+        subscribed: previewUnlockAll || cookieUnlockedSet.size > 0,
         fallback: true,
         warning: "Inventory table was empty. Showing seeded tournaments.",
-        inventory: fallbackInventory(previewUnlockAll)
+        inventory: fallbackInventory(previewUnlockAll, cookieUnlockedSet)
       });
     }
-    const unlockedSet = new Set(unlockedSlugs);
+    const unlockedSet = new Set([...unlockedSlugs, ...cookieUnlockedSet]);
 
     return NextResponse.json({
       subscribed: previewUnlockAll || unlockedSet.size > 0,
@@ -86,18 +99,18 @@ export async function GET(req: NextRequest) {
       || detail.includes("Missing environment variable: SUPABASE_SERVICE_ROLE_KEY");
     if (missingConfig) {
       return NextResponse.json({
-        subscribed: false,
+        subscribed: previewUnlockAll || cookieUnlockedSet.size > 0,
         fallback: true,
         source: "seed_inventory",
-        inventory: fallbackInventory(process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true")
+        inventory: fallbackInventory(previewUnlockAll, cookieUnlockedSet)
       });
     }
     return NextResponse.json({
-      subscribed: false,
+      subscribed: previewUnlockAll || cookieUnlockedSet.size > 0,
       fallback: true,
       warning: "Failed to read inventory from database. Showing seeded tournaments.",
       detail,
-      inventory: fallbackInventory(process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true")
+      inventory: fallbackInventory(previewUnlockAll, cookieUnlockedSet)
     });
   }
 }
