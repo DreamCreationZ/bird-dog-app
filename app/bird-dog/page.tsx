@@ -2596,20 +2596,21 @@ export default function BirdDogPage() {
   const showNotes = activeTab === "notes";
   const showCoaches = activeTab === "coaches";
   const canGoBackInApp = Boolean(viewingSchedule) || !showTournaments;
+  function goToTournamentDashboard() {
+    setActiveTab("tournaments");
+    setMenuOpen(false);
+    void fetchInventory();
+  }
   function goBackInApp() {
     if (viewingSchedule) {
       setViewingSchedule(null);
       return;
     }
-    if (showNotes) {
-      setActiveTab("tournaments");
+    if (showNotes || showSchedule || showCoaches) {
+      goToTournamentDashboard();
       return;
     }
-    if (showSchedule || showCoaches) {
-      setActiveTab(selectedTournament ? "notes" : "tournaments");
-      return;
-    }
-    setActiveTab("tournaments");
+    goToTournamentDashboard();
   }
   const orgPrimary = user?.orgPrimary || "#1f3a5f";
   const orgAccent = user?.orgAccent || "#d7a316";
@@ -2720,7 +2721,7 @@ export default function BirdDogPage() {
               <p className="brand-ribbon-org">{orgDisplayName}</p>
             </div>
           </div>
-          <button className="secondary" onClick={() => setActiveTab("tournaments")}>Dashboard</button>
+          <button className="secondary" onClick={goToTournamentDashboard}>Dashboard</button>
         </div>
         <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
           <h2>
