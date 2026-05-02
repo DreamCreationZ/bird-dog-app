@@ -3296,7 +3296,11 @@ export default function BirdDogPage() {
               </table>
             </div>
           ) : (
-            <p className="muted">No other coach schedules match current filters.</p>
+            <p className="muted">
+              {otherCoachSchedules.length
+                ? "No other coach schedules match current filters."
+                : "No coaches schedules yet."}
+            </p>
           )}
           <div className="row wrap">
             <button className="secondary" onClick={() => setActiveTab("schedule")}>Go to My Schedule</button>
