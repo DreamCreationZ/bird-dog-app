@@ -121,6 +121,14 @@ type TeamRosterSearchRow = {
   hometown?: string;
 };
 
+type TournamentPlayerIndexRow = {
+  playerId: string;
+  name: string;
+  hometown: string;
+  teamId: string;
+  teamName: string;
+};
+
 type SmartPlayerResult = {
   key: string;
   playerId: string;
@@ -664,6 +672,9 @@ export default function BirdDogPage() {
   const bottomRefreshAtRef = useRef(0);
   const teamRosterSearchCacheRef = useRef<Map<string, TeamRosterSearchRow[]>>(new Map());
   const geocodeCacheRef = useRef<Map<string, GeoLocation | null>>(new Map());
+  const tournamentPlayerIndexRef = useRef<TournamentPlayerIndexRow[]>([]);
+  const tournamentPlayerIndexKeyRef = useRef("");
+  const tournamentPlayerIndexLoadingRef = useRef<Promise<TournamentPlayerIndexRow[]> | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -820,6 +831,9 @@ export default function BirdDogPage() {
     setPlayerSearchResults([]);
     setPlayerSearchStatus("");
     teamRosterSearchCacheRef.current.clear();
+    tournamentPlayerIndexRef.current = [];
+    tournamentPlayerIndexKeyRef.current = "";
+    tournamentPlayerIndexLoadingRef.current = null;
   }, [selectedTournamentId, selectedInventorySlug]);
 
   useEffect(() => {
@@ -1478,7 +1492,8 @@ export default function BirdDogPage() {
         teamUrl: team.href || "",
         teamName: team.name,
         eventId: currentEventNumber(),
-        tournamentId: selectedTournamentId
+        tournamentId: selectedTournamentId,
+        searchOnly: true
       })
     });
     if (!res.ok) return [];
@@ -1493,6 +1508,48 @@ export default function BirdDogPage() {
       .filter((row) => row.name.trim().length > 1);
     teamRosterSearchCacheRef.current.set(team.id, normalized);
     return normalized;
+  }
+
+  async function loadTournamentPlayerIndex(): Promise<TournamentPlayerIndexRow[]> {
+    const cacheKey = `${selectedInventorySlug}:${selectedTournamentId}`;
+    if (!selectedInventorySlug || !selectedTournamentId) return [];
+    if (tournamentPlayerIndexKeyRef.current === cacheKey && tournamentPlayerIndexRef.current.length) {
+      return tournamentPlayerIndexRef.current;
+    }
+    if (tournamentPlayerIndexLoadingRef.current) {
+      return tournamentPlayerIndexLoadingRef.current;
+    }
+
+    const pending = fetch("/api/harvest/team-search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        inventorySlug: selectedInventorySlug,
+        tournamentId: selectedTournamentId
+      })
+    })
+      .then((res) => (res.ok ? res.json() : { rows: [] }))
+      .then((data) => {
+        const rows = Array.isArray(data?.rows) ? data.rows as Array<Record<string, unknown>> : [];
+        const normalized: TournamentPlayerIndexRow[] = rows
+          .map((row) => ({
+            playerId: String(row?.playerId || ""),
+            name: String(row?.name || ""),
+            hometown: String(row?.hometown || ""),
+            teamId: String(row?.teamId || ""),
+            teamName: String(row?.teamName || "")
+          }))
+          .filter((row) => row.playerId && row.name && row.teamId && row.teamName);
+        tournamentPlayerIndexRef.current = normalized;
+        tournamentPlayerIndexKeyRef.current = cacheKey;
+        return normalized;
+      })
+      .catch(() => []);
+
+    tournamentPlayerIndexLoadingRef.current = pending;
+    const rows = await pending;
+    tournamentPlayerIndexLoadingRef.current = null;
+    return rows;
   }
 
   async function runTournamentPlayerSearch() {
@@ -1510,27 +1567,67 @@ export default function BirdDogPage() {
     }
 
     setPlayerSearchLoading(true);
-    setPlayerSearchStatus("Scanning team rosters...");
+    setPlayerSearchStatus("Searching players...");
     setPlayerSearchResults([]);
 
     try {
       const queryTokens = query.split(" ").filter(Boolean);
+      const quickRows = await loadTournamentPlayerIndex();
+      const cacheKey = `${selectedInventorySlug}:${selectedTournamentId}`;
+      const deepIndexMap = new Map<string, TournamentPlayerIndexRow>(
+        quickRows.map((row) => [`${row.teamId}::${row.playerId}`, row])
+      );
+      if (quickRows.length) {
+        const fast = quickRows
+          .filter((row) => {
+            const blob = normalizeSmartSearch(`${row.name} ${row.hometown || ""} ${row.teamName}`);
+            return queryTokens.every((token) => blob.includes(token));
+          })
+          .map((row) => ({
+            key: `${row.teamId}::${normalizeSmartSearch(row.name)}::${row.playerId}`,
+            playerId: row.playerId,
+            name: row.name,
+            hometown: row.hometown || "-",
+            teamId: row.teamId,
+            teamName: row.teamName
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name) || a.teamName.localeCompare(b.teamName))
+          .slice(0, 120);
+        setPlayerSearchResults(fast);
+        setPlayerSearchStatus(
+          fast.length
+            ? `Found ${fast.length} players instantly.`
+            : "No instant match yet. Running deep scan..."
+        );
+        if (fast.length) return;
+      }
+
       const matches = new Map<string, SmartPlayerResult>();
       const scanList = teams.slice(0, 80);
-      const chunkSize = 5;
+      const chunkSize = 20;
 
       for (let start = 0; start < scanList.length; start += chunkSize) {
         const chunk = scanList.slice(start, start + chunkSize);
         const loaded = await Promise.all(chunk.map((team) => loadRosterForSmartSearch(team).then((roster) => ({ team, roster }))));
         loaded.forEach(({ team, roster }) => {
           roster.forEach((row) => {
+            const normalizedName = normalizeSmartSearch(row.name);
+            const playerId = resolvePlayerIdByName(row.name, team.id);
+            deepIndexMap.set(`${team.id}::${playerId}`, {
+              playerId,
+              name: row.name,
+              hometown: row.hometown || team.from || "-",
+              teamId: team.id,
+              teamName: team.name
+            });
+
             const blob = normalizeSmartSearch(`${row.name} ${row.hometown || ""} ${team.name}`);
             if (!queryTokens.every((token) => blob.includes(token))) return;
-            const key = `${team.id}::${normalizeSmartSearch(row.name)}::${row.no || ""}`;
+            const key = `${team.id}::${normalizedName}::${row.no || ""}`;
             if (matches.has(key)) return;
             matches.set(key, {
               key,
-              playerId: resolvePlayerIdByName(row.name, team.id),
+              playerId,
               name: row.name,
               hometown: row.hometown || team.from || "-",
               teamId: team.id,
@@ -1540,9 +1637,12 @@ export default function BirdDogPage() {
         });
 
         const scanned = Math.min(start + chunk.length, scanList.length);
-        setPlayerSearchStatus(`Scanning ${scanned}/${scanList.length} teams...`);
+        setPlayerSearchStatus(`Deep scan ${scanned}/${scanList.length} teams...`);
         if (matches.size >= 120 && scanned >= 20) break;
       }
+
+      tournamentPlayerIndexRef.current = Array.from(deepIndexMap.values());
+      tournamentPlayerIndexKeyRef.current = cacheKey;
 
       const result = Array.from(matches.values())
         .sort((a, b) => a.name.localeCompare(b.name) || a.teamName.localeCompare(b.teamName))

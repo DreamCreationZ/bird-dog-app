@@ -76,6 +76,7 @@ export async function POST(req: NextRequest) {
   const teamName = String(body?.teamName || "").trim();
   const eventId = String(body?.eventId || "").trim();
   const tournamentId = String(body?.tournamentId || "").trim();
+  const searchOnly = body?.searchOnly === true || String(body?.searchOnly || "") === "true";
 
   if (!inventorySlug) {
     return NextResponse.json({ error: "inventorySlug is required" }, { status: 400 });
@@ -162,6 +163,16 @@ export async function POST(req: NextRequest) {
         const importedReady = schedule.length && importedRoster.length;
         const importedDetailed = hasDetailedRosterColumns(importedRoster);
 
+        if (searchOnly) {
+          return NextResponse.json({
+            ok: true,
+            source: "imported_search_fast",
+            schedule,
+            roster: importedRoster,
+            teamUrl: ""
+          });
+        }
+
         const shouldEnrichFromLive = !importedReady || !importedDetailed;
         if (shouldEnrichFromLive) {
           const fallbackTeamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName: targetTeamName || teamName, eventId });
@@ -224,6 +235,16 @@ export async function POST(req: NextRequest) {
             teamUrl: ""
           });
         }
+      }
+
+      if (searchOnly) {
+        return NextResponse.json({
+          ok: true,
+          source: "imported_search_fast",
+          schedule: [],
+          roster: [],
+          teamUrl: ""
+        });
       }
 
       const fallbackTeamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName: targetTeamName || teamName, eventId });
