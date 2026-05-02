@@ -130,6 +130,12 @@ type SmartPlayerResult = {
   teamName: string;
 };
 
+type GeoLocation = {
+  lat: number;
+  lng: number;
+  label: string;
+};
+
 type OptimizedStop = ItineraryStop & {
   gameStartAt: string;
   gameEndAt: string;
@@ -386,6 +392,13 @@ function normalizeTournamentName(value: string) {
 
 function normalizeSmartSearch(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function travelModeByDistance(km: number) {
+  if (km >= 850) return { mode: "Flight", minutes: Math.round((km / 760) * 60 + 160) };
+  if (km >= 250) return { mode: "Bus / Train", minutes: Math.round((km / 85) * 60 + 35) };
+  if (km >= 45) return { mode: "Cab / Car", minutes: Math.round((km / 45) * 60 + 15) };
+  return { mode: "Local Transfer", minutes: Math.max(15, Math.round((km / 22) * 60 + 8)) };
 }
 
 function perfectGameUrlForItem(item: InventoryTournament) {
@@ -650,6 +663,7 @@ export default function BirdDogPage() {
   const pullTriggeredRef = useRef(false);
   const bottomRefreshAtRef = useRef(0);
   const teamRosterSearchCacheRef = useRef<Map<string, TeamRosterSearchRow[]>>(new Map());
+  const geocodeCacheRef = useRef<Map<string, GeoLocation | null>>(new Map());
 
   useEffect(() => {
     let mounted = true;
@@ -1255,12 +1269,17 @@ export default function BirdDogPage() {
     return plan;
   }
 
-  async function saveSchedule(generatedPlan?: PlanItem[], desiredOverride?: DesiredPlayer[]) {
-    const normalizedFlightArrival = scheduleForm.flightArrivalTime
-      ? localInputToOffsetIso(scheduleForm.flightArrivalTime)
+  async function saveSchedule(
+    generatedPlan?: PlanItem[],
+    desiredOverride?: DesiredPlayer[],
+    formOverride?: typeof scheduleForm
+  ) {
+    const activeForm = formOverride ?? scheduleForm;
+    const normalizedFlightArrival = activeForm.flightArrivalTime
+      ? localInputToOffsetIso(activeForm.flightArrivalTime)
       : "";
     const payload = {
-      ...scheduleForm,
+      ...activeForm,
       flightArrivalTime: normalizedFlightArrival,
       desiredPlayers: desiredOverride ?? desiredPlayers,
       generatedPlan: generatedPlan ?? myGeneratedPlan
@@ -1503,17 +1522,208 @@ export default function BirdDogPage() {
     });
   }
 
+  async function geocodeForRoute(address: string): Promise<GeoLocation | null> {
+    const normalized = normalizeSmartSearch(address);
+    if (!normalized) return null;
+    if (geocodeCacheRef.current.has(normalized)) {
+      return geocodeCacheRef.current.get(normalized) || null;
+    }
+    const res = await fetch(`/api/maps/geocode?address=${encodeURIComponent(address)}`, { cache: "no-store" });
+    if (!res.ok) {
+      geocodeCacheRef.current.set(normalized, null);
+      return null;
+    }
+    const data = await res.json().catch(() => ({}));
+    const lat = data?.location?.lat;
+    const lng = data?.location?.lng;
+    if (typeof lat !== "number" || typeof lng !== "number") {
+      geocodeCacheRef.current.set(normalized, null);
+      return null;
+    }
+    const point: GeoLocation = {
+      lat,
+      lng,
+      label: String(data?.location?.label || address)
+    };
+    geocodeCacheRef.current.set(normalized, point);
+    return point;
+  }
+
+  async function detectCoachStartPoint() {
+    if (typeof navigator === "undefined" || !navigator.geolocation) return null;
+    const location = await new Promise<GeolocationPosition | null>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve(pos),
+        () => resolve(null),
+        { enableHighAccuracy: true, timeout: 9000, maximumAge: 20000 }
+      );
+    });
+    if (!location) return null;
+
+    let label = "Current location";
+    try {
+      const reverse = await fetch(`/api/maps/reverse-geocode?lat=${location.coords.latitude}&lng=${location.coords.longitude}`, {
+        cache: "no-store"
+      });
+      if (reverse.ok) {
+        const data = await reverse.json().catch(() => ({}));
+        if (data?.location?.label) {
+          label = String(data.location.label);
+        }
+      }
+    } catch {
+      // Keep fallback label.
+    }
+
+    return {
+      lat: location.coords.latitude,
+      lng: location.coords.longitude,
+      label
+    } satisfies GeoLocation;
+  }
+
+  function destinationForPlayer(player: DesiredPlayer) {
+    const hometown = String(player.hometown || "").trim();
+    if (hometown && hometown !== "-") return hometown;
+
+    const teamName = normalizeSmartSearch(player.team || "");
+    const teamMatch = (selectedTournament?.teams || []).find((team) => {
+      const normalized = normalizeSmartSearch(team.name || "");
+      return normalized === teamName || normalized.includes(teamName) || teamName.includes(normalized);
+    });
+    return String(teamMatch?.from || player.team || "Tournament Venue").trim();
+  }
+
+  async function buildOptimizedCoachPlan(targetPlayers: DesiredPlayer[]) {
+    const grouped = new Map<string, { destination: string; players: DesiredPlayer[]; point: GeoLocation | null }>();
+    targetPlayers.forEach((player) => {
+      const destination = destinationForPlayer(player);
+      const key = normalizeSmartSearch(destination) || normalizeSmartSearch(player.team || "") || player.playerId;
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.players.push(player);
+      } else {
+        grouped.set(key, { destination, players: [player], point: null });
+      }
+    });
+
+    const stops = Array.from(grouped.values()).slice(0, 16);
+    const geocoded = await Promise.all(stops.map(async (stop) => ({
+      ...stop,
+      point: await geocodeForRoute(stop.destination)
+    })));
+
+    const startPoint =
+      await detectCoachStartPoint()
+      || (scheduleForm.flightSource.trim() ? await geocodeForRoute(scheduleForm.flightSource.trim()) : null);
+
+    const unvisited = [...geocoded];
+    const ordered: typeof geocoded = [];
+    let current = startPoint;
+    while (unvisited.length) {
+      if (current?.lat != null && current?.lng != null) {
+        const currentPoint = current;
+        let bestIndex = 0;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        unvisited.forEach((stop, index) => {
+          if (!stop.point) return;
+          const km = distanceKm(currentPoint.lat, currentPoint.lng, stop.point.lat, stop.point.lng);
+          if (km < bestDistance) {
+            bestDistance = km;
+            bestIndex = index;
+          }
+        });
+        ordered.push(unvisited.splice(bestIndex, 1)[0]);
+      } else {
+        ordered.push(unvisited.shift() as (typeof geocoded)[number]);
+      }
+      const latest = ordered[ordered.length - 1];
+      if (latest?.point) current = latest.point;
+    }
+
+    const fallbackStartLabel = scheduleForm.flightSource.trim() || "Current location";
+    let cursorMs = Date.now() + 15 * 60 * 1000;
+    const travelPlan: PlanItem[] = [];
+    let prevLabel = startPoint?.label || fallbackStartLabel;
+    let prevPoint = startPoint;
+
+    ordered.forEach((stop, idx) => {
+      const destinationLabel = stop.point?.label || stop.destination;
+      let mode = "Flight / Bus";
+      let minutes = 240;
+
+      if (prevPoint?.lat != null && prevPoint?.lng != null && stop.point?.lat != null && stop.point?.lng != null) {
+        const km = distanceKm(prevPoint.lat, prevPoint.lng, stop.point.lat, stop.point.lng);
+        const travel = travelModeByDistance(km);
+        mode = travel.mode;
+        minutes = travel.minutes;
+      }
+
+      const departIso = new Date(cursorMs).toISOString();
+      const arriveMs = cursorMs + minutes * 60 * 1000;
+      const arriveIso = new Date(arriveMs).toISOString();
+
+      travelPlan.push({
+        at: departIso,
+        title: `Travel ${idx + 1}: ${prevLabel} -> ${destinationLabel}`,
+        detail: `${mode} · ETA ${minutes} min`
+      });
+
+      const playerList = stop.players.map((player) => `${player.name} (${player.team})`).join(", ");
+      travelPlan.push({
+        at: arriveIso,
+        title: `Scout Players at ${destinationLabel}`,
+        detail: `Best players: ${playerList}`
+      });
+
+      cursorMs = arriveMs + 30 * 60 * 1000;
+      prevLabel = destinationLabel;
+      prevPoint = stop.point || null;
+    });
+
+    if (scheduleForm.hotelName.trim()) {
+      travelPlan.push({
+        at: new Date(cursorMs).toISOString(),
+        title: "Return to hotel",
+        detail: scheduleForm.hotelName.trim()
+      });
+    }
+
+    return {
+      plan: travelPlan,
+      sourceLabel: startPoint?.label || fallbackStartLabel,
+      firstDestination: ordered[0]?.point?.label || ordered[0]?.destination || ""
+    };
+  }
+
   async function generateScheduleFromSmartPlayers() {
     if (!desiredPlayers.length) {
       setPlayerSearchStatus("Select at least one player, then generate schedule.");
       return;
     }
-    setPlayerSearchStatus(`Generating schedule for ${desiredPlayers.length} selected players...`);
-    const generated = createGeneratedPlan(desiredPlayers);
-    setMyGeneratedPlan(generated);
-    await saveSchedule(generated, desiredPlayers);
-    setActiveTab("schedule");
-    setPlayerSearchStatus(`Generated schedule for ${desiredPlayers.length} selected players. Review flights, hotel, and bookings in My Schedule.`);
+    setPlayerSearchStatus(`Generating optimized route for ${desiredPlayers.length} selected players...`);
+    try {
+      const optimized = await buildOptimizedCoachPlan(desiredPlayers);
+      if (!optimized.plan.length) {
+        setPlayerSearchStatus("Could not generate route. Try selecting players with valid hometown/team city.");
+        return;
+      }
+
+      const nextForm = {
+        ...scheduleForm,
+        flightSource: scheduleForm.flightSource || optimized.sourceLabel,
+        flightDestination: scheduleForm.flightDestination || optimized.firstDestination,
+        flightArrivalTime: scheduleForm.flightArrivalTime || toInputDateTime(optimized.plan[0]?.at || new Date().toISOString()),
+        notes: scheduleForm.notes || "Auto-generated optimized coach route from current location to selected players."
+      };
+      setScheduleForm(nextForm);
+      setMyGeneratedPlan(optimized.plan);
+      await saveSchedule(optimized.plan, desiredPlayers, nextForm);
+      setActiveTab("schedule");
+      setPlayerSearchStatus(`Optimized route generated. Review travel legs in My Schedule.`);
+    } catch {
+      setPlayerSearchStatus("Route generation failed. Please allow location access and retry.");
+    }
   }
 
   function downloadPdfLikeReport(title: string, headers: string[], rows: string[][]) {
