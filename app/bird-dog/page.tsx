@@ -1870,8 +1870,7 @@ export default function BirdDogPage() {
     });
     if (!location) return null;
 
-    const coordLabel = `${location.coords.latitude.toFixed(4)}, ${location.coords.longitude.toFixed(4)}`;
-    let label = `Current location (${coordLabel})`;
+    let label = "Current location";
     try {
       const reverse = await fetch(`/api/maps/reverse-geocode?lat=${location.coords.latitude}&lng=${location.coords.longitude}`, {
         cache: "no-store"
@@ -2028,21 +2027,6 @@ export default function BirdDogPage() {
     return `Recommended hotel near ${cleanDestination}`;
   }
 
-  function bestTeamForBooking() {
-    const teams = selectedTournament?.teams || [];
-    if (!teams.length) return null;
-    for (const desired of desiredPlayers) {
-      const wanted = normalizeSmartSearch(desired.team || "");
-      if (!wanted) continue;
-      const match = teams.find((team) => {
-        const normalized = normalizeSmartSearch(team.name || "");
-        return normalized === wanted || normalized.includes(wanted) || wanted.includes(normalized);
-      });
-      if (match) return match;
-    }
-    return teams[0] || null;
-  }
-
   async function generateScheduleFromSmartPlayers(options?: { keepActiveTab?: boolean; autoRun?: boolean }) {
     if (!desiredPlayers.length) {
       const msg = "Select at least one player, then generate schedule.";
@@ -2082,8 +2066,8 @@ export default function BirdDogPage() {
       setPlanWorkflowStatus("pending_approval");
       setPlanWorkflowNote(
         options?.autoRun
-          ? "Recommendation auto-created. Coach can verify and approve to continue booking."
-          : "Recommendation created. Submit for coach verification, then approve to enable booking."
+          ? "Recommendation auto-created. Approve recommendation to continue booking."
+          : "Recommendation created. Approve recommendation to enable booking."
       );
       await saveSchedule(finalPlan, desiredPlayers, nextForm);
       if (options?.keepActiveTab !== false) {
@@ -2103,15 +2087,6 @@ export default function BirdDogPage() {
     }
   }
 
-  function submitForCoachVerification() {
-    if (!myGeneratedPlan.length) {
-      setPlanWorkflowNote("Generate recommendation first.");
-      return;
-    }
-    setPlanWorkflowStatus("pending_approval");
-    setPlanWorkflowNote("Recommendation submitted for coach verification.");
-  }
-
   function coachApproveRecommendation() {
     if (!myGeneratedPlan.length) {
       setPlanWorkflowNote("No recommendation available to approve.");
@@ -2119,27 +2094,72 @@ export default function BirdDogPage() {
     }
     setPlanWorkflowStatus("approved");
     void saveSchedule(myGeneratedPlan, desiredPlayers);
-    const team = bestTeamForBooking();
-    if (team) {
-      setPlanWorkflowNote("Recommendation approved. Opening booking flow...");
-      viewTeamScheduleAndRoster(team, "schedule");
-      return;
-    }
     setPlanWorkflowNote("Recommendation approved. Booking is now enabled.");
   }
 
-  function bookApprovedRecommendation() {
+  function extractTravelLegsFromPlan(plan: PlanItem[]) {
+    return plan
+      .map((item) => {
+        const match = String(item.title || "").match(/^Travel\s+\d+:\s*(.+?)\s*->\s*(.+)$/i);
+        if (!match) return null;
+        const from = match[1]?.trim() || "";
+        const to = match[2]?.trim() || "";
+        const mode = String(item.detail || "").split("·")[0]?.trim() || "Flight / Bus";
+        if (!from || !to) return null;
+        return {
+          at: item.at || new Date().toISOString(),
+          from,
+          to,
+          mode
+        };
+      })
+      .filter((item): item is { at: string; from: string; to: string; mode: string } => Boolean(item));
+  }
+
+  async function bookApprovedRecommendation() {
     if (planWorkflowStatus !== "approved") {
       setPlanWorkflowNote("Approve recommendation first, then booking will start.");
       return;
     }
-    const team = bestTeamForBooking();
-    if (!team) {
-      setPlanWorkflowNote("Could not determine a team for booking. Open a tournament team and retry.");
+    const travelLegs = extractTravelLegsFromPlan(myGeneratedPlan);
+    if (!travelLegs.length) {
+      setPlanWorkflowNote("No valid travel legs found in this recommendation.");
       return;
     }
-    setPlanWorkflowNote("Opening booking flow for approved recommendation...");
-    viewTeamScheduleAndRoster(team, "schedule");
+    const fullName = String(user?.name || "").trim();
+    const parts = fullName.split(/\s+/).filter(Boolean);
+    const traveler = {
+      firstName: parts[0] || "Coach",
+      lastName: parts.slice(1).join(" ") || "User",
+      dateOfBirth: "1990-01-01",
+      gender: "UNSPECIFIED",
+      email: String(user?.email || ""),
+      phone: "0000000000",
+      countryCallingCode: "1",
+      nationality: "US"
+    };
+
+    setPlanWorkflowNote("Booking approved recommendation...");
+    const res = await fetch("/api/bookings/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        teamName: selectedTournament?.name || "",
+        tournamentName: selectedTournament?.name || tournamentViewTitle || "",
+        travelLegs,
+        traveler
+      })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setPlanWorkflowNote(body?.error || `Booking failed (${res.status}).`);
+      return;
+    }
+    const results = Array.isArray(body?.results) ? body.results : [];
+    const booked = results.filter((item: { status?: string }) => item.status === "booked").length;
+    const quoted = results.filter((item: { status?: string }) => item.status === "quoted").length;
+    const failed = results.filter((item: { status?: string }) => item.status === "failed").length;
+    setPlanWorkflowNote(`Booking run complete. Booked: ${booked}, Quoted: ${quoted}, Failed: ${failed}.`);
   }
 
   function downloadPdfLikeReport(title: string, headers: string[], rows: string[][]) {
@@ -2912,24 +2932,16 @@ export default function BirdDogPage() {
               className="secondary"
               type="button"
               disabled={!myGeneratedPlan.length}
-              onClick={submitForCoachVerification}
-            >
-              Submit For Coach Verification
-            </button>
-            <button
-              className="secondary"
-              type="button"
-              disabled={!myGeneratedPlan.length || planWorkflowStatus !== "pending_approval"}
               onClick={coachApproveRecommendation}
             >
-              Coach Approve Recommendation
+              Approve Recommendation
             </button>
             <button
               type="button"
               disabled={planWorkflowStatus !== "approved"}
-              onClick={bookApprovedRecommendation}
+              onClick={() => void bookApprovedRecommendation()}
             >
-              Book Approved Travel
+              Book Approved Recommendation
             </button>
           </div>
           <p className="muted" style={{ marginTop: 8 }}>

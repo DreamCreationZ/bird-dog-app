@@ -98,6 +98,12 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ checkoutUrl: checkout.url });
   } catch (error) {
-    return NextResponse.json({ error: "Failed to create checkout", detail: String(error) }, { status: 500 });
+    const detail = String(error || "");
+    if (detail.includes("Missing env var STRIPE_SECRET_KEY")) {
+      return NextResponse.json({
+        error: "Payment system is temporarily unavailable. Please try again in a minute."
+      }, { status: 503 });
+    }
+    return NextResponse.json({ error: "Failed to create checkout", detail }, { status: 500 });
   }
 }

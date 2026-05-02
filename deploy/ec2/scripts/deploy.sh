@@ -14,6 +14,9 @@ git pull --ff-only origin "${BRANCH}"
 npm ci
 npm run build
 
+set -a
+source /etc/bird-dog/.env.production
+set +a
 pm2 startOrReload deploy/ec2/ecosystem.config.cjs --update-env
 pm2 save
 

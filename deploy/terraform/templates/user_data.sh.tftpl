@@ -34,7 +34,7 @@ sudo -u ec2-user -H npm ci
 sudo -u ec2-user -H npm run build
 
 if [ -f /var/www/bird-dog-app/current/deploy/ec2/ecosystem.config.cjs ]; then
-  sudo -u ec2-user -H pm2 startOrReload deploy/ec2/ecosystem.config.cjs --update-env
+  sudo -u ec2-user -H bash -lc 'set -a; source /etc/bird-dog/.env.production; set +a; cd /var/www/bird-dog-app/current; pm2 startOrReload deploy/ec2/ecosystem.config.cjs --update-env'
 else
   sudo -u ec2-user -H bash -lc 'set -a; source /etc/bird-dog/.env.production; set +a; cd /var/www/bird-dog-app/current; pm2 start npm --name bird-dog-web -- run start'
   sudo -u ec2-user -H bash -lc 'set -a; source /etc/bird-dog/.env.production; set +a; cd /var/www/bird-dog-app/current; pm2 start npm --name bird-dog-harvest-worker -- run worker:harvest'
