@@ -1865,6 +1865,17 @@ export default function TeamDetailsClient({ initialParams }: Props) {
     if (!rosterSearch.trim()) return [];
     return filteredRoster.slice(0, 20);
   }, [filteredRoster, rosterSearch]);
+  const selectedBestPlayerRows = useMemo(() => {
+    const selectedSet = new Set(selectedPlayers);
+    return rosterRows.filter((row) => selectedSet.has(rosterRowKey(row)));
+  }, [rosterRows, selectedPlayers]);
+
+  function scrollToSection(sectionId: string) {
+    if (typeof window === "undefined") return;
+    const node = window.document.getElementById(sectionId);
+    if (!node) return;
+    node.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   const paymentReady = !bookingPaymentRequired
     || (bookingPaymentMode === "card" ? Boolean(selectedPaymentMethodId) : upiAuthorized);
@@ -1913,6 +1924,15 @@ export default function TeamDetailsClient({ initialParams }: Props) {
       </section>
 
       <section className="panel">
+        <div className="row wrap" style={{ gap: 8 }}>
+          <button className="secondary" type="button" onClick={() => scrollToSection("team-schedule-section")}>Team Schedule</button>
+          <button className="secondary" type="button" onClick={() => scrollToSection("tournament-roster-section")}>Tournament Roster</button>
+          <button className="secondary" type="button" onClick={() => scrollToSection("my-best-players-section")}>My Best Players</button>
+          <button className="secondary" type="button" onClick={() => scrollToSection("coach-planner-section")}>Coach Planner</button>
+        </div>
+      </section>
+
+      <section className="panel" id="team-schedule-section">
         <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
           <h2 style={{ margin: 0 }}>Live Sync Monitor</h2>
           <button className="secondary" type="button" onClick={() => void runLiveMonitorSync()} disabled={monitoring}>
@@ -2005,7 +2025,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel" id="tournament-roster-section">
         <h2>Tournament Roster</h2>
         <div className="row wrap" style={{ marginBottom: 8 }}>
           <button
@@ -2013,7 +2033,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
             type="button"
             onClick={() => downloadPdfLikeReport(
               `Tournament Roster - ${initialParams.teamName}`,
-              ["No.", "Name", "Team", "Pos", "Ht", "Wt", "B/T", "Grad", "School", "Hometown", "Rank", "Commitment", "Notes"],
+              ["No.", "Name", "Team", "Pos", "Ht", "Wt", "B/T", "Grad", "School", "Hometown", "Rank", "Commitment"],
               filteredRoster.map((row, idx) => [
                 row.no || String(idx + 1),
                 row.name,
@@ -2026,8 +2046,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
                 row.school || "-",
                 row.hometown || "-",
                 row.rank || "-",
-                row.commitment || "-",
-                playerNotes[rosterRowKey(row)]?.text || "-"
+                row.commitment || "-"
               ])
             )}
           >
@@ -2094,7 +2113,6 @@ export default function TeamDetailsClient({ initialParams }: Props) {
                 <th>Hometown</th>
                 <th>Rank</th>
                 <th>Commitment</th>
-                <th>Notes</th>
               </tr>
             </thead>
             <tbody>
@@ -2120,33 +2138,10 @@ export default function TeamDetailsClient({ initialParams }: Props) {
                   <td>{row.hometown || "-"}</td>
                   <td>{row.rank || "-"}</td>
                   <td>{row.commitment || "-"}</td>
-                  <td style={{ minWidth: 260 }}>
-                    <textarea
-                      rows={2}
-                      value={playerNotes[rosterRowKey(row)]?.text || ""}
-                      onChange={(e) => updatePlayerNoteText(rosterRowKey(row), e.target.value)}
-                      placeholder="Coach note for this player"
-                    />
-                    <div className="row wrap" style={{ marginTop: 6 }}>
-                      <button
-                        className="secondary"
-                        type="button"
-                        onClick={() => togglePlayerAudio(row)}
-                      >
-                        {recordingTarget === `player:${rosterRowKey(row)}` ? "Stop Audio" : "Record Audio"}
-                      </button>
-                    </div>
-                    {recordingTarget === `player:${rosterRowKey(row)}` ? (
-                      <p className="muted" style={{ marginTop: 4, marginBottom: 4 }}>Recording now...</p>
-                    ) : null}
-                    {playerNotes[rosterRowKey(row)]?.audioUrl ? (
-                      <audio controls src={playerNotes[rosterRowKey(row)]?.audioUrl} style={{ width: "100%", marginTop: 6 }} />
-                    ) : null}
-                  </td>
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={14}>No roster rows found yet for this team.</td>
+                  <td colSpan={13}>No roster rows found yet for this team.</td>
                 </tr>
               )}
             </tbody>
@@ -2157,10 +2152,65 @@ export default function TeamDetailsClient({ initialParams }: Props) {
             ? `${selectedPlayers.length} best player(s) selected.`
             : "Select best players to enable coach schedule generation."}
         </p>
+      </section>
+
+      <section className="panel" id="my-best-players-section">
+        <h2>My Best Players</h2>
+        {selectedBestPlayerRows.length ? (
+          <div className="table-wrap">
+            <table className="roster-table">
+              <thead>
+                <tr>
+                  <th>Player</th>
+                  <th>Team</th>
+                  <th>Hometown</th>
+                  <th>Note + Audio</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedBestPlayerRows.map((row, idx) => {
+                  const playerKey = rosterRowKey(row);
+                  return (
+                    <tr key={`best-${playerKey}-${idx}`}>
+                      <td>{row.name || "-"}</td>
+                      <td>{row.team || initialParams.teamName || "-"}</td>
+                      <td>{row.hometown || "-"}</td>
+                      <td style={{ minWidth: 280 }}>
+                        <textarea
+                          rows={2}
+                          value={playerNotes[playerKey]?.text || ""}
+                          onChange={(e) => updatePlayerNoteText(playerKey, e.target.value)}
+                          placeholder="Coach note for this player"
+                        />
+                        <div className="row wrap" style={{ marginTop: 6 }}>
+                          <button
+                            className="secondary"
+                            type="button"
+                            onClick={() => togglePlayerAudio(row)}
+                          >
+                            {recordingTarget === `player:${playerKey}` ? "Stop Audio" : "Record Audio"}
+                          </button>
+                        </div>
+                        {recordingTarget === `player:${playerKey}` ? (
+                          <p className="muted" style={{ marginTop: 4, marginBottom: 4 }}>Recording now...</p>
+                        ) : null}
+                        {playerNotes[playerKey]?.audioUrl ? (
+                          <audio controls src={playerNotes[playerKey]?.audioUrl} style={{ width: "100%", marginTop: 6 }} />
+                        ) : null}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="muted">Select best players from Tournament Roster, then manage player notes/audio here.</p>
+        )}
         {notesStatus ? <p className="muted">{notesStatus}</p> : null}
       </section>
 
-      <section className="panel">
+      <section className="panel" id="coach-planner-section">
         <h2>Coach Planner</h2>
         <label>
           Coach Start Location
