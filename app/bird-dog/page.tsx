@@ -882,7 +882,6 @@ export default function BirdDogPage() {
       autoPlannerRef.current.key = "";
       return;
     }
-    if (planWorkflowStatus === "approved") return;
     const planKey = desiredPlayers
       .map((item) => desiredPlayerSelectionKey(item))
       .sort()
@@ -895,7 +894,7 @@ export default function BirdDogPage() {
     void generateScheduleFromSmartPlayers({ keepActiveTab: true, autoRun: true }).finally(() => {
       autoPlannerRef.current.busy = false;
     });
-  }, [activeTab, desiredPlayers, myGeneratedPlan.length, planWorkflowStatus]);
+  }, [activeTab, desiredPlayers, myGeneratedPlan.length]);
 
   useEffect(() => {
     if (!canAccessLockedPages) {
@@ -1828,6 +1827,9 @@ export default function BirdDogPage() {
         hometown: item.hometown
       }];
     });
+    autoPlannerRef.current.key = "";
+    setPlanWorkflowStatus("draft");
+    setPlanWorkflowNote("Player selection updated. Recommendation is regenerating.");
   }
 
   async function geocodeForRoute(address: string): Promise<GeoLocation | null> {
@@ -2345,10 +2347,16 @@ export default function BirdDogPage() {
       if (prev.some((item) => item.playerId === desiredPlayerId || desiredPlayerSelectionKey(item) === selectionKey)) return prev;
       return [...prev, { playerId: desiredPlayerId, selectionKey, name: match.name, team: match.school || "Unknown Team" }];
     });
+    autoPlannerRef.current.key = "";
+    setPlanWorkflowStatus("draft");
+    setPlanWorkflowNote("Target player updated. Recommendation is regenerating.");
   }
 
   function removeDesiredPlayer(selectionKey: string) {
     setDesiredPlayers((prev) => prev.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey));
+    autoPlannerRef.current.key = "";
+    setPlanWorkflowStatus("draft");
+    setPlanWorkflowNote("Target player removed. Recommendation is regenerating.");
   }
 
   function sendPulse() {
@@ -2950,6 +2958,22 @@ export default function BirdDogPage() {
         <div>
           <h2>Team Schedule Board</h2>
           <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
+          {myGeneratedPlan.length ? (
+            <div className="panel" style={{ marginTop: 10, marginBottom: 10 }}>
+              <h3 style={{ marginTop: 0 }}>Latest Recommendation (Private)</h3>
+              <p className="muted" style={{ marginTop: 4 }}>
+                Route recommendation is ready. Tap Save My Schedule to publish it on the team board.
+              </p>
+              <div className="log-list" style={{ maxHeight: 220 }}>
+                {myGeneratedPlan.slice(0, 4).map((plan, idx) => (
+                  <article className="log-card" key={`preview-${plan.at}-${idx}`}>
+                    <p><strong>{dateLabel(plan.at)} {timeLabel(plan.at)} - {plan.title}</strong></p>
+                    <p>{plan.detail}</p>
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {schedules.length ? (
             <>
               <div className="table-wrap">
@@ -2977,7 +3001,13 @@ export default function BirdDogPage() {
                 </table>
               </div>
             </>
-          ) : <p className="muted">No schedules shared yet.</p>}
+          ) : (
+            <p className="muted">
+              {myGeneratedPlan.length
+                ? "No schedules shared yet. Save My Schedule to publish this recommendation."
+                : "No schedules shared yet."}
+            </p>
+          )}
         </div>
       </section>
       ) : null}
