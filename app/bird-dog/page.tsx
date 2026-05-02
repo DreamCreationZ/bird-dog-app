@@ -871,10 +871,30 @@ export default function BirdDogPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("payment") === "success") {
-      void fetchInventory();
+    if (params.get("payment") !== "success") return;
+
+    const checkoutSessionId = params.get("session_id") || "";
+    const finalize = async () => {
+      if (checkoutSessionId) {
+        const confirmRes = await fetch("/api/payments/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: checkoutSessionId })
+        }).catch(() => null);
+        if (confirmRes && !confirmRes.ok) {
+          const data = await confirmRes.json().catch(() => ({}));
+          const detail = typeof data?.detail === "string" && data.detail ? ` (${data.detail})` : "";
+          setOpenError(`${data?.error || "Payment confirmation failed."}${detail}`);
+        }
+      }
+      await fetchInventory();
       setActiveTab("tournaments");
-    }
+      const next = new URL(window.location.href);
+      next.searchParams.delete("payment");
+      next.searchParams.delete("session_id");
+      window.history.replaceState({}, "", next.pathname + (next.search ? `?${next.searchParams.toString()}` : ""));
+    };
+    void finalize();
   }, []);
 
   async function loadCompanyData(nextCompany: "PG" | "PBR", forceRefresh = false) {
