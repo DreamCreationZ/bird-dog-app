@@ -438,11 +438,71 @@ function withHotelReturnLeg(plan: PlanItem[], hotelName: string) {
   ];
 }
 
-function travelModeByDistance(km: number) {
-  if (km >= 850) return { mode: "Flight", minutes: Math.round((km / 760) * 60 + 160) };
-  if (km >= 250) return { mode: "Bus / Train", minutes: Math.round((km / 85) * 60 + 35) };
-  if (km >= 45) return { mode: "Cab / Car", minutes: Math.round((km / 45) * 60 + 15) };
-  return { mode: "Local Transfer", minutes: Math.max(15, Math.round((km / 22) * 60 + 8)) };
+type TravelEstimate = {
+  mode: string;
+  minutes: number;
+  advisory?: string;
+};
+
+function looksLikeUsLocation(value: string) {
+  const v = normalizeLocationText(value);
+  return /\b(united states|usa|tx|ms|fl|ga|al|ca|ny|nj|pa|nc|sc|va|wa|or|il|in|oh|mi|az|co|tn|ky|la|ok|nm|ut|nv|id|mt|wy|nd|sd|ne|ks|ia|mo|ar|me|vt|nh|ma|ct|ri|de|md|wv|dc)\b/.test(v);
+}
+
+function looksLikeIndiaLocation(value: string) {
+  const v = normalizeLocationText(value);
+  return /\b(india|bihar|karnataka|maharashtra|delhi|tamil nadu|telangana|andhra|uttar pradesh|west bengal|gujarat|kerala|rajasthan|odisha|punjab|haryana)\b/.test(v);
+}
+
+function formatEta(minutes: number) {
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return mins ? `${hours} hr ${mins} min` : `${hours} hr`;
+}
+
+function travelModeByText(from: string, to: string): TravelEstimate {
+  const indiaUs = (looksLikeIndiaLocation(from) && looksLikeUsLocation(to))
+    || (looksLikeIndiaLocation(to) && looksLikeUsLocation(from));
+  if (indiaUs) {
+    return {
+      mode: "Multi-leg flight",
+      minutes: 22 * 60,
+      advisory: "No direct flight likely. Same-day scouting may be impossible."
+    };
+  }
+  if (looksLikeUsLocation(from) && looksLikeUsLocation(to)) {
+    return {
+      mode: "Domestic flight + transfer",
+      minutes: 6 * 60 + 30
+    };
+  }
+  return {
+    mode: "Flight + transfer",
+    minutes: 11 * 60,
+    advisory: "Estimated from location text; exact flight availability must be checked."
+  };
+}
+
+function travelModeByDistance(km: number): TravelEstimate {
+  if (km >= 9000) {
+    return {
+      mode: "Multi-leg international flight",
+      minutes: Math.round((km / 820) * 60 + 540),
+      advisory: "No direct flight likely. Same-day scouting may be impossible."
+    };
+  }
+  if (km >= 5500) {
+    return {
+      mode: "Long-haul flight",
+      minutes: Math.round((km / 800) * 60 + 420),
+      advisory: "Likely includes connections and airport transfer time."
+    };
+  }
+  if (km >= 1200) return { mode: "Flight + transfer", minutes: Math.round((km / 760) * 60 + 180) };
+  if (km >= 300) return { mode: "Bus / Train + transfer", minutes: Math.round((km / 85) * 60 + 50) };
+  if (km >= 45) return { mode: "Cab / Car", minutes: Math.round((km / 45) * 60 + 20) };
+  return { mode: "Local Transfer", minutes: Math.max(20, Math.round((km / 22) * 60 + 10)) };
 }
 
 function perfectGameUrlForItem(item: InventoryTournament) {
@@ -1960,24 +2020,31 @@ export default function BirdDogPage() {
 
     ordered.forEach((stop, idx) => {
       const destinationLabel = stop.point?.label || stop.destination;
-      let mode = "Flight / Bus";
-      let minutes = 240;
+      let travelEstimate: TravelEstimate = {
+        mode: "Flight + transfer",
+        minutes: 11 * 60,
+        advisory: "Location data incomplete; flight availability must be checked."
+      };
 
       if (prevPoint?.lat != null && prevPoint?.lng != null && stop.point?.lat != null && stop.point?.lng != null) {
         const km = distanceKm(prevPoint.lat, prevPoint.lng, stop.point.lat, stop.point.lng);
-        const travel = travelModeByDistance(km);
-        mode = travel.mode;
-        minutes = travel.minutes;
+        travelEstimate = travelModeByDistance(km);
+      } else {
+        travelEstimate = travelModeByText(prevLabel, destinationLabel);
       }
 
       const departIso = new Date(cursorMs).toISOString();
-      const arriveMs = cursorMs + minutes * 60 * 1000;
+      const arriveMs = cursorMs + travelEstimate.minutes * 60 * 1000;
       const arriveIso = new Date(arriveMs).toISOString();
+      const detail = [
+        `${travelEstimate.mode} · ETA ${formatEta(travelEstimate.minutes)}`,
+        travelEstimate.advisory
+      ].filter(Boolean).join(" · ");
 
       travelPlan.push({
         at: departIso,
         title: `Travel ${idx + 1}: ${prevLabel} -> ${destinationLabel}`,
-        detail: `${mode} · ETA ${minutes} min`
+        detail
       });
 
       const playerList = stop.players.map((player) => `${player.name} (${player.team})`).join(", ");
@@ -1987,7 +2054,10 @@ export default function BirdDogPage() {
         detail: `Best players: ${playerList}`
       });
 
-      cursorMs = arriveMs + 30 * 60 * 1000;
+      const postArrivalBufferMinutes = travelEstimate.minutes >= 15 * 60
+        ? 180
+        : (travelEstimate.minutes >= 6 * 60 ? 90 : 30);
+      cursorMs = arriveMs + postArrivalBufferMinutes * 60 * 1000;
       prevLabel = destinationLabel;
       prevPoint = stop.point || null;
     });
