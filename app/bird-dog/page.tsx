@@ -2322,6 +2322,16 @@ export default function BirdDogPage() {
   async function openCheckoutForTournament(inventorySlug: string) {
     setOpenError("");
     setUnlockingSlug(inventorySlug);
+    const checkoutWindow = typeof window !== "undefined"
+      ? window.open("", "_blank", "noopener,noreferrer")
+      : null;
+    if (checkoutWindow) {
+      try {
+        checkoutWindow.document.write("<title>Opening Checkout...</title><p style='font-family:Arial,sans-serif;padding:12px;'>Opening secure checkout...</p>");
+      } catch {
+        // Ignore placeholder rendering issues.
+      }
+    }
     try {
       const returnToParams = new URLSearchParams({
         tab: "tournaments"
@@ -2336,14 +2346,24 @@ export default function BirdDogPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (checkoutWindow && !checkoutWindow.closed) checkoutWindow.close();
         setOpenError(data?.error || `Unable to open checkout (${res.status})`);
         return;
       }
       if (data?.checkoutUrl) {
-        window.location.assign(data.checkoutUrl);
+        if (checkoutWindow && !checkoutWindow.closed) {
+          checkoutWindow.location.href = data.checkoutUrl;
+        } else {
+          const popup = window.open(data.checkoutUrl, "_blank", "noopener,noreferrer");
+          if (!popup) {
+            setOpenError("Popup was blocked. Please allow popups for this site and try Subscribe to Unlock again.");
+            return;
+          }
+        }
         return;
       }
       if (data?.alreadyUnlocked) {
+        if (checkoutWindow && !checkoutWindow.closed) checkoutWindow.close();
         if (typeof data?.redirectTo === "string" && data.redirectTo.startsWith("/")) {
           window.location.assign(data.redirectTo);
           return;
@@ -2352,6 +2372,7 @@ export default function BirdDogPage() {
         setOpenError(data?.freeUnlock ? "Test mode active: tournament unlocked at $0." : "No payment needed. This tournament is already unlocked or available as archive access.");
         return;
       }
+      if (checkoutWindow && !checkoutWindow.closed) checkoutWindow.close();
       setOpenError("Checkout URL missing.");
     } finally {
       setUnlockingSlug("");
