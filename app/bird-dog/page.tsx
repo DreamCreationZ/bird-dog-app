@@ -472,6 +472,8 @@ type TravelEstimate = {
   minutes: number;
   advisory?: string;
 };
+const MAX_FEASIBLE_TRAVEL_HOURS = 12;
+const MAX_FEASIBLE_TRAVEL_MINUTES = MAX_FEASIBLE_TRAVEL_HOURS * 60;
 
 function looksLikeUsLocation(value: string) {
   const v = normalizeLocationText(value);
@@ -2070,8 +2072,10 @@ export default function BirdDogPage() {
     const travelPlan: PlanItem[] = [];
     let prevLabel = startPoint?.label || fallbackStartLabel;
     let prevPoint = startPoint;
+    let blockedReason = "";
+    let completedStops = 0;
 
-    ordered.forEach((stop, idx) => {
+    for (const [idx, stop] of ordered.entries()) {
       const destinationLabel = stop.point?.label || stop.destination;
       let travelEstimate: TravelEstimate = {
         mode: "Flight + transfer",
@@ -2089,6 +2093,20 @@ export default function BirdDogPage() {
       const departIso = new Date(cursorMs).toISOString();
       const arriveMs = cursorMs + travelEstimate.minutes * 60 * 1000;
       const arriveIso = new Date(arriveMs).toISOString();
+      if (travelEstimate.minutes > MAX_FEASIBLE_TRAVEL_MINUTES) {
+        const infeasibleDetail = [
+          `${travelEstimate.mode} · ETA ${formatEta(travelEstimate.minutes)}`,
+          `Not feasible within next ${MAX_FEASIBLE_TRAVEL_HOURS} hours.`,
+          travelEstimate.advisory
+        ].filter(Boolean).join(" · ");
+        travelPlan.push({
+          at: departIso,
+          title: `Travel ${idx + 1}: ${prevLabel} -> ${destinationLabel}`,
+          detail: infeasibleDetail
+        });
+        blockedReason = `Cannot reach ${destinationLabel} from ${prevLabel} in next ${MAX_FEASIBLE_TRAVEL_HOURS} hours.`;
+        break;
+      }
       const detail = [
         `${travelEstimate.mode} · ETA ${formatEta(travelEstimate.minutes)}`,
         travelEstimate.advisory
@@ -2106,6 +2124,7 @@ export default function BirdDogPage() {
         title: `Scout Players at ${destinationLabel}`,
         detail: `Best players: ${playerList}`
       });
+      completedStops += 1;
 
       const postArrivalBufferMinutes = travelEstimate.minutes >= 15 * 60
         ? 180
@@ -2113,9 +2132,9 @@ export default function BirdDogPage() {
       cursorMs = arriveMs + postArrivalBufferMinutes * 60 * 1000;
       prevLabel = destinationLabel;
       prevPoint = stop.point || null;
-    });
+    }
 
-    if (scheduleForm.hotelName.trim()) {
+    if (!blockedReason && scheduleForm.hotelName.trim()) {
       travelPlan.push({
         at: new Date(cursorMs).toISOString(),
         title: "Return to hotel",
@@ -2129,7 +2148,9 @@ export default function BirdDogPage() {
       sourceLabel: startPoint?.label || fallbackStartLabel,
       firstDestination: ordered[0]?.point?.label || ordered[0]?.destination || "",
       usedLiveLocation: Boolean(startPoint),
-      unresolvedStops
+      unresolvedStops,
+      blockedReason,
+      completedStops
     };
   }
 
@@ -2173,8 +2194,11 @@ export default function BirdDogPage() {
       }
 
       const destination = (scheduleForm.flightDestination || optimized.firstDestination || "").trim();
-      const hotelName = scheduleForm.hotelName.trim() || await suggestHotelForDestination(destination);
-      const finalPlan = withHotelReturnLeg(optimized.plan, hotelName);
+      const isFeasible = !optimized.blockedReason;
+      const hotelName = isFeasible
+        ? (scheduleForm.hotelName.trim() || await suggestHotelForDestination(destination))
+        : "";
+      const finalPlan = isFeasible ? withHotelReturnLeg(optimized.plan, hotelName) : optimized.plan;
 
       const nextForm = {
         ...scheduleForm,
@@ -2182,27 +2206,40 @@ export default function BirdDogPage() {
         flightDestination: destination,
         flightArrivalTime: scheduleForm.flightArrivalTime || toInputDateTime(finalPlan[0]?.at || new Date().toISOString()),
         hotelName,
-        notes: scheduleForm.notes || "Auto-generated Bangalore-to-tournament coach route with travel + hotel recommendation."
+        notes: scheduleForm.notes || (
+          isFeasible
+            ? "Auto-generated Bangalore-to-tournament coach route with travel + hotel recommendation."
+            : `Auto-generated feasibility check: ${optimized.blockedReason || "Route is not feasible within time limit."}`
+        )
       };
       setScheduleForm(nextForm);
       setMyGeneratedPlan(finalPlan);
-      setAndPersistPlanWorkflowStatus("pending_approval");
-      setPlanWorkflowNote(
-        options?.autoRun
-          ? "Recommendation auto-created. Approve recommendation to continue booking."
-          : "Recommendation created. Approve recommendation to enable booking."
-      );
+      if (isFeasible) {
+        setAndPersistPlanWorkflowStatus("pending_approval");
+        setPlanWorkflowNote(
+          options?.autoRun
+            ? "Recommendation auto-created. Approve recommendation to continue booking."
+            : "Recommendation created. Approve recommendation to enable booking."
+        );
+      } else {
+        setAndPersistPlanWorkflowStatus("draft");
+        setPlanWorkflowNote(optimized.blockedReason || `Route is not feasible within next ${MAX_FEASIBLE_TRAVEL_HOURS} hours.`);
+      }
       await saveSchedule(finalPlan, desiredPlayers, nextForm);
       if (options?.keepActiveTab !== false) {
         setActiveTab("schedule");
       }
-      const locationStatus = optimized.usedLiveLocation
-        ? "Current location detected."
-        : "Using Bangalore as start city.";
-      const unresolvedStatus = optimized.unresolvedStops
-        ? ` ${optimized.unresolvedStops} destination(s) could not be geocoded; fallback travel estimates were used.`
-        : "";
-      setPlayerSearchStatus(`Optimized route generated. ${locationStatus}${unresolvedStatus} Hotel recommendation added.`);
+      if (!isFeasible) {
+        setPlayerSearchStatus(`${optimized.blockedReason} Skipping downstream stops until route becomes feasible.`);
+      } else {
+        const locationStatus = optimized.usedLiveLocation
+          ? "Current location detected."
+          : "Using Bangalore as start city.";
+        const unresolvedStatus = optimized.unresolvedStops
+          ? ` ${optimized.unresolvedStops} destination(s) could not be geocoded; fallback travel estimates were used.`
+          : "";
+        setPlayerSearchStatus(`Optimized route generated. ${locationStatus}${unresolvedStatus} Hotel recommendation added.`);
+      }
     } catch {
       const msg = "Route generation failed. Please allow location access and retry.";
       setPlayerSearchStatus(msg);
@@ -3108,22 +3145,6 @@ export default function BirdDogPage() {
         <div>
           <h2>Team Schedule Board</h2>
           <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
-          {myGeneratedPlan.length ? (
-            <div className="panel" style={{ marginTop: 10, marginBottom: 10 }}>
-              <h3 style={{ marginTop: 0 }}>Latest Recommendation (Private)</h3>
-              <p className="muted" style={{ marginTop: 4 }}>
-                Route recommendation is ready. Tap Save My Schedule to publish it on the team board.
-              </p>
-              <div className="log-list" style={{ maxHeight: 220 }}>
-                {myGeneratedPlan.slice(0, 4).map((plan, idx) => (
-                  <article className="log-card" key={`preview-${plan.at}-${idx}`}>
-                    <p><strong>{dateLabel(plan.at)} {timeLabel(plan.at)} - {plan.title}</strong></p>
-                    <p>{plan.detail}</p>
-                  </article>
-                ))}
-              </div>
-            </div>
-          ) : null}
           {schedules.length ? (
             <>
               <div className="table-wrap">
