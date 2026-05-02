@@ -163,7 +163,7 @@ export async function POST(req: NextRequest) {
         const importedReady = schedule.length && importedRoster.length;
         const importedDetailed = hasDetailedRosterColumns(importedRoster);
 
-        if (searchOnly) {
+        if (searchOnly && importedRoster.length) {
           return NextResponse.json({
             ok: true,
             source: "imported_search_fast",
@@ -237,16 +237,6 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      if (searchOnly) {
-        return NextResponse.json({
-          ok: true,
-          source: "imported_search_fast",
-          schedule: [],
-          roster: [],
-          teamUrl: ""
-        });
-      }
-
       const fallbackTeamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName: targetTeamName || teamName, eventId });
       if (fallbackTeamUrl) {
         const live = await scrapePgTeamLive(fallbackTeamUrl, {
@@ -276,7 +266,7 @@ export async function POST(req: NextRequest) {
     if (!teamUrl) {
       return NextResponse.json({ error: "Team URL could not be resolved." }, { status: 404 });
     }
-    const data = await scrapePgTeamLive(teamUrl, { teamName, eventId });
+    const data = await scrapePgTeamLive(teamUrl, { teamName, eventId, fastMode: searchOnly });
     return NextResponse.json({ ok: true, ...data });
   } catch (error) {
     return NextResponse.json({ error: "Failed to load team details", detail: String(error) }, { status: 500 });
