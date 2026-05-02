@@ -65,6 +65,7 @@ type DesiredPlayer = {
   playerId: string;
   name: string;
   team: string;
+  hometown?: string;
 };
 
 type CoachSchedule = {
@@ -113,6 +114,21 @@ type HotelSuggestion = {
 };
 
 type TeamRef = NonNullable<Tournament["teams"]>[number];
+
+type TeamRosterSearchRow = {
+  no?: string;
+  name: string;
+  hometown?: string;
+};
+
+type SmartPlayerResult = {
+  key: string;
+  playerId: string;
+  name: string;
+  hometown: string;
+  teamId: string;
+  teamName: string;
+};
 
 type OptimizedStop = ItineraryStop & {
   gameStartAt: string;
@@ -368,6 +384,10 @@ function normalizeTournamentName(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function normalizeSmartSearch(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
 function perfectGameUrlForItem(item: InventoryTournament) {
   const rawHint = (item.harvestHint || "").trim();
   if (/^https?:\/\/www\.perfectgame\.org\//i.test(rawHint)) return rawHint;
@@ -580,6 +600,10 @@ export default function BirdDogPage() {
   const [destinationSuggestions, setDestinationSuggestions] = useState<PlaceSuggestion[]>([]);
   const [hotelSuggestions, setHotelSuggestions] = useState<HotelSuggestion[]>([]);
   const [teamsSearchQuery, setTeamsSearchQuery] = useState("");
+  const [playerSearchQuery, setPlayerSearchQuery] = useState("");
+  const [playerSearchResults, setPlayerSearchResults] = useState<SmartPlayerResult[]>([]);
+  const [playerSearchLoading, setPlayerSearchLoading] = useState(false);
+  const [playerSearchStatus, setPlayerSearchStatus] = useState("");
   const [desiredPlayers, setDesiredPlayers] = useState<DesiredPlayer[]>([]);
   const [desiredPlayerId, setDesiredPlayerId] = useState("");
   const [myGeneratedPlan, setMyGeneratedPlan] = useState<PlanItem[]>([]);
@@ -625,6 +649,7 @@ export default function BirdDogPage() {
   const pullStartYRef = useRef<number | null>(null);
   const pullTriggeredRef = useRef(false);
   const bottomRefreshAtRef = useRef(0);
+  const teamRosterSearchCacheRef = useRef<Map<string, TeamRosterSearchRow[]>>(new Map());
 
   useEffect(() => {
     let mounted = true;
@@ -776,6 +801,12 @@ export default function BirdDogPage() {
       setDesiredPlayerId(players[0].id);
     }
   }, [players, playersById, desiredPlayerId]);
+
+  useEffect(() => {
+    setPlayerSearchResults([]);
+    setPlayerSearchStatus("");
+    teamRosterSearchCacheRef.current.clear();
+  }, [selectedTournamentId, selectedInventorySlug]);
 
   useEffect(() => {
     if (!canAccessLockedPages) {
@@ -1181,9 +1212,9 @@ export default function BirdDogPage() {
     await fetchLiveLocations();
   }
 
-  function createGeneratedPlan(): PlanItem[] {
+  function createGeneratedPlan(targetPlayers: DesiredPlayer[] = desiredPlayers): PlanItem[] {
     const plan: PlanItem[] = [];
-    const targetIds = desiredPlayers.length ? new Set(desiredPlayers.map((item) => item.playerId)) : watchlistSet;
+    const targetIds = targetPlayers.length ? new Set(targetPlayers.map((item) => item.playerId)) : watchlistSet;
 
     if (scheduleForm.flightArrivalTime) {
       plan.push({
@@ -1224,14 +1255,14 @@ export default function BirdDogPage() {
     return plan;
   }
 
-  async function saveSchedule(generatedPlan?: PlanItem[]) {
+  async function saveSchedule(generatedPlan?: PlanItem[], desiredOverride?: DesiredPlayer[]) {
     const normalizedFlightArrival = scheduleForm.flightArrivalTime
       ? localInputToOffsetIso(scheduleForm.flightArrivalTime)
       : "";
     const payload = {
       ...scheduleForm,
       flightArrivalTime: normalizedFlightArrival,
-      desiredPlayers,
+      desiredPlayers: desiredOverride ?? desiredPlayers,
       generatedPlan: generatedPlan ?? myGeneratedPlan
     };
 
@@ -1248,11 +1279,15 @@ export default function BirdDogPage() {
     hydrateMySchedule(scheduleList);
   }
 
-  async function addSchedule() {
-    const nextPlan = createGeneratedPlan();
+  async function addSchedule(desiredOverride?: DesiredPlayer[]) {
+    const activeDesired = desiredOverride ?? desiredPlayers;
+    const nextPlan = createGeneratedPlan(activeDesired);
     const mergedPlan = [...myGeneratedPlan, ...nextPlan];
+    if (desiredOverride) {
+      setDesiredPlayers(desiredOverride);
+    }
     setMyGeneratedPlan(mergedPlan);
-    await saveSchedule(mergedPlan);
+    await saveSchedule(mergedPlan, activeDesired);
   }
 
   function editSchedule(item: CoachSchedule) {
@@ -1348,6 +1383,137 @@ export default function BirdDogPage() {
     params.set("returnInventorySlug", selectedInventorySlug);
     params.set("returnTournamentId", selectedTournamentId);
     router.push(`/bird-dog/team?${params.toString()}`);
+  }
+
+  function resolvePlayerIdByName(playerName: string, teamId: string) {
+    const wanted = normalizeSmartSearch(playerName);
+    const exact = players.find((player) => normalizeSmartSearch(player.name) === wanted);
+    if (exact) return exact.id;
+    const fuzzy = players.find((player) => {
+      const candidate = normalizeSmartSearch(player.name);
+      return candidate.includes(wanted) || wanted.includes(candidate);
+    });
+    if (fuzzy) return fuzzy.id;
+    return `smart:${teamId}:${wanted}`;
+  }
+
+  async function loadRosterForSmartSearch(team: TeamRef): Promise<TeamRosterSearchRow[]> {
+    const cached = teamRosterSearchCacheRef.current.get(team.id);
+    if (cached) return cached;
+    const res = await fetch("/api/harvest/team", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        inventorySlug: selectedInventorySlug,
+        teamId: team.id,
+        teamUrl: team.href || "",
+        teamName: team.name,
+        eventId: currentEventNumber(),
+        tournamentId: selectedTournamentId
+      })
+    });
+    if (!res.ok) return [];
+    const data = await res.json().catch(() => ({}));
+    const roster = Array.isArray(data?.roster) ? data.roster as Array<Record<string, unknown>> : [];
+    const normalized = roster
+      .map((row) => ({
+        no: String(row?.no || ""),
+        name: String(row?.name || ""),
+        hometown: String(row?.hometown || team.from || "")
+      }))
+      .filter((row) => row.name.trim().length > 1);
+    teamRosterSearchCacheRef.current.set(team.id, normalized);
+    return normalized;
+  }
+
+  async function runTournamentPlayerSearch() {
+    const query = normalizeSmartSearch(playerSearchQuery);
+    if (query.length < 2) {
+      setPlayerSearchStatus("Type at least 2 characters to search players.");
+      setPlayerSearchResults([]);
+      return;
+    }
+    const teams = selectedTournament?.teams || [];
+    if (!teams.length) {
+      setPlayerSearchStatus("Open a tournament first to search players.");
+      setPlayerSearchResults([]);
+      return;
+    }
+
+    setPlayerSearchLoading(true);
+    setPlayerSearchStatus("Scanning team rosters...");
+    setPlayerSearchResults([]);
+
+    try {
+      const queryTokens = query.split(" ").filter(Boolean);
+      const matches = new Map<string, SmartPlayerResult>();
+      const scanList = teams.slice(0, 80);
+      const chunkSize = 5;
+
+      for (let start = 0; start < scanList.length; start += chunkSize) {
+        const chunk = scanList.slice(start, start + chunkSize);
+        const loaded = await Promise.all(chunk.map((team) => loadRosterForSmartSearch(team).then((roster) => ({ team, roster }))));
+        loaded.forEach(({ team, roster }) => {
+          roster.forEach((row) => {
+            const blob = normalizeSmartSearch(`${row.name} ${row.hometown || ""} ${team.name}`);
+            if (!queryTokens.every((token) => blob.includes(token))) return;
+            const key = `${team.id}::${normalizeSmartSearch(row.name)}::${row.no || ""}`;
+            if (matches.has(key)) return;
+            matches.set(key, {
+              key,
+              playerId: resolvePlayerIdByName(row.name, team.id),
+              name: row.name,
+              hometown: row.hometown || team.from || "-",
+              teamId: team.id,
+              teamName: team.name
+            });
+          });
+        });
+
+        const scanned = Math.min(start + chunk.length, scanList.length);
+        setPlayerSearchStatus(`Scanning ${scanned}/${scanList.length} teams...`);
+        if (matches.size >= 120 && scanned >= 20) break;
+      }
+
+      const result = Array.from(matches.values())
+        .sort((a, b) => a.name.localeCompare(b.name) || a.teamName.localeCompare(b.teamName))
+        .slice(0, 120);
+      setPlayerSearchResults(result);
+      setPlayerSearchStatus(
+        result.length
+          ? `Found ${result.length} players. Select best players and click Generate My Schedule.`
+          : "No player match found. Try another name, hometown, or team keyword."
+      );
+    } finally {
+      setPlayerSearchLoading(false);
+    }
+  }
+
+  function toggleSmartPlayerSelection(item: SmartPlayerResult) {
+    setDesiredPlayers((prev) => {
+      if (prev.some((row) => row.playerId === item.playerId)) {
+        return prev.filter((row) => row.playerId !== item.playerId);
+      }
+      return [...prev, {
+        playerId: item.playerId,
+        name: item.name,
+        team: item.teamName,
+        hometown: item.hometown
+      }];
+    });
+  }
+
+  async function generateScheduleFromSmartPlayers() {
+    if (!desiredPlayers.length) {
+      setPlayerSearchStatus("Select at least one player, then generate schedule.");
+      return;
+    }
+    setPlayerSearchStatus(`Generating schedule for ${desiredPlayers.length} selected players...`);
+    const generated = createGeneratedPlan(desiredPlayers);
+    setMyGeneratedPlan(generated);
+    await saveSchedule(generated, desiredPlayers);
+    setActiveTab("schedule");
+    setPlayerSearchStatus(`Generated schedule for ${desiredPlayers.length} selected players. Review flights, hotel, and bookings in My Schedule.`);
   }
 
   function downloadPdfLikeReport(title: string, headers: string[], rows: string[][]) {
@@ -1755,6 +1921,10 @@ export default function BirdDogPage() {
       `${team.name} ${team.from || ""} ${team.record || ""}`.toLowerCase().includes(query)
     );
   }, [selectedTournament?.teams, teamsSearchQuery]);
+  const desiredPlayerIdSet = useMemo(
+    () => new Set(desiredPlayers.map((item) => item.playerId)),
+    [desiredPlayers]
+  );
   const myCoachSchedule = useMemo(
     () => schedules.find((item) => item.user_id === user?.userId) || null,
     [schedules, user?.userId]
@@ -2037,6 +2207,7 @@ export default function BirdDogPage() {
                 <article className="log-card" key={item.playerId}>
                   <p><strong>{item.name}</strong></p>
                   <p>Team: {item.team}</p>
+                  {item.hometown ? <p>Hometown: {item.hometown}</p> : null}
                   <button className="secondary" type="button" onClick={() => removeDesiredPlayer(item.playerId)}>Remove</button>
                 </article>
               ))}
@@ -2317,6 +2488,79 @@ export default function BirdDogPage() {
               placeholder="Search by team, city, or record"
             />
           </label>
+          <div className="panel" style={{ marginTop: 10 }}>
+            <h3 style={{ marginTop: 0 }}>Coach Player Search (Tournament-Wide)</h3>
+            <p className="muted" style={{ marginTop: 4 }}>
+              Search player name, hometown, or team. Select best players and generate schedule from this same page.
+            </p>
+            <div className="row wrap" style={{ alignItems: "end" }}>
+              <label style={{ flex: "1 1 380px" }}>
+                Search Players
+                <input
+                  value={playerSearchQuery}
+                  onChange={(e) => setPlayerSearchQuery(e.target.value)}
+                  placeholder="Example: max johnson / miami / wall nj"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void runTournamentPlayerSearch();
+                    }
+                  }}
+                />
+              </label>
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => void runTournamentPlayerSearch()}
+                disabled={playerSearchLoading || !canAccessLockedPages}
+              >
+                {playerSearchLoading ? "Searching..." : "Search Players"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void generateScheduleFromSmartPlayers()}
+                disabled={!desiredPlayers.length || !canAccessLockedPages}
+              >
+                Generate My Schedule
+              </button>
+            </div>
+            {playerSearchStatus ? <p className="muted" style={{ marginTop: 8 }}>{playerSearchStatus}</p> : null}
+            {playerSearchResults.length ? (
+              <div className="table-wrap" style={{ marginTop: 8 }}>
+                <table className="roster-table">
+                  <thead>
+                    <tr>
+                      <th>Best</th>
+                      <th>Player</th>
+                      <th>Hometown</th>
+                      <th>Team</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {playerSearchResults.map((item) => (
+                      <tr key={item.key}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={desiredPlayerIdSet.has(item.playerId)}
+                            onChange={() => toggleSmartPlayerSelection(item)}
+                          />
+                        </td>
+                        <td>{item.name}</td>
+                        <td>{item.hometown || "-"}</td>
+                        <td>{item.teamName}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+            {desiredPlayers.length ? (
+              <p className="muted" style={{ marginTop: 8 }}>
+                Selected best players: {desiredPlayers.length}
+              </p>
+            ) : null}
+          </div>
           {selectedTournament?.teams?.length ? (
             <div className="table-wrap" style={{ marginBottom: 12 }}>
               <table className="roster-table">
