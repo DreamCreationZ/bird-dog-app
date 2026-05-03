@@ -3657,7 +3657,7 @@ export default function BirdDogPage() {
           <h2>Schedules</h2>
           <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
             <p className="muted" style={{ margin: 0 }}>
-              Select players and generate route recommendations with travel, transfer, and hotel guidance.
+              Generate route recommendations from players selected in My Best Players.
             </p>
             <button
               className="secondary"
@@ -3769,36 +3769,15 @@ export default function BirdDogPage() {
                 Notes
                 <textarea rows={3} value={scheduleForm.notes} onChange={(e) => setScheduleForm((p) => ({ ...p, notes: e.target.value }))} />
               </label>
-              <label>
-                Target Player
-                <div className="row wrap">
-                  <select value={desiredPlayerId} onChange={(e) => setDesiredPlayerId(e.target.value)}>
-                    {players.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name} ({p.school || "Unknown Team"})</option>
-                    ))}
-                  </select>
-                  <button className="secondary" type="button" onClick={addDesiredPlayer}>Add Player</button>
-                </div>
-              </label>
               <div className="row wrap">
                 <button onClick={() => void saveSchedule()}>Save My Schedule</button>
-                <button className="secondary" onClick={() => void addSchedule()}>Add Schedule</button>
                 <button className="secondary" onClick={() => void fetchSchedules()}>Refresh</button>
               </div>
             </>
           )}
-          {desiredPlayers.length ? (
-            <div className="log-list" style={{ maxHeight: 140, marginTop: 8 }}>
-              {desiredPlayers.map((item) => (
-                <article className="log-card" key={desiredPlayerSelectionKey(item)}>
-                  <p><strong>{item.name}</strong></p>
-                  <p>Team: {item.team}</p>
-                  {item.hometown ? <p>Hometown: {item.hometown}</p> : null}
-                  <button className="secondary" type="button" onClick={() => removeDesiredPlayer(desiredPlayerSelectionKey(item))}>Remove</button>
-                </article>
-              ))}
-            </div>
-          ) : <p className="muted">Add players to guide schedule generation.</p>}
+          <p className="muted">
+            Selected players from My Best Players: {desiredPlayers.length}
+          </p>
           <div className="row wrap" style={{ marginTop: 8 }}>
             <button
               className="secondary"
@@ -3883,7 +3862,7 @@ export default function BirdDogPage() {
         </div>
 
         <div>
-          <h2>Coach Schedule Board</h2>
+          <h2>Schedules Dashboard</h2>
           <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
           {shareableSchedules.length ? (
             <>
@@ -3891,19 +3870,28 @@ export default function BirdDogPage() {
                 <table className="roster-table">
                   <thead>
                     <tr>
-                      <th>Coach</th>
+                      <th>Coach Name</th>
                       <th>Email</th>
+                      <th>Schedule</th>
                       <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {shareableSchedules.map((item) => (
                       <tr key={item.id}>
-                        <td>{item.coach_name}</td>
+                        <td>
+                          {item.coach_name}
+                          {item.user_id === user?.userId ? " (You)" : ""}
+                        </td>
                         <td>{item.coach_email || "-"}</td>
                         <td>
+                          {item.generated_plan?.length
+                            ? `${item.generated_plan.length} recommendation step(s)`
+                            : "No schedule generated yet"}
+                        </td>
+                        <td>
                           <div className="row wrap">
-                            <button className="secondary" onClick={() => openScheduleView(item, "schedule")}>View Schedules</button>
+                            <button className="secondary" onClick={() => openScheduleView(item, "schedule")}>View Schedule</button>
                             <button className="secondary" onClick={() => openScheduleView(item, "notes")}>View Notes</button>
                           </div>
                         </td>
@@ -3912,10 +3900,25 @@ export default function BirdDogPage() {
                   </tbody>
                 </table>
               </div>
+              {myCoachSchedule ? (
+                <div className="panel" style={{ marginTop: 10 }}>
+                  <h3 style={{ marginTop: 0 }}>My Individual Schedule</h3>
+                  <p className="muted" style={{ marginTop: 4 }}>
+                    {myCoachSchedule.flight_source || "-"} {"->"} {myCoachSchedule.flight_destination || "-"}
+                  </p>
+                  <p className="muted" style={{ marginTop: 4 }}>
+                    Updated: {myCoachSchedule.updated_at ? new Date(myCoachSchedule.updated_at).toLocaleString() : "-"}
+                  </p>
+                  <button className="secondary" onClick={() => openScheduleView(myCoachSchedule, "schedule")}>View My Schedule</button>
+                </div>
+              ) : null}
             </>
           ) : (
             myGeneratedPlan.length ? (
-              <p className="muted">Recommendation generated for you. Review steps in Coach Schedule (left panel).</p>
+              <div className="panel">
+                <h3 style={{ marginTop: 0 }}>My Individual Schedule</h3>
+                <p className="muted">Recommendation generated for you. Save it to publish in the coach dashboard.</p>
+              </div>
             ) : (
               <p className="muted">No coaches schedules yet.</p>
             )
