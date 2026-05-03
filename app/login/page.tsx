@@ -28,16 +28,11 @@ function fromBase64Url(value: string) {
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
-type FallbackCodes = {
-  code: string;
-};
-
 type LoginResult = {
   ok?: boolean;
   error?: string;
   mfaRequired?: boolean;
   message?: string;
-  fallbackCodes?: FallbackCodes;
 };
 
 type CountryCodeOption = {
@@ -83,7 +78,6 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [stage, setStage] = useState<"credentials" | "mfa">("credentials");
-  const [fallbackCodes, setFallbackCodes] = useState<FallbackCodes | null>(null);
 
   const org = useMemo(() => getOrgByEmail(email), [email]);
   const isAdminEmail = email.trim().toLowerCase() === "admin@apointscout.com";
@@ -151,12 +145,20 @@ export default function LoginPage() {
     ) || null;
   }
 
+  function isUniversityEmailInput(value: string) {
+    return /^[^@\s]+@[^@\s]+\.edu$/i.test(String(value || "").trim());
+  }
+
   async function startLogin(event: FormEvent) {
     event.preventDefault();
     setLoading(true);
     setError("");
     setInfo("");
-    setFallbackCodes(null);
+    if (authIntent === "signup" && !isAdminEmail && !isUniversityEmailInput(email)) {
+      setError("Use your university email address to create an account.");
+      setLoading(false);
+      return;
+    }
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 15000);
     try {
@@ -187,7 +189,6 @@ export default function LoginPage() {
       if (data?.mfaRequired) {
         setStage("mfa");
         setInfo(data?.message || "Enter the MFA code to continue.");
-        setFallbackCodes(data?.fallbackCodes || null);
         return;
       }
 
@@ -370,7 +371,7 @@ export default function LoginPage() {
           style={{ width: 220, height: "auto", marginBottom: 8 }}
         />
         <h1>APOINT SCOUT</h1>
-        <p>Sign up or sign in with your scouting email.</p>
+        <p>Sign up or sign in with your university email.</p>
         <div className="org-preview">
           <div className="org-preview-mark">
             {org.logoUrl ? (
@@ -433,8 +434,14 @@ export default function LoginPage() {
               </>
             ) : null}
             <label>
-              Email
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+              University Email
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="name@university.edu"
+                required
+              />
             </label>
             <label>
               Password
@@ -502,23 +509,16 @@ export default function LoginPage() {
               <button type="button" className="secondary-btn" disabled={loading || biometricLoading} onClick={loginWithFingerprint}>
                 {biometricLoading ? "Working..." : "Use Face ID / Fingerprint"}
               </button>
-            ) : (
-              <p className="muted">Sign up once with your university email, then use Sign In or biometric next time.</p>
-            )}
+            ) : null}
           </form>
           </>
         ) : (
           <form onSubmit={verifyMfa}>
-            <p className="muted">Finish Sign Up: enter the MFA code sent to your university email.</p>
+            <p className="muted">Enter the MFA code sent to your university email to verify account ownership.</p>
             <label>
               MFA Code
               <input value={mfaCode} onChange={(e) => setMfaCode(e.target.value)} inputMode="numeric" required />
             </label>
-            {fallbackCodes ? (
-              <p className="muted">
-                Code: <b>{fallbackCodes.code}</b>
-              </p>
-            ) : null}
             {error ? <p className="error-text">{error}</p> : null}
             {info ? <p className="muted">{info}</p> : null}
             <button type="submit" disabled={loading}>

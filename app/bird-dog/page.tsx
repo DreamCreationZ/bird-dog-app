@@ -2818,7 +2818,7 @@ export default function BirdDogPage() {
         }
         if (liveOpen.status === 409 && item.company === "PG") {
           await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
-          setOpenError("Tournament data is still importing. Please stay here and tap Refresh in a few seconds.");
+          setOpenError("Details are not yet available for this tournament. They will appear here once the upload is complete. Please tap Refresh in a few seconds.");
           return;
         }
         const detail = typeof data?.detail === "string" && data.detail ? ` (${data.detail})` : "";

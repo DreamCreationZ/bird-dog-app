@@ -118,7 +118,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (!isUniversityEmail(email)) {
-    return NextResponse.json({ error: "Please sign in with your university .edu email address." }, { status: 400 });
+    return NextResponse.json({ error: "Only university email addresses can be used to create and access scout accounts." }, { status: 400 });
   }
 
   const trusted = readTrustedAuthFromRequest(req);
@@ -195,18 +195,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         ok: true,
         mfaRequired: true,
-        message: "An MFA code was sent to your university email."
+        message: "A verification code has been sent to your university email."
       }, { status: 202 });
     }
 
     return NextResponse.json({
-      ok: true,
-      mfaRequired: true,
-      message: "Email delivery is not configured. Use the code below once, then configure Resend in env for production email MFA.",
-      fallbackCodes: {
-        code: nextMfaCode
-      }
-    }, { status: 202 });
+      error: "We could not send the MFA code to your university email right now. Please try again."
+    }, { status: 503 });
   }
 
   const pending = readPendingMfaFromRequest(req);
