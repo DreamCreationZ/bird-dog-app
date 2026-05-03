@@ -65,7 +65,7 @@ export default function LoginPage() {
   const [authIntent, setAuthIntent] = useState<"signup" | "signin">("signin");
   const [firstName, setFirstName] = useState("Scout");
   const [lastName, setLastName] = useState("User");
-  const [email, setEmail] = useState("scout@lsu.edu");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [gender, setGender] = useState<"MALE" | "FEMALE" | "UNSPECIFIED">("UNSPECIFIED");
   const [countryCallingCode, setCountryCallingCode] = useState("1");
@@ -366,33 +366,12 @@ export default function LoginPage() {
     >
       <section className="login-card">
         <img
-          src="/branding/a-point-scout-logo.svg"
+          src="/branding/a-point-scout-icon.svg"
           alt="APOINT SCOUT"
-          style={{ width: 220, height: "auto", marginBottom: 8 }}
+          className="login-brand-mark"
         />
         <h1>APOINT SCOUT</h1>
         <p>Sign up or sign in with your university email.</p>
-        <div className="org-preview">
-          <div className="org-preview-mark">
-            {org.logoUrl ? (
-              <img
-                src={org.logoUrl}
-                alt={`${org.name} logo`}
-                onError={(event) => {
-                  const target = event.currentTarget;
-                  if (target.src.endsWith("/branding/a-point-scout-icon.svg")) return;
-                  target.src = "/branding/a-point-scout-icon.svg";
-                }}
-              />
-            ) : (
-              <span>{org.logoText || "ORG"}</span>
-            )}
-          </div>
-          <div>
-            <p className="org-preview-title">University Theme</p>
-            <p className="org-preview-name">{org.name}</p>
-          </div>
-        </div>
 
         {stage === "credentials" ? (
           <>

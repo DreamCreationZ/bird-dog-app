@@ -107,6 +107,16 @@ type BookingSummarySnapshot = {
   results: BookingQuoteResult[];
 };
 
+type ProfileFormState = {
+  firstName: string;
+  lastName: string;
+  universityEmail: string;
+  gender: "MALE" | "FEMALE" | "UNSPECIFIED";
+  countryCallingCode: string;
+  mobileNumber: string;
+  dateOfBirth: string;
+};
+
 type DesiredPlayer = {
   playerId: string;
   selectionKey?: string;
@@ -232,6 +242,7 @@ const LOCAL_SCHEDULE_FALLBACK_KEY = "bird_dog:local_schedule_fallback:v1";
 const PLAN_WORKFLOW_STATUS_KEY_PREFIX = "bird_dog:plan_workflow_status:v1";
 const BOOKING_REVIEW_DRAFT_KEY = "bird_dog:booking_review_draft:v1";
 const BOOKING_SUMMARY_KEY = "bird_dog:booking_summary:v1";
+const PROFILE_FORM_STORAGE_KEY_PREFIX = "bird_dog:profile_form:v1";
 const DEMO_FREE_TOURNAMENT_SLUGS = new Set(["2025-pg-16u-wwba-national-championship"]);
 
 function isTournamentLocked(item: InventoryTournament | null | undefined, options?: { forceUnlocked?: boolean }) {
@@ -358,6 +369,22 @@ function getBookingBlockReasonFromPlan(plan: PlanItem[]) {
 function localScheduleFallbackKey(user: SessionUser | null) {
   if (!user) return "";
   return `${LOCAL_SCHEDULE_FALLBACK_KEY}:${user.orgId}:${user.userId}`;
+}
+
+function splitNameParts(name: string) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) {
+    return { firstName: "Scout", lastName: "User" };
+  }
+  return {
+    firstName: parts[0],
+    lastName: parts.slice(1).join(" ")
+  };
+}
+
+function profileStorageKey(user: SessionUser | null) {
+  if (!user) return "";
+  return `${PROFILE_FORM_STORAGE_KEY_PREFIX}:${user.orgId}:${user.userId}`;
 }
 
 function toRadians(value: number) {
@@ -819,7 +846,7 @@ export default function BirdDogPage() {
   const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
   const [openError, setOpenError] = useState("");
   const [selectedInventorySlug, setSelectedInventorySlug] = useState("");
-  const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes" | "coaches" | "bestPlayers">("tournaments");
+  const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes" | "bestPlayers" | "profile">("tournaments");
   const [inlineTeamNoteDrafts, setInlineTeamNoteDrafts] = useState<Record<string, InlineTeamNoteDraft>>({});
   const [inlineTeamNoteStatuses, setInlineTeamNoteStatuses] = useState<Record<string, string>>({});
   const [inlineTeamNoteRecorderState, setInlineTeamNoteRecorderState] = useState<RecorderState>("idle");
@@ -862,6 +889,16 @@ export default function BirdDogPage() {
   const [planWorkflowNote, setPlanWorkflowNote] = useState("");
   const [latestBookingSummary, setLatestBookingSummary] = useState<BookingSummarySnapshot | null>(null);
   const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false);
+  const [profileForm, setProfileForm] = useState<ProfileFormState>({
+    firstName: "Scout",
+    lastName: "User",
+    universityEmail: "",
+    gender: "UNSPECIFIED",
+    countryCallingCode: "1",
+    mobileNumber: "",
+    dateOfBirth: "1990-01-01"
+  });
+  const [profileStatus, setProfileStatus] = useState("");
 
   const selectedTournament = useMemo(
     () => tournaments.find((t) => t.id === selectedTournamentId) || null,
@@ -1078,7 +1115,9 @@ export default function BirdDogPage() {
     const tab = params.get("tab");
     const inventorySlug = params.get("inventorySlug");
     const tournamentId = params.get("tournamentId");
-    if (tab === "tournaments" || tab === "schedule" || tab === "notes" || tab === "coaches" || tab === "bestPlayers") {
+    if (tab === "coaches") {
+      setActiveTab("schedule");
+    } else if (tab === "tournaments" || tab === "schedule" || tab === "notes" || tab === "bestPlayers" || tab === "profile") {
       setActiveTab(tab);
     }
     if (inventorySlug) {
@@ -1089,6 +1128,35 @@ export default function BirdDogPage() {
     }
     setQueryStateApplied(true);
   }, [queryStateApplied, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const names = splitNameParts(user.name);
+    const baseProfile: ProfileFormState = {
+      firstName: names.firstName,
+      lastName: names.lastName || "",
+      universityEmail: String(user.email || "").trim().toLowerCase(),
+      gender: (user.gender || "UNSPECIFIED") as "MALE" | "FEMALE" | "UNSPECIFIED",
+      countryCallingCode: String(user.countryCallingCode || "1"),
+      mobileNumber: String(user.phone || "").replace(/[^\d]/g, ""),
+      dateOfBirth: "1990-01-01"
+    };
+    const raw = safeLocalGet(profileStorageKey(user));
+    const saved = parseJsonSafe<Partial<ProfileFormState> | null>(raw, null);
+    if (!saved) {
+      setProfileForm(baseProfile);
+      return;
+    }
+    setProfileForm({
+      firstName: String(saved.firstName || baseProfile.firstName),
+      lastName: String(saved.lastName || baseProfile.lastName),
+      universityEmail: String(saved.universityEmail || baseProfile.universityEmail).trim().toLowerCase(),
+      gender: saved.gender === "MALE" || saved.gender === "FEMALE" ? saved.gender : "UNSPECIFIED",
+      countryCallingCode: String(saved.countryCallingCode || baseProfile.countryCallingCode).replace(/[^\d]/g, "") || "1",
+      mobileNumber: String(saved.mobileNumber || baseProfile.mobileNumber).replace(/[^\d]/g, ""),
+      dateOfBirth: String(saved.dateOfBirth || baseProfile.dateOfBirth || "1990-01-01")
+    });
+  }, [user]);
 
   useEffect(() => {
     const ctor = (window as unknown as { SpeechRecognition?: BrowserSpeechConstructor; webkitSpeechRecognition?: BrowserSpeechConstructor }).SpeechRecognition
@@ -1788,6 +1856,79 @@ export default function BirdDogPage() {
     await saveSchedule(mergedPlan, activeDesired);
   }
 
+  async function saveProfile() {
+    if (!user) return;
+    const firstName = profileForm.firstName.trim();
+    const lastName = profileForm.lastName.trim();
+    const normalizedEmail = profileForm.universityEmail.trim().toLowerCase();
+    const normalizedCode = profileForm.countryCallingCode.replace(/[^\d]/g, "");
+    const normalizedPhone = profileForm.mobileNumber.replace(/[^\d]/g, "");
+    const fullName = `${firstName} ${lastName}`.trim();
+    const isAdminEmail = normalizedEmail === "admin@apointscout.com";
+    if (!firstName) {
+      setProfileStatus("First name is required.");
+      return;
+    }
+    if (!normalizedEmail.includes("@")) {
+      setProfileStatus("Enter a valid university email.");
+      return;
+    }
+    if (!isAdminEmail && !/\.edu$/i.test(normalizedEmail)) {
+      setProfileStatus("Only university email addresses are allowed.");
+      return;
+    }
+    if (!normalizedCode || normalizedCode.length > 4) {
+      setProfileStatus("Enter a valid country code.");
+      return;
+    }
+    if (!normalizedPhone || normalizedPhone.length < 7 || normalizedPhone.length > 15) {
+      setProfileStatus("Enter a valid mobile number.");
+      return;
+    }
+    setProfileStatus("Saving profile...");
+    try {
+      const res = await fetch("/api/session/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: fullName || user.name,
+          email: normalizedEmail,
+          gender: profileForm.gender,
+          phone: normalizedPhone,
+          countryCallingCode: normalizedCode
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setProfileStatus(String(data?.error || "Unable to update profile right now."));
+        return;
+      }
+      const nextUser = data?.user as SessionUser | undefined;
+      if (nextUser) {
+        const oldKey = profileStorageKey(user);
+        const nextKey = profileStorageKey(nextUser);
+        setUser(nextUser);
+        if (oldKey && nextKey && oldKey !== nextKey) {
+          safeLocalRemove(oldKey);
+        }
+        if (nextKey) {
+          safeLocalSet(nextKey, JSON.stringify({
+            firstName,
+            lastName,
+            universityEmail: normalizedEmail,
+            gender: profileForm.gender,
+            countryCallingCode: normalizedCode,
+            mobileNumber: normalizedPhone,
+            dateOfBirth: profileForm.dateOfBirth || "1990-01-01"
+          } satisfies ProfileFormState));
+        }
+      }
+      setProfileStatus("Profile updated.");
+    } catch {
+      setProfileStatus("Unable to update profile right now.");
+    }
+  }
+
   function editSchedule(item: CoachSchedule) {
     setActiveTab("schedule");
     setViewingSchedule(null);
@@ -1858,7 +1999,7 @@ export default function BirdDogPage() {
   }
 
   function openScheduleView(schedule: CoachSchedule, mode: "schedule" | "notes" = "schedule") {
-    setActiveTab("coaches");
+    setActiveTab("schedule");
     setViewingPanelMode(mode);
     setViewingSchedule(schedule);
   }
@@ -3334,7 +3475,7 @@ export default function BirdDogPage() {
   const showSchedule = activeTab === "schedule";
   const showNotes = activeTab === "notes";
   const showBestPlayers = activeTab === "bestPlayers";
-  const showCoaches = activeTab === "coaches";
+  const showProfile = activeTab === "profile";
 
   useEffect(() => {
     if (!user) return;
@@ -3394,7 +3535,7 @@ export default function BirdDogPage() {
       setViewingSchedule(null);
       return;
     }
-    if (showNotes || showSchedule || showCoaches || showBestPlayers) {
+    if (showNotes || showSchedule || showBestPlayers || showProfile) {
       goToTournamentDashboard();
       return;
     }
@@ -3402,7 +3543,6 @@ export default function BirdDogPage() {
   }
   const orgPrimary = user?.orgPrimary || "#1f3a5f";
   const orgAccent = user?.orgAccent || "#d7a316";
-  const orgLogoUrl = (user?.orgLogoUrl || "").trim() || "/branding/a-point-scout-icon.svg";
   const orgDisplayName = user?.orgName || "Neutral Org";
   const bgValue = "#060b16";
   const bgImageValue = `radial-gradient(circle at 12% 14%, ${alphaColor(orgPrimary, 0.28)} 0%, transparent 33%), radial-gradient(circle at 88% 16%, ${alphaColor(orgAccent, 0.2)} 0%, transparent 28%), linear-gradient(175deg, #060b16 0%, #0a1326 46%, #0b1322 100%)`;
@@ -3435,6 +3575,11 @@ export default function BirdDogPage() {
       onTouchEnd={onPullEnd}
     >
       <section className="top-menu">
+        {canGoBackInApp ? (
+          <button className="secondary" type="button" onClick={goBackInApp}>
+            Back
+          </button>
+        ) : null}
         <button
           className="secondary menu-trigger"
           type="button"
@@ -3445,6 +3590,13 @@ export default function BirdDogPage() {
         </button>
         {menuOpen ? (
           <div className="menu-dropdown">
+            <div className="menu-brand">
+              <img src="/branding/a-point-scout-icon.svg" alt="APOINT SCOUT" />
+              <div className="menu-brand-copy">
+                <p>APOINT SCOUT</p>
+                <p>{orgDisplayName}</p>
+              </div>
+            </div>
             <button
               type="button"
               className={activeTab === "tournaments" ? "active" : ""}
@@ -3457,34 +3609,14 @@ export default function BirdDogPage() {
             </button>
             <button
               type="button"
-              className={activeTab === "notes" ? "active" : ""}
-              onClick={() => {
-                setActiveTab("notes");
-                setMenuOpen(false);
-              }}
-            >
-              Tournament Roster
-            </button>
-            <button
-              type="button"
               className={activeTab === "schedule" ? "active" : ""}
               onClick={() => {
                 setActiveTab("schedule");
                 setMenuOpen(false);
-              }}
-            >
-              My Schedule
-            </button>
-            <button
-              type="button"
-              className={activeTab === "coaches" ? "active" : ""}
-              onClick={() => {
-                setActiveTab("coaches");
-                setMenuOpen(false);
                 void fetchSchedules();
               }}
             >
-              Coaches Schedules
+              Schedules
             </button>
             <button
               type="button"
@@ -3496,68 +3628,36 @@ export default function BirdDogPage() {
             >
               My Best Players
             </button>
+            <button
+              type="button"
+              className={activeTab === "profile" ? "active" : ""}
+              onClick={() => {
+                setActiveTab("profile");
+                setMenuOpen(false);
+              }}
+            >
+              My Profile
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMenuOpen(false);
+                void logout();
+              }}
+            >
+              Log Out
+            </button>
           </div>
         ) : null}
-      </section>
-
-      <section className="panel">
-        <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
-          <div className="brand-ribbon">
-            <div className="brand-ribbon-logo">
-              <img
-                src={orgLogoUrl}
-                alt={`${orgDisplayName} logo`}
-                onError={(event) => {
-                  const target = event.currentTarget;
-                  if (target.src.endsWith("/branding/a-point-scout-icon.svg")) return;
-                  target.src = "/branding/a-point-scout-icon.svg";
-                }}
-              />
-            </div>
-            <div>
-              <p className="brand-ribbon-title">APOINT SCOUT</p>
-              <p className="brand-ribbon-org">{orgDisplayName}</p>
-            </div>
-          </div>
-          <button className="secondary" onClick={goToTournamentDashboard}>Dashboard</button>
-        </div>
-        <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
-          <h2>
-            {showTournaments
-              ? "Tournament Dashboard"
-              : showNotes
-                ? "Tournament Roster"
-                : showSchedule
-                  ? "My Schedule"
-                  : showCoaches
-                    ? "Coaches Schedules"
-                    : "My Best Players"}
-          </h2>
-          <div className="row wrap" style={{ gap: 8 }}>
-            {canGoBackInApp ? <button className="secondary" onClick={goBackInApp}>Back</button> : null}
-            <button className="secondary" onClick={() => void logout()}>Log Out</button>
-          </div>
-        </div>
-        <p className="muted">
-          {showTournaments
-            ? "Click any tournament to open participating teams."
-            : showNotes
-              ? "Open team roster and schedule details."
-              : showSchedule
-                ? "Auto-generate coach travel recommendation, review/modify, and proceed to booking."
-                : showCoaches
-                  ? "See coaches schedules from your university domain."
-                  : "See favorite players with notes/audio, location, team, and tournament context."}
-        </p>
       </section>
 
       {showSchedule ? (
       <section className="panel grid2">
         <div>
-          <h2>Coach Schedule</h2>
+          <h2>Schedules</h2>
           <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
             <p className="muted" style={{ margin: 0 }}>
-              Select best players and generate route recommendations with travel, transfer, and hotel guidance.
+              Select players and generate route recommendations with travel, transfer, and hotel guidance.
             </p>
             <button
               className="secondary"
@@ -3783,7 +3883,7 @@ export default function BirdDogPage() {
         </div>
 
         <div>
-          <h2>Team Schedule Board</h2>
+          <h2>Coach Schedule Board</h2>
           <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
           {shareableSchedules.length ? (
             <>
@@ -3904,141 +4004,77 @@ export default function BirdDogPage() {
         </section>
       ) : null}
 
-      {showCoaches ? (
-        <section className="panel">
-          <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
-            <h2>Coach Schedule Board</h2>
-            <div className="row wrap">
-              <button className="secondary" onClick={() => void fetchSchedules()}>Refresh Schedules</button>
-              <button className="secondary" onClick={() => void fetchLiveLocations()}>Refresh Live Map</button>
-            </div>
+      {showProfile ? (
+        <section className="panel" style={{ maxWidth: 760 }}>
+          <h2>My Profile</h2>
+          <p className="muted">Update your account profile details. Date of birth is locked and cannot be edited.</p>
+          <div className="grid2">
+            <label>
+              First Name
+              <input
+                value={profileForm.firstName}
+                onChange={(e) => setProfileForm((prev) => ({ ...prev, firstName: e.target.value }))}
+              />
+            </label>
+            <label>
+              Last Name
+              <input
+                value={profileForm.lastName}
+                onChange={(e) => setProfileForm((prev) => ({ ...prev, lastName: e.target.value }))}
+              />
+            </label>
+            <label>
+              University Email
+              <input
+                type="email"
+                value={profileForm.universityEmail}
+                onChange={(e) => setProfileForm((prev) => ({ ...prev, universityEmail: e.target.value }))}
+                placeholder="name@university.edu"
+              />
+            </label>
+            <label>
+              Date of Birth (Locked)
+              <input
+                type="date"
+                value={profileForm.dateOfBirth}
+                readOnly
+                disabled
+              />
+            </label>
+            <label>
+              Gender
+              <select
+                value={profileForm.gender}
+                onChange={(e) => setProfileForm((prev) => ({ ...prev, gender: e.target.value as ProfileFormState["gender"] }))}
+              >
+                <option value="UNSPECIFIED">Prefer not to say</option>
+                <option value="MALE">Male</option>
+                <option value="FEMALE">Female</option>
+              </select>
+            </label>
+            <label>
+              Country Code
+              <input
+                value={profileForm.countryCallingCode}
+                onChange={(e) => setProfileForm((prev) => ({ ...prev, countryCallingCode: e.target.value.replace(/[^\d]/g, "") }))}
+                inputMode="numeric"
+                placeholder="91"
+              />
+            </label>
+            <label style={{ gridColumn: "1 / -1" }}>
+              Mobile Number
+              <input
+                value={profileForm.mobileNumber}
+                onChange={(e) => setProfileForm((prev) => ({ ...prev, mobileNumber: e.target.value.replace(/[^\d]/g, "") }))}
+                inputMode="tel"
+                placeholder="9876543210"
+              />
+            </label>
           </div>
-          <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
-          {otherCoachSchedules.length ? (
-            <>
-              <div className="panel" style={{ marginTop: 8 }}>
-                <div className="row wrap">
-                  <label>
-                    Search Coach
-                    <input
-                      value={coachFilterQuery}
-                      onChange={(e) => setCoachFilterQuery(e.target.value)}
-                      placeholder="Search coach, email, route"
-                    />
-                  </label>
-                  <label>
-                    Filter Date
-                    <input
-                      type="date"
-                      value={coachFilterDate}
-                      onChange={(e) => setCoachFilterDate(e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Meet Status
-                    <select
-                      value={coachFilterMeetMode}
-                      onChange={(e) => setCoachFilterMeetMode(e.target.value as "all" | "common" | "none")}
-                    >
-                      <option value="all">All</option>
-                      <option value="common">Common/Midpoint only</option>
-                      <option value="none">No common point only</option>
-                    </select>
-                  </label>
-                </div>
-                <div className="row wrap" style={{ marginTop: 8 }}>
-                  <label className="row" style={{ gap: 8, marginRight: 10 }}>
-                    <input
-                      type="checkbox"
-                      checked={locationSharingEnabled}
-                      onChange={(e) => setLocationSharingEnabled(e.target.checked)}
-                    />
-                    Share my live location continuously
-                  </label>
-                  <button className="secondary" onClick={() => void pingCurrentLocation()}>Sync My Location Now</button>
-                </div>
-                {locationStatus ? <p className="muted" style={{ marginTop: 6 }}>{locationStatus}</p> : null}
-              </div>
-              {filteredCoachSchedules.length ? (
-                <div className="table-wrap">
-                  <table className="roster-table">
-                    <thead>
-                      <tr>
-                        <th>Coach</th>
-                        <th>Email</th>
-                        <th>Live Location</th>
-                        <th>Middle Location</th>
-                        <th>Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredCoachSchedules.map((item) => {
-                        const live = liveByUserId.get(item.user_id) || null;
-                        const meet = coachMeetSuggestionById.get(item.id) || {
-                          kind: "none",
-                          label: "No common point",
-                          detail: "No shared location/time window found yet."
-                        };
-                        const liveAgeMinutes = live?.captured_at
-                          ? Math.max(0, Math.round((Date.now() - Date.parse(live.captured_at)) / 60000))
-                          : null;
-                        return (
-                        <tr key={item.id}>
-                          <td>{item.coach_name}</td>
-                          <td>{item.coach_email || "-"}</td>
-                          <td>
-                            {live ? (
-                              <div>
-                                <p className="small" style={{ margin: 0 }}>
-                                  {live.latitude.toFixed(4)}, {live.longitude.toFixed(4)}
-                                </p>
-                                <p className="small" style={{ margin: 0 }}>
-                                  {liveAgeMinutes != null ? `${liveAgeMinutes} min ago` : "just now"}
-                                </p>
-                                <a
-                                  href={`https://www.google.com/maps/search/?api=1&query=${live.latitude},${live.longitude}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="small"
-                                >
-                                  Open Map
-                                </a>
-                              </div>
-                            ) : (
-                              <span className="small">Location unavailable</span>
-                            )}
-                          </td>
-                          <td>
-                            <p className="small" style={{ margin: 0 }}><strong>{meet.label}</strong></p>
-                            <p className="small" style={{ margin: 0 }}>{meet.detail}</p>
-                            {meet.mapUrl ? (
-                              <a href={meet.mapUrl} target="_blank" rel="noopener noreferrer" className="small">
-                                Open Meet Point
-                              </a>
-                            ) : null}
-                          </td>
-                          <td className="action-cell">
-                            <div className="row wrap">
-                              <button className="secondary" onClick={() => openScheduleView(item, "schedule")}>View Schedule</button>
-                              <button className="secondary" onClick={() => openScheduleView(item, "notes")}>View Notes</button>
-                            </div>
-                          </td>
-                        </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <p className="muted">No coaches schedules yet.</p>
-              )}
-            </>
-          ) : (
-            <p className="muted">No coaches schedules yet.</p>
-          )}
           <div className="row wrap">
-            <button className="secondary" onClick={() => setActiveTab("schedule")}>Go to My Schedule</button>
+            <button type="button" onClick={() => void saveProfile()}>Save Profile</button>
           </div>
+          {profileStatus ? <p className="muted" style={{ marginTop: 8 }}>{profileStatus}</p> : null}
         </section>
       ) : null}
 

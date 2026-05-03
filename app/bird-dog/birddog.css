@@ -44,6 +44,8 @@
   top: 10px;
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
   z-index: 30;
   margin: 2px 0 8px;
 }
@@ -66,7 +68,7 @@
   border-radius: 12px;
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
   padding: 8px;
-  min-width: 204px;
+  min-width: 230px;
   display: grid;
   gap: 8px;
   backdrop-filter: blur(8px);
@@ -93,19 +95,42 @@
 
 .bd-root .menu-brand {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
-  background: rgba(255, 255, 255, 0.06);
+  gap: 10px;
+  background: rgba(15, 28, 48, 0.85);
   border: 1px solid rgba(188, 210, 246, 0.3);
   border-radius: 10px;
-  padding: 6px;
+  padding: 8px;
 }
 
 .bd-root .menu-brand img {
-  max-height: 44px;
-  width: auto;
-  max-width: 150px;
+  width: 44px;
+  height: 44px;
   object-fit: contain;
+  border-radius: 10px;
+  background: rgba(8, 16, 31, 0.92);
+  border: 1px solid rgba(183, 204, 239, 0.22);
+  padding: 4px;
+}
+
+.bd-root .menu-brand-copy p {
+  margin: 0;
+  line-height: 1.2;
+}
+
+.bd-root .menu-brand-copy p:first-child {
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(206, 221, 246, 0.82);
+  font-weight: 800;
+}
+
+.bd-root .menu-brand-copy p:last-child {
+  font-size: 0.88rem;
+  color: #f4f9ff;
+  font-weight: 700;
 }
 
 .org-chip {

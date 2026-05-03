@@ -35,6 +35,17 @@ body {
   backdrop-filter: blur(8px);
 }
 
+.login-brand-mark {
+  width: 112px;
+  height: 112px;
+  border-radius: 22px;
+  border: 1px solid rgba(181, 204, 240, 0.35);
+  background: rgba(8, 16, 30, 0.95);
+  padding: 8px;
+  margin: 0 0 8px;
+  object-fit: contain;
+}
+
 .login-card form {
   display: grid;
   gap: 10px;
