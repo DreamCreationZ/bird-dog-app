@@ -378,6 +378,17 @@ function scheduleCandidates(schedule: CoachSchedule) {
   return out;
 }
 
+function isPlanStepInfeasible(item: PlanItem) {
+  return String(item.detail || "").toLowerCase().includes("not feasible within next");
+}
+
+function isShareableSchedule(schedule: CoachSchedule | null | undefined) {
+  if (!schedule) return false;
+  const plan = Array.isArray(schedule.generated_plan) ? schedule.generated_plan : [];
+  if (!plan.length) return false;
+  return !plan.some((item) => isPlanStepInfeasible(item));
+}
+
 function buildCoachMeetSuggestion(
   mine: CoachSchedule | null,
   other: CoachSchedule,
@@ -738,7 +749,7 @@ export default function BirdDogPage() {
   const [coachFilterDate, setCoachFilterDate] = useState("");
   const [coachFilterMeetMode, setCoachFilterMeetMode] = useState<"all" | "common" | "none">("all");
   const [scheduleForm, setScheduleForm] = useState({
-    flightSource: "Bangalore, Karnataka, India",
+    flightSource: "Current location",
     flightDestination: "",
     flightArrivalTime: "",
     hotelName: "",
@@ -1443,7 +1454,7 @@ export default function BirdDogPage() {
     if (!mine) return;
 
     setScheduleForm({
-      flightSource: mine.flight_source || "Bangalore, Karnataka, India",
+      flightSource: mine.flight_source || "Current location",
       flightDestination: mine.flight_destination || "",
       flightArrivalTime: toInputDateTime(mine.flight_arrival_time),
       hotelName: mine.hotel_name || "",
@@ -1647,7 +1658,7 @@ export default function BirdDogPage() {
     setActiveTab("schedule");
     setViewingSchedule(null);
     setScheduleForm({
-      flightSource: item.flight_source || "Bangalore, Karnataka, India",
+      flightSource: item.flight_source || "Current location",
       flightDestination: item.flight_destination || "",
       flightArrivalTime: toInputDateTime(item.flight_arrival_time),
       hotelName: item.hotel_name || "",
@@ -2183,7 +2194,7 @@ export default function BirdDogPage() {
       const rawSource = scheduleForm.flightSource.trim();
       const preferredSource = rawSource && !/^current location$/i.test(rawSource)
         ? rawSource
-        : "Bangalore, Karnataka, India";
+        : "";
 
       const optimized = await buildOptimizedCoachPlan(desiredPlayers, preferredSource);
       if (!optimized.plan.length) {
@@ -2198,18 +2209,18 @@ export default function BirdDogPage() {
       const hotelName = isFeasible
         ? (scheduleForm.hotelName.trim() || await suggestHotelForDestination(destination))
         : "";
-      const finalPlan = isFeasible ? withHotelReturnLeg(optimized.plan, hotelName) : optimized.plan;
+      const finalPlan = isFeasible ? withHotelReturnLeg(optimized.plan, hotelName) : [];
 
       const nextForm = {
         ...scheduleForm,
-        flightSource: optimized.usedLiveLocation ? optimized.sourceLabel : preferredSource,
+        flightSource: optimized.usedLiveLocation ? optimized.sourceLabel : (preferredSource || "Current location"),
         flightDestination: destination,
         flightArrivalTime: scheduleForm.flightArrivalTime || toInputDateTime(finalPlan[0]?.at || new Date().toISOString()),
         hotelName,
         notes: scheduleForm.notes || (
           isFeasible
-            ? "Auto-generated Bangalore-to-tournament coach route with travel + hotel recommendation."
-            : `Auto-generated feasibility check: ${optimized.blockedReason || "Route is not feasible within time limit."}`
+            ? "Auto-generated coach route with travel + hotel recommendation."
+            : ""
         )
       };
       setScheduleForm(nextForm);
@@ -2223,18 +2234,18 @@ export default function BirdDogPage() {
         );
       } else {
         setAndPersistPlanWorkflowStatus("draft");
-        setPlanWorkflowNote(optimized.blockedReason || `Route is not feasible within next ${MAX_FEASIBLE_TRAVEL_HOURS} hours.`);
+        setPlanWorkflowNote("No schedules for scout user yet.");
       }
       await saveSchedule(finalPlan, desiredPlayers, nextForm);
       if (options?.keepActiveTab !== false) {
         setActiveTab("schedule");
       }
       if (!isFeasible) {
-        setPlayerSearchStatus(`${optimized.blockedReason} Skipping downstream stops until route becomes feasible.`);
+        setPlayerSearchStatus("No schedules for scout user yet.");
       } else {
         const locationStatus = optimized.usedLiveLocation
           ? "Current location detected."
-          : "Using Bangalore as start city.";
+          : "Using entered start city.";
         const unresolvedStatus = optimized.unresolvedStops
           ? ` ${optimized.unresolvedStops} destination(s) could not be geocoded; fallback travel estimates were used.`
           : "";
@@ -2737,14 +2748,18 @@ export default function BirdDogPage() {
     () => new Set(desiredPlayers.map((item) => desiredPlayerSelectionKey(item))),
     [desiredPlayers]
   );
+  const shareableSchedules = useMemo(
+    () => schedules.filter((item) => isShareableSchedule(item)),
+    [schedules]
+  );
   const myCoachSchedule = useMemo(
-    () => schedules.find((item) => item.user_id === user?.userId) || null,
-    [schedules, user?.userId]
+    () => shareableSchedules.find((item) => item.user_id === user?.userId) || null,
+    [shareableSchedules, user?.userId]
   );
   const liveByUserId = useMemo(() => new Map(liveLocations.map((item) => [item.user_id, item])), [liveLocations]);
   const otherCoachSchedules = useMemo(
-    () => schedules.filter((item) => item.user_id !== user?.userId),
-    [schedules, user?.userId]
+    () => shareableSchedules.filter((item) => item.user_id !== user?.userId),
+    [shareableSchedules, user?.userId]
   );
   const coachMeetSuggestionById = useMemo(() => {
     const map = new Map<string, CoachMeetSuggestion>();
@@ -2782,6 +2797,12 @@ export default function BirdDogPage() {
   const showSchedule = activeTab === "schedule";
   const showNotes = activeTab === "notes";
   const showCoaches = activeTab === "coaches";
+  useEffect(() => {
+    if (!viewingSchedule) return;
+    if (!shareableSchedules.some((item) => item.id === viewingSchedule.id)) {
+      setViewingSchedule(null);
+    }
+  }, [shareableSchedules, viewingSchedule]);
   const canGoBackInApp = Boolean(viewingSchedule) || !showTournaments;
   function goToTournamentDashboard() {
     setActiveTab("tournaments");
@@ -2936,7 +2957,7 @@ export default function BirdDogPage() {
           <h2>Coach Schedule</h2>
           <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
             <p className="muted" style={{ margin: 0 }}>
-              Schedule is auto-created from selected players, coach location (fallback Bangalore), and hotel recommendation.
+              Schedule is auto-created from selected players, coach location, and hotel recommendation.
             </p>
             <button
               className="secondary"
@@ -2949,7 +2970,7 @@ export default function BirdDogPage() {
           {!scheduleEditorOpen ? (
             <div className="panel" style={{ marginTop: 6, marginBottom: 8 }}>
               <p className="muted" style={{ margin: 0 }}>
-                Flight Source: {scheduleForm.flightSource || "Bangalore, Karnataka, India"}
+                Flight Source: {scheduleForm.flightSource || "Current location"}
               </p>
               <p className="muted" style={{ margin: "4px 0 0 0" }}>
                 Flight Destination: {scheduleForm.flightDestination || "Will be auto-detected from selected players"}
@@ -3129,7 +3150,7 @@ export default function BirdDogPage() {
         <div>
           <h2>Team Schedule Board</h2>
           <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
-          {schedules.length ? (
+          {shareableSchedules.length ? (
             <>
               <div className="table-wrap">
                 <table className="roster-table">
@@ -3141,7 +3162,7 @@ export default function BirdDogPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {schedules.map((item) => (
+                    {shareableSchedules.map((item) => (
                       <tr key={item.id}>
                         <td>{item.coach_name}</td>
                         <td>{item.coach_email || "-"}</td>
@@ -3157,11 +3178,7 @@ export default function BirdDogPage() {
               </div>
             </>
           ) : (
-            <p className="muted">
-              {myGeneratedPlan.length
-                ? "No schedules shared yet. Save My Schedule to publish this recommendation."
-                : "No schedules shared yet."}
-            </p>
+            <p className="muted">No schedules for scout user yet.</p>
           )}
         </div>
       </section>
@@ -3176,7 +3193,9 @@ export default function BirdDogPage() {
           <p>{viewingSchedule.flight_source || "-"} {"->"} {viewingSchedule.flight_destination || "-"}</p>
           <p>{viewingSchedule.flight_arrival_time ? new Date(viewingSchedule.flight_arrival_time).toLocaleString() : "No arrival time"}</p>
           <p>Hotel: {viewingSchedule.hotel_name || "-"}</p>
-          <p>{viewingSchedule.notes || ""}</p>
+          {viewingSchedule.notes && !/^auto-generated/i.test(viewingSchedule.notes.trim()) ? (
+            <p>{viewingSchedule.notes}</p>
+          ) : null}
           {viewingSchedule.desired_players?.length ? (
             <p>
               <strong>Targets:</strong> {viewingSchedule.desired_players.map((p) => `${p.name} (${p.team})`).join(", ")}
@@ -3211,116 +3230,122 @@ export default function BirdDogPage() {
             </div>
           </div>
           <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
-          <div className="panel" style={{ marginTop: 8 }}>
-            <div className="row wrap">
-              <label>
-                Search Coach
-                <input
-                  value={coachFilterQuery}
-                  onChange={(e) => setCoachFilterQuery(e.target.value)}
-                  placeholder="Search coach, email, route"
-                />
-              </label>
-              <label>
-                Filter Date
-                <input
-                  type="date"
-                  value={coachFilterDate}
-                  onChange={(e) => setCoachFilterDate(e.target.value)}
-                />
-              </label>
-              <label>
-                Meet Status
-                <select
-                  value={coachFilterMeetMode}
-                  onChange={(e) => setCoachFilterMeetMode(e.target.value as "all" | "common" | "none")}
-                >
-                  <option value="all">All</option>
-                  <option value="common">Common/Midpoint only</option>
-                  <option value="none">No common point only</option>
-                </select>
-              </label>
-            </div>
-            <div className="row wrap" style={{ marginTop: 8 }}>
-              <label className="row" style={{ gap: 8, marginRight: 10 }}>
-                <input
-                  type="checkbox"
-                  checked={locationSharingEnabled}
-                  onChange={(e) => setLocationSharingEnabled(e.target.checked)}
-                />
-                Share my live location continuously
-              </label>
-              <button className="secondary" onClick={() => void pingCurrentLocation()}>Sync My Location Now</button>
-            </div>
-            {locationStatus ? <p className="muted" style={{ marginTop: 6 }}>{locationStatus}</p> : null}
-          </div>
-          {filteredCoachSchedules.length ? (
-            <div className="table-wrap">
-              <table className="roster-table">
-                <thead>
-                  <tr>
-                    <th>Coach</th>
-                    <th>Email</th>
-                    <th>Live Location</th>
-                    <th>Middle Location</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredCoachSchedules.map((item) => {
-                    const live = liveByUserId.get(item.user_id) || null;
-                    const meet = coachMeetSuggestionById.get(item.id) || {
-                      kind: "none",
-                      label: "No common point",
-                      detail: "No shared location/time window found yet."
-                    };
-                    const liveAgeMinutes = live?.captured_at
-                      ? Math.max(0, Math.round((Date.now() - Date.parse(live.captured_at)) / 60000))
-                      : null;
-                    return (
-                    <tr key={item.id}>
-                      <td>{item.coach_name}</td>
-                      <td>{item.coach_email || "-"}</td>
-                      <td>
-                        {live ? (
-                          <div>
-                            <p className="small" style={{ margin: 0 }}>
-                              {live.latitude.toFixed(4)}, {live.longitude.toFixed(4)}
-                            </p>
-                            <p className="small" style={{ margin: 0 }}>
-                              {liveAgeMinutes != null ? `${liveAgeMinutes} min ago` : "just now"}
-                            </p>
-                            <a
-                              href={`https://www.google.com/maps/search/?api=1&query=${live.latitude},${live.longitude}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="small"
-                            >
-                              Open Map
-                            </a>
-                          </div>
-                        ) : (
-                          <span className="small">Location unavailable</span>
-                        )}
-                      </td>
-                      <td>
-                        <p className="small" style={{ margin: 0 }}><strong>{meet.label}</strong></p>
-                        <p className="small" style={{ margin: 0 }}>{meet.detail}</p>
-                        {meet.mapUrl ? (
-                          <a href={meet.mapUrl} target="_blank" rel="noopener noreferrer" className="small">
-                            Open Meet Point
-                          </a>
-                        ) : null}
-                      </td>
-                      <td className="action-cell">
-                        <button className="secondary" onClick={() => openScheduleView(item)}>View Schedule</button>
-                      </td>
-                    </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+          {otherCoachSchedules.length ? (
+            <>
+              <div className="panel" style={{ marginTop: 8 }}>
+                <div className="row wrap">
+                  <label>
+                    Search Coach
+                    <input
+                      value={coachFilterQuery}
+                      onChange={(e) => setCoachFilterQuery(e.target.value)}
+                      placeholder="Search coach, email, route"
+                    />
+                  </label>
+                  <label>
+                    Filter Date
+                    <input
+                      type="date"
+                      value={coachFilterDate}
+                      onChange={(e) => setCoachFilterDate(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Meet Status
+                    <select
+                      value={coachFilterMeetMode}
+                      onChange={(e) => setCoachFilterMeetMode(e.target.value as "all" | "common" | "none")}
+                    >
+                      <option value="all">All</option>
+                      <option value="common">Common/Midpoint only</option>
+                      <option value="none">No common point only</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="row wrap" style={{ marginTop: 8 }}>
+                  <label className="row" style={{ gap: 8, marginRight: 10 }}>
+                    <input
+                      type="checkbox"
+                      checked={locationSharingEnabled}
+                      onChange={(e) => setLocationSharingEnabled(e.target.checked)}
+                    />
+                    Share my live location continuously
+                  </label>
+                  <button className="secondary" onClick={() => void pingCurrentLocation()}>Sync My Location Now</button>
+                </div>
+                {locationStatus ? <p className="muted" style={{ marginTop: 6 }}>{locationStatus}</p> : null}
+              </div>
+              {filteredCoachSchedules.length ? (
+                <div className="table-wrap">
+                  <table className="roster-table">
+                    <thead>
+                      <tr>
+                        <th>Coach</th>
+                        <th>Email</th>
+                        <th>Live Location</th>
+                        <th>Middle Location</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredCoachSchedules.map((item) => {
+                        const live = liveByUserId.get(item.user_id) || null;
+                        const meet = coachMeetSuggestionById.get(item.id) || {
+                          kind: "none",
+                          label: "No common point",
+                          detail: "No shared location/time window found yet."
+                        };
+                        const liveAgeMinutes = live?.captured_at
+                          ? Math.max(0, Math.round((Date.now() - Date.parse(live.captured_at)) / 60000))
+                          : null;
+                        return (
+                        <tr key={item.id}>
+                          <td>{item.coach_name}</td>
+                          <td>{item.coach_email || "-"}</td>
+                          <td>
+                            {live ? (
+                              <div>
+                                <p className="small" style={{ margin: 0 }}>
+                                  {live.latitude.toFixed(4)}, {live.longitude.toFixed(4)}
+                                </p>
+                                <p className="small" style={{ margin: 0 }}>
+                                  {liveAgeMinutes != null ? `${liveAgeMinutes} min ago` : "just now"}
+                                </p>
+                                <a
+                                  href={`https://www.google.com/maps/search/?api=1&query=${live.latitude},${live.longitude}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="small"
+                                >
+                                  Open Map
+                                </a>
+                              </div>
+                            ) : (
+                              <span className="small">Location unavailable</span>
+                            )}
+                          </td>
+                          <td>
+                            <p className="small" style={{ margin: 0 }}><strong>{meet.label}</strong></p>
+                            <p className="small" style={{ margin: 0 }}>{meet.detail}</p>
+                            {meet.mapUrl ? (
+                              <a href={meet.mapUrl} target="_blank" rel="noopener noreferrer" className="small">
+                                Open Meet Point
+                              </a>
+                            ) : null}
+                          </td>
+                          <td className="action-cell">
+                            <button className="secondary" onClick={() => openScheduleView(item)}>View Schedule</button>
+                          </td>
+                        </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="muted">No coaches schedules yet.</p>
+              )}
+            </>
           ) : (
             <p className="muted">No coaches schedules yet.</p>
           )}

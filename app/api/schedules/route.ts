@@ -28,7 +28,14 @@ function sameDomainSchedulesOnly(
   viewerUserId: string,
   schedules: Awaited<ReturnType<typeof listCoachSchedules>>
 ) {
+  const isVisibleSchedule = (item: (typeof schedules)[number]) => {
+    const plan = Array.isArray(item.generated_plan) ? item.generated_plan : [];
+    if (!plan.length) return false;
+    return !plan.some((step) => String(step?.detail || "").toLowerCase().includes("not feasible within next"));
+  };
+
   return schedules.filter((item) => {
+    if (!isVisibleSchedule(item)) return false;
     if (item.user_id === viewerUserId) return true;
     return sameDomain(viewerEmail, item.coach_email);
   }).map((item) => ({
