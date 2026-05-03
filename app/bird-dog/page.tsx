@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Game, ItineraryStop, Player, PulseEvent, ScoutNote, SessionUser, Tournament } from "@/lib/birddog/types";
 import { loadHarvestDataset, loadHarvestOverview, loadHarvestTournament } from "@/lib/birddog/clientHarvest";
 import { INVENTORY_SEED, inventoryHarvestHint } from "@/lib/birddog/inventoryCatalog";
-import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
+import { isFreeTournamentAccess, isPastTournament } from "@/lib/birddog/tournamentAccess";
 
 type RecorderState = "idle" | "recording";
 
@@ -2122,7 +2122,7 @@ export default function BirdDogPage() {
       setPlayerSearchResults(result);
       setPlayerSearchStatus(
         result.length
-          ? `Found ${result.length} players. Select best players and click Generate My Schedule.`
+          ? `Found ${result.length} players. Select players and click Generate My Schedule.`
           : "No player match found. Try another name, hometown, or team keyword."
       );
     } finally {
@@ -2415,9 +2415,30 @@ export default function BirdDogPage() {
     return [travel, ...scoutStops];
   }
 
+  function isSelectedTournamentPast() {
+    const selectedName = selectedInventory?.name || selectedTournament?.name || "";
+    const selectedDateLabel = selectedInventory?.displayDate || selectedTournament?.date || "";
+    if (selectedName && isPastTournament({ name: selectedName, displayDate: selectedDateLabel })) {
+      return true;
+    }
+
+    const gameTimes = (selectedTournament?.games || [])
+      .map((game) => Date.parse(String(game.startTime || "")))
+      .filter((value) => Number.isFinite(value));
+    if (!gameTimes.length) return false;
+    const latestGameStart = Math.max(...gameTimes);
+    return latestGameStart < Date.now();
+  }
+
   async function generateScheduleFromSmartPlayers(options?: { keepActiveTab?: boolean; autoRun?: boolean }) {
     if (!desiredPlayers.length) {
       const msg = "Select at least one player, then generate schedule.";
+      setPlayerSearchStatus(msg);
+      setPlanWorkflowNote(msg);
+      return;
+    }
+    if (isSelectedTournamentPast()) {
+      const msg = "The tournament is already over, can't create the schedule.";
       setPlayerSearchStatus(msg);
       setPlanWorkflowNote(msg);
       return;
@@ -4198,7 +4219,7 @@ export default function BirdDogPage() {
           <div className="panel" style={{ marginTop: 10 }}>
             <h3 style={{ marginTop: 0 }}>Coach Player Search (Tournament-Wide)</h3>
             <p className="muted" style={{ marginTop: 4 }}>
-              Search player name, hometown, or team. Select best players and generate schedule from this same page.
+              Search player name, hometown, or team. Select players and generate schedule from this same page.
             </p>
             <div className="row wrap" style={{ alignItems: "end" }}>
               <label style={{ flex: "1 1 380px" }}>
@@ -4264,7 +4285,7 @@ export default function BirdDogPage() {
             ) : null}
             {desiredPlayers.length ? (
               <p className="muted" style={{ marginTop: 8 }}>
-                Selected best players: {desiredPlayers.length}
+                Selected players: {desiredPlayers.length}
               </p>
             ) : null}
           </div>
