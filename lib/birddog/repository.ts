@@ -88,6 +88,9 @@ export async function upsertScoutUser(input: {
   orgId: string;
   name: string;
   email: string;
+  gender?: "MALE" | "FEMALE" | "UNSPECIFIED";
+  phone?: string;
+  countryCallingCode?: string;
 }) {
   await supabaseRequest("scout_users", {
     method: "POST",
@@ -96,7 +99,10 @@ export async function upsertScoutUser(input: {
         id: input.userId,
         org_id: input.orgId,
         name: input.name,
-        email: input.email
+        email: input.email,
+        gender: input.gender || "UNSPECIFIED",
+        phone: input.phone || "",
+        country_calling_code: input.countryCallingCode || "1"
       }
     ],
     prefer: "resolution=merge-duplicates,return=minimal"

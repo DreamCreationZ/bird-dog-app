@@ -1,8 +1,7 @@
 type SendMfaInput = {
   email: string;
   name: string;
-  codeOne: string;
-  codeTwo: string;
+  code: string;
   orgName: string;
 };
 
@@ -32,20 +31,18 @@ export async function sendMfaCodes(input: SendMfaInput): Promise<SendMfaResult> 
   <div style="font-family:Arial,sans-serif;line-height:1.5;color:#0f172a;">
     <h2 style="margin:0 0 10px;">APOINT SCOUT Login Verification</h2>
     <p>Hello ${safeName},</p>
-    <p>Use these 2 MFA codes to finish sign-in for <b>${safeOrg}</b>.</p>
-    <p style="margin:8px 0;"><b>Code 1:</b> ${input.codeOne}</p>
-    <p style="margin:8px 0;"><b>Code 2:</b> ${input.codeTwo}</p>
-    <p style="margin:14px 0 0;">These codes expire in 10 minutes.</p>
+    <p>Use this MFA code to finish sign-in for <b>${safeOrg}</b>.</p>
+    <p style="margin:8px 0;"><b>Code:</b> ${input.code}</p>
+    <p style="margin:14px 0 0;">This code expires in 10 minutes.</p>
   </div>
   `.trim();
 
   const text = [
     "APOINT SCOUT Login Verification",
     "",
-    `Code 1: ${input.codeOne}`,
-    `Code 2: ${input.codeTwo}`,
+    `Code: ${input.code}`,
     "",
-    "These codes expire in 10 minutes."
+    "This code expires in 10 minutes."
   ].join("\n");
 
   const response = await fetch("https://api.resend.com/emails", {
@@ -57,7 +54,7 @@ export async function sendMfaCodes(input: SendMfaInput): Promise<SendMfaResult> 
     body: JSON.stringify({
       from: fromEmail,
       to: [input.email],
-      subject: "Your APOINT SCOUT MFA Codes",
+      subject: "Your APOINT SCOUT MFA Code",
       html,
       text
     })

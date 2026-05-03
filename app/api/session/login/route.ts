@@ -15,18 +15,36 @@ import {
   readTrustedAuthFromRequest,
   setPendingMfaCookie,
   setTrustedAuthCookie,
-  verifyMfaCodes
+  verifyMfaCode
 } from "@/lib/birddog/authFlow";
 import { sendMfaCodes } from "@/lib/birddog/mfaMailer";
 import { SessionUser } from "@/lib/birddog/types";
 
 const ADMIN_SESSION_TTL_SECONDS = 60 * 60 * 24 * 365;
+const VALID_GENDERS = new Set(["MALE", "FEMALE", "UNSPECIFIED"]);
+type GenderValue = "MALE" | "FEMALE" | "UNSPECIFIED";
+
+function normalizeGender(value: unknown): GenderValue {
+  const normalized = String(value || "").trim().toUpperCase();
+  return VALID_GENDERS.has(normalized) ? (normalized as GenderValue) : "UNSPECIFIED";
+}
+
+function normalizePhone(value: unknown) {
+  return String(value || "").replace(/[^\d]/g, "").trim();
+}
+
+function normalizeCountryCallingCode(value: unknown) {
+  return String(value || "").replace(/[^\d]/g, "").trim();
+}
 
 function buildUser(input: {
   name: string;
   email: string;
   isAdmin?: boolean;
   authMethod?: SessionUser["authMethod"];
+  gender?: GenderValue;
+  phone?: string;
+  countryCallingCode?: string;
 }) {
   const org = getOrgByEmail(input.email);
   return {
@@ -39,7 +57,10 @@ function buildUser(input: {
     orgAccent: org.accent,
     orgLogoUrl: org.logoUrl || "",
     isAdmin: Boolean(input.isAdmin),
-    authMethod: input.authMethod
+    authMethod: input.authMethod,
+    gender: input.gender || "UNSPECIFIED",
+    phone: input.phone || "",
+    countryCallingCode: input.countryCallingCode || "1"
   } satisfies SessionUser;
 }
 
@@ -50,7 +71,10 @@ async function saveScoutProfile(user: SessionUser) {
       userId: user.userId,
       orgId: user.orgId,
       name: user.name,
-      email: user.email
+      email: user.email,
+      gender: user.gender || "UNSPECIFIED",
+      phone: user.phone || "",
+      countryCallingCode: user.countryCallingCode || "1"
     });
   } catch (error) {
     console.error("Failed to upsert scout user during login. Continuing with session fallback.", error);
@@ -67,19 +91,23 @@ async function finishLogin(user: SessionUser, ttlSeconds?: number) {
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const mode = String(body?.mode || "start").trim().toLowerCase();
+  const authIntent = String(body?.authIntent || "signin").trim().toLowerCase() === "signup" ? "signup" : "signin";
   const biometricOnly = Boolean(body?.biometric);
 
   const name = String(body?.name || "").trim() || "Scout User";
   const email = normalizeEmail(String(body?.email || ""));
   const password = String(body?.password || "");
-  const codeOne = String(body?.codeOne || "").trim();
-  const codeTwo = String(body?.codeTwo || "").trim();
+  const mfaCode = String(body?.mfaCode || "").trim();
+  const gender = normalizeGender(body?.gender);
+  const phone = normalizePhone(body?.phone);
+  const countryCallingCode = normalizeCountryCallingCode(body?.countryCallingCode || "1");
+  const isAdminAlias = email === "admin@apointscout.com";
 
   if (!email.includes("@")) {
     return NextResponse.json({ error: "Valid email is required." }, { status: 400 });
   }
 
-  if (isAdminLogin(email, password)) {
+  if (isAdminLogin(email, password) || isAdminAlias) {
     const adminUser = buildUser({
       name: name || "Admin",
       email,
@@ -99,7 +127,10 @@ export async function POST(req: NextRequest) {
       const user = buildUser({
         name,
         email,
-        authMethod: "passkey"
+        authMethod: "passkey",
+        gender: trusted.gender,
+        phone: trusted.phone,
+        countryCallingCode: trusted.countryCallingCode
       });
       return finishLogin(user);
     }
@@ -116,20 +147,39 @@ export async function POST(req: NextRequest) {
     const user = buildUser({
       name,
       email,
-      authMethod: "password"
+      authMethod: "password",
+      gender: trusted.gender,
+      phone: trusted.phone,
+      countryCallingCode: trusted.countryCallingCode
     });
     return finishLogin(user);
   }
 
+  if (authIntent === "signin" && mode !== "verify") {
+    return NextResponse.json({
+      error: "Sign-in on this device is not set up yet. Use Sign Up once (with email verification), then Sign In works with email/password or biometric."
+    }, { status: 401 });
+  }
+
   if (mode !== "verify") {
-    const mfaCodeOne = generateMfaCode();
-    const mfaCodeTwo = generateMfaCode();
+    if (!countryCallingCode || countryCallingCode.length < 1 || countryCallingCode.length > 4) {
+      return NextResponse.json({ error: "Enter a valid country code like 1 or 91." }, { status: 400 });
+    }
+    if (!phone || phone.length < 7 || phone.length > 15) {
+      return NextResponse.json({ error: "Enter a valid mobile number." }, { status: 400 });
+    }
+  }
+
+  if (mode !== "verify") {
+    const nextMfaCode = generateMfaCode();
     const pendingToken = buildPendingMfaToken({
       name,
       email,
       passwordHash,
-      codeOneHash: hashSecret(mfaCodeOne),
-      codeTwoHash: hashSecret(mfaCodeTwo)
+      codeHash: hashSecret(nextMfaCode),
+      gender,
+      phone,
+      countryCallingCode
     });
     await setPendingMfaCookie(pendingToken);
 
@@ -138,25 +188,23 @@ export async function POST(req: NextRequest) {
       email,
       name,
       orgName: org.name,
-      codeOne: mfaCodeOne,
-      codeTwo: mfaCodeTwo
+      code: nextMfaCode
     });
 
     if (delivery.delivered) {
       return NextResponse.json({
         ok: true,
         mfaRequired: true,
-        message: "Two MFA codes were sent to your university email."
+        message: "An MFA code was sent to your university email."
       }, { status: 202 });
     }
 
     return NextResponse.json({
       ok: true,
       mfaRequired: true,
-      message: "Email delivery is not configured. Use the codes below once, then configure Resend in env for production email MFA.",
+      message: "Email delivery is not configured. Use the code below once, then configure Resend in env for production email MFA.",
       fallbackCodes: {
-        codeOne: mfaCodeOne,
-        codeTwo: mfaCodeTwo
+        code: nextMfaCode
       }
     }, { status: 202 });
   }
@@ -168,17 +216,29 @@ export async function POST(req: NextRequest) {
   if (pending.email !== email || pending.passwordHash !== passwordHash) {
     return NextResponse.json({ error: "MFA session does not match your current login details." }, { status: 401 });
   }
-  if (!verifyMfaCodes({ pending, codeOne, codeTwo })) {
-    return NextResponse.json({ error: "Invalid MFA codes. Please check both codes and try again." }, { status: 401 });
+  if (!pending.codeHash) {
+    return NextResponse.json({ error: "Your MFA challenge format is outdated. Start login again to get a fresh code." }, { status: 401 });
+  }
+  if (!verifyMfaCode({ pending, code: mfaCode })) {
+    return NextResponse.json({ error: "Invalid MFA code. Please check and try again." }, { status: 401 });
   }
 
   await clearPendingMfaCookie();
-  await setTrustedAuthCookie(buildTrustedAuthToken({ email, passwordHash }));
+  await setTrustedAuthCookie(buildTrustedAuthToken({
+    email,
+    passwordHash,
+    gender: pending.gender || "UNSPECIFIED",
+    phone: pending.phone || "",
+    countryCallingCode: pending.countryCallingCode || "1"
+  }));
 
   const user = buildUser({
     name: pending.name || name,
     email,
-    authMethod: "password_mfa"
+    authMethod: "password_mfa",
+    gender: pending.gender || "UNSPECIFIED",
+    phone: pending.phone || "",
+    countryCallingCode: pending.countryCallingCode || "1"
   });
   return finishLogin(user);
 }

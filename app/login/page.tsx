@@ -29,8 +29,7 @@ function fromBase64Url(value: string) {
 }
 
 type FallbackCodes = {
-  codeOne: string;
-  codeTwo: string;
+  code: string;
 };
 
 type LoginResult = {
@@ -43,12 +42,15 @@ type LoginResult = {
 
 export default function LoginPage() {
   const router = useRouter();
+  const [authIntent, setAuthIntent] = useState<"signup" | "signin">("signin");
   const [firstName, setFirstName] = useState("Scout");
   const [lastName, setLastName] = useState("User");
   const [email, setEmail] = useState("scout@lsu.edu");
   const [password, setPassword] = useState("");
-  const [codeOne, setCodeOne] = useState("");
-  const [codeTwo, setCodeTwo] = useState("");
+  const [gender, setGender] = useState<"MALE" | "FEMALE" | "UNSPECIFIED">("UNSPECIFIED");
+  const [countryCallingCode, setCountryCallingCode] = useState("1");
+  const [phone, setPhone] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [biometricLoading, setBiometricLoading] = useState(false);
   const [error, setError] = useState("");
@@ -57,6 +59,7 @@ export default function LoginPage() {
   const [fallbackCodes, setFallbackCodes] = useState<FallbackCodes | null>(null);
 
   const org = useMemo(() => getOrgByEmail(email), [email]);
+  const isAdminEmail = email.trim().toLowerCase() === "admin@apointscout.com";
   const fullName = `${firstName} ${lastName}`.trim() || "Scout User";
 
   async function startLogin(event: FormEvent) {
@@ -71,7 +74,18 @@ export default function LoginPage() {
       const res = await fetch("/api/session/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "start", name: fullName, email, password }),
+        body: JSON.stringify({
+          mode: "start",
+          authIntent,
+          name: fullName,
+          email,
+          password,
+          ...(authIntent === "signup" && !isAdminEmail ? {
+            gender,
+            phone,
+            countryCallingCode
+          } : {})
+        }),
         signal: controller.signal
       });
 
@@ -83,7 +97,7 @@ export default function LoginPage() {
 
       if (data?.mfaRequired) {
         setStage("mfa");
-        setInfo(data?.message || "Enter both MFA codes to continue.");
+        setInfo(data?.message || "Enter the MFA code to continue.");
         setFallbackCodes(data?.fallbackCodes || null);
         return;
       }
@@ -113,11 +127,11 @@ export default function LoginPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           mode: "verify",
+          authIntent,
           name: fullName,
           email,
           password,
-          codeOne,
-          codeTwo
+          mfaCode
         }),
         signal: controller.signal
       });
@@ -141,11 +155,11 @@ export default function LoginPage() {
 
   async function enableFingerprint() {
     if (!("PublicKeyCredential" in window) || !window.PublicKeyCredential) {
-      setError("Fingerprint login is not supported on this browser.");
+      setError("Biometric sign-in is not supported on this browser.");
       return;
     }
     if (!email.includes("@")) {
-      setError("Enter your email first, then enable fingerprint login.");
+      setError("Enter your email first, then set up biometric sign-in.");
       return;
     }
     setBiometricLoading(true);
@@ -154,7 +168,7 @@ export default function LoginPage() {
     try {
       const platformAvailable = await window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
       if (!platformAvailable) {
-        setError("No biometric authenticator available on this device.");
+        setError("No Face ID / fingerprint authenticator is available on this device.");
         return;
       }
 
@@ -183,15 +197,15 @@ export default function LoginPage() {
       const passkey = credential as PublicKeyCredential | null;
       const rawId = passkey ? new Uint8Array(passkey.rawId) : null;
       if (!rawId || !rawId.length) {
-        setError("Could not complete fingerprint setup on this device.");
+        setError("Could not complete biometric setup on this device.");
         return;
       }
 
       localStorage.setItem("bd-biometric-email", email.toLowerCase());
       localStorage.setItem("bd-biometric-id", toBase64Url(rawId));
-      setInfo("Fingerprint login enabled on this device.");
+      setInfo("Biometric sign-in is ready on this device.");
     } catch {
-      setError("Fingerprint setup was cancelled or failed.");
+      setError("Biometric setup was cancelled or failed.");
     } finally {
       setBiometricLoading(false);
     }
@@ -199,13 +213,13 @@ export default function LoginPage() {
 
   async function loginWithFingerprint() {
     if (!("PublicKeyCredential" in window) || !window.PublicKeyCredential) {
-      setError("Fingerprint login is not supported on this browser.");
+      setError("Biometric sign-in is not supported on this browser.");
       return;
     }
     const storedEmail = localStorage.getItem("bd-biometric-email") || "";
     const storedId = localStorage.getItem("bd-biometric-id") || "";
     if (!storedEmail || !storedId || storedEmail !== email.toLowerCase()) {
-      setError("Fingerprint login is not enabled for this email on this device.");
+      setError("Biometric sign-in is not set up for this email on this device.");
       return;
     }
 
@@ -231,7 +245,7 @@ export default function LoginPage() {
       const res = await fetch("/api/session/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "start", biometric: true, name: fullName, email })
+        body: JSON.stringify({ mode: "start", authIntent: "signin", biometric: true, name: fullName, email })
       });
       const data = (await res.json().catch(() => ({}))) as LoginResult;
       if (!res.ok) {
@@ -240,7 +254,7 @@ export default function LoginPage() {
       }
       router.replace("/bird-dog");
     } catch {
-      setError("Fingerprint verification failed or was cancelled.");
+      setError("Biometric verification failed or was cancelled.");
     } finally {
       setBiometricLoading(false);
     }
@@ -287,15 +301,44 @@ export default function LoginPage() {
         </div>
 
         {stage === "credentials" ? (
+          <>
+            <div className="auth-toggle" role="tablist" aria-label="Authentication mode">
+              <button
+                type="button"
+                className={authIntent === "signin" ? "active" : ""}
+                onClick={() => {
+                  setAuthIntent("signin");
+                  setError("");
+                  setInfo("");
+                }}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                className={authIntent === "signup" ? "active" : ""}
+                onClick={() => {
+                  setAuthIntent("signup");
+                  setError("");
+                  setInfo("");
+                }}
+              >
+                Sign Up
+              </button>
+            </div>
           <form onSubmit={startLogin}>
-            <label>
-              First Name
-              <input value={firstName} onChange={(e) => setFirstName(e.target.value)} required />
-            </label>
-            <label>
-              Last Name
-              <input value={lastName} onChange={(e) => setLastName(e.target.value)} required />
-            </label>
+            {authIntent === "signup" ? (
+              <>
+                <label>
+                  First Name
+                  <input value={firstName} onChange={(e) => setFirstName(e.target.value)} required />
+                </label>
+                <label>
+                  Last Name
+                  <input value={lastName} onChange={(e) => setLastName(e.target.value)} required />
+                </label>
+              </>
+            ) : null}
             <label>
               Email
               <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
@@ -304,32 +347,67 @@ export default function LoginPage() {
               Password
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
             </label>
+            {authIntent === "signup" && !isAdminEmail ? (
+              <>
+                <label>
+                  Gender
+                  <select value={gender} onChange={(e) => setGender(e.target.value as "MALE" | "FEMALE" | "UNSPECIFIED")} required>
+                    <option value="UNSPECIFIED">Prefer not to say</option>
+                    <option value="MALE">Male</option>
+                    <option value="FEMALE">Female</option>
+                  </select>
+                </label>
+                <label>
+                  Country Code
+                  <input
+                    value={countryCallingCode}
+                    onChange={(e) => setCountryCallingCode(e.target.value.replace(/[^\d]/g, ""))}
+                    inputMode="numeric"
+                    placeholder="1"
+                    required
+                  />
+                </label>
+                <label>
+                  Mobile Number
+                  <input
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value.replace(/[^\d]/g, ""))}
+                    inputMode="tel"
+                    placeholder="9876543210"
+                    required
+                  />
+                </label>
+              </>
+            ) : null}
             {error ? <p className="error-text">{error}</p> : null}
             {info ? <p className="muted">{info}</p> : null}
             <button type="submit" disabled={loading || biometricLoading}>
-              {loading ? "Checking..." : "Continue to Dashboard"}
+              {loading ? "Checking..." : (authIntent === "signup" ? "Create Account" : "Sign In")}
             </button>
-            <button type="button" className="secondary-btn" disabled={loading || biometricLoading} onClick={enableFingerprint}>
-              {biometricLoading ? "Working..." : "Enable Fingerprint Login"}
-            </button>
-            <button type="button" className="secondary-btn" disabled={loading || biometricLoading} onClick={loginWithFingerprint}>
-              {biometricLoading ? "Working..." : "Login with Fingerprint"}
-            </button>
+            {authIntent === "signin" ? (
+              <>
+                <button type="button" className="secondary-btn" disabled={loading || biometricLoading} onClick={loginWithFingerprint}>
+                  {biometricLoading ? "Working..." : "Use Face ID / Fingerprint"}
+                </button>
+                <button type="button" className="secondary-btn" disabled={loading || biometricLoading} onClick={enableFingerprint}>
+                  {biometricLoading ? "Working..." : "Set Up Face ID / Fingerprint"}
+                </button>
+              </>
+            ) : (
+              <p className="muted">Sign up once with your university email, then use Sign In or biometric next time.</p>
+            )}
           </form>
+          </>
         ) : (
           <form onSubmit={verifyMfa}>
-            <p className="muted">First-time setup: enter both MFA codes sent to your university email.</p>
+            <p className="muted">Finish Sign Up: enter the MFA code sent to your university email.</p>
             <label>
-              MFA Code 1
-              <input value={codeOne} onChange={(e) => setCodeOne(e.target.value)} inputMode="numeric" required />
-            </label>
-            <label>
-              MFA Code 2
-              <input value={codeTwo} onChange={(e) => setCodeTwo(e.target.value)} inputMode="numeric" required />
+              MFA Code
+              <input value={mfaCode} onChange={(e) => setMfaCode(e.target.value)} inputMode="numeric" required />
             </label>
             {fallbackCodes ? (
               <p className="muted">
-                Code 1: <b>{fallbackCodes.codeOne}</b> | Code 2: <b>{fallbackCodes.codeTwo}</b>
+                Code: <b>{fallbackCodes.code}</b>
               </p>
             ) : null}
             {error ? <p className="error-text">{error}</p> : null}
@@ -343,8 +421,7 @@ export default function LoginPage() {
               disabled={loading}
               onClick={() => {
                 setStage("credentials");
-                setCodeOne("");
-                setCodeTwo("");
+                setMfaCode("");
                 setError("");
                 setInfo("");
               }}

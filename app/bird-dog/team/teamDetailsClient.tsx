@@ -14,6 +14,8 @@ type Props = {
     returnInventorySlug: string;
     returnTournamentId: string;
   };
+  inlineMode?: boolean;
+  onClose?: () => void;
 };
 
 type TeamScheduleRow = {
@@ -129,9 +131,14 @@ type SavedPaymentMethod = {
 type SessionUserTheme = {
   orgPrimary?: string;
   orgAccent?: string;
+  name?: string;
+  email?: string;
+  gender?: "MALE" | "FEMALE" | "UNSPECIFIED";
+  phone?: string;
+  countryCallingCode?: string;
 };
 
-type BookingPaymentMode = "card" | "upi";
+type BookingPaymentMode = "saved_card" | "card" | "upi";
 
 type PlannerCacheState = {
   selectedPlayers: string[];
@@ -144,6 +151,8 @@ type PlannerCacheState = {
   selectedPaymentMethodId: string;
   traveler: TravelerProfile;
 };
+
+const COACH_BOOKING_PROFILE_KEY = "bd-coach-booking-profile:v1";
 
 type TeamDetailsCachePayload = {
   schedule: TeamScheduleRow[];
@@ -199,6 +208,16 @@ function parseJsonSafe<T>(raw: string | null, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function splitNameParts(fullName: string) {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return { firstName: "", lastName: "" };
+  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
+  return {
+    firstName: parts[0],
+    lastName: parts.slice(1).join(" ")
+  };
 }
 
 function hexToRgb(hex: string) {
@@ -504,7 +523,7 @@ function prepareBookingLegsForProvider(
   };
 }
 
-export default function TeamDetailsClient({ initialParams }: Props) {
+export default function TeamDetailsClient({ initialParams, inlineMode = false, onClose }: Props) {
   const [sessionTheme, setSessionTheme] = useState<SessionUserTheme | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -520,7 +539,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
   const [playerNotes, setPlayerNotes] = useState<PlayerNotesMap>({});
   const [notesStatus, setNotesStatus] = useState("");
   const [selectedPlayers, setSelectedPlayers] = useState<string[]>([]);
-  const [coachStartLocation, setCoachStartLocation] = useState("Current City");
+  const [coachStartLocation, setCoachStartLocation] = useState("Current location");
   const [includeCompletedGames, setIncludeCompletedGames] = useState(
     process.env.NEXT_PUBLIC_BIRD_DOG_ALLOW_PAST_GAMES === "1"
   );
@@ -546,6 +565,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
   const [monitoring, setMonitoring] = useState(false);
   const [monitorAlerts, setMonitorAlerts] = useState<MonitorAlert[]>([]);
   const [lastPgSyncAt, setLastPgSyncAt] = useState("");
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false);
   const [traveler, setTraveler] = useState<TravelerProfile>({
     firstName: "",
     lastName: "",
@@ -574,6 +594,8 @@ export default function TeamDetailsClient({ initialParams }: Props) {
   const transcriptRef = useRef("");
   const autoSaveTeamNoteRef = useRef(false);
   const plannerCacheLoadedRef = useRef(false);
+  const coachProfileHydratedRef = useRef(false);
+  const coachLocationTriedRef = useRef(false);
 
   const teamRequestPayload = useMemo(() => ({
     inventorySlug: initialParams.inventorySlug,
@@ -604,7 +626,40 @@ export default function TeamDetailsClient({ initialParams }: Props) {
         if (!res.ok) return;
         const data = await res.json().catch(() => ({}));
         if (!mounted) return;
-        setSessionTheme(data?.user || null);
+        const sessionUser = data?.user as SessionUserTheme | null;
+        setSessionTheme(sessionUser || null);
+        if (!coachProfileHydratedRef.current && typeof window !== "undefined") {
+          coachProfileHydratedRef.current = true;
+          const nameParts = splitNameParts(String(sessionUser?.name || ""));
+          const sessionGenderRaw = String(sessionUser?.gender || "").toUpperCase();
+          const sessionGender: TravelerProfile["gender"] =
+            sessionGenderRaw === "MALE" || sessionGenderRaw === "FEMALE" || sessionGenderRaw === "UNSPECIFIED"
+              ? sessionGenderRaw as TravelerProfile["gender"]
+              : "UNSPECIFIED";
+          const seeded: TravelerProfile = {
+            firstName: nameParts.firstName || "Coach",
+            lastName: nameParts.lastName || "",
+            dateOfBirth: "",
+            gender: sessionGender,
+            email: String(sessionUser?.email || ""),
+            phone: String(sessionUser?.phone || ""),
+            countryCallingCode: String(sessionUser?.countryCallingCode || "1"),
+            nationality: "US"
+          };
+          const saved = parseJsonSafe<Partial<TravelerProfile>>(
+            window.localStorage.getItem(COACH_BOOKING_PROFILE_KEY),
+            {}
+          );
+          const merged: TravelerProfile = {
+            ...seeded,
+            ...saved,
+            email: String(saved?.email || seeded.email || "")
+          };
+          setTraveler((prev) => ({
+            ...prev,
+            ...merged
+          }));
+        }
       } catch {
         if (!mounted) return;
         setSessionTheme(null);
@@ -658,7 +713,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
         if (typeof parsed.bookingTestMode === "boolean") {
           setBookingTestMode(bookingTestModeEnabled ? parsed.bookingTestMode : false);
         }
-        if (parsed.bookingPaymentMode === "card" || parsed.bookingPaymentMode === "upi") {
+        if (parsed.bookingPaymentMode === "saved_card" || parsed.bookingPaymentMode === "card" || parsed.bookingPaymentMode === "upi") {
           setBookingPaymentMode(parsed.bookingPaymentMode);
         }
         if (typeof parsed.selectedPaymentMethodId === "string") setSelectedPaymentMethodId(parsed.selectedPaymentMethodId);
@@ -680,6 +735,26 @@ export default function TeamDetailsClient({ initialParams }: Props) {
       // Ignore corrupted planner cache.
     }
   }, [bookingTestModeEnabled, plannerCacheKey]);
+
+  useEffect(() => {
+    if (coachLocationTriedRef.current) return;
+    const raw = coachStartLocation.trim().toLowerCase();
+    if (raw && raw !== "current city" && raw !== "current location") return;
+    coachLocationTriedRef.current = true;
+    let cancelled = false;
+    void (async () => {
+      const resolved = await resolveCoachStartLocation();
+      if (cancelled) return;
+      if (resolved.source === "live") {
+        setPlannerStatus(`Current location detected: ${resolved.label}`);
+      } else if (resolved.source === "fallback") {
+        setPlannerStatus("Live location unavailable. Enter your start city in Edit before generating recommendation.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [coachStartLocation]);
 
   async function loadPaymentMethods(input?: { showStatus?: boolean }) {
     setPaymentMethodsLoading(true);
@@ -774,6 +849,21 @@ export default function TeamDetailsClient({ initialParams }: Props) {
     traveler
   ]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(COACH_BOOKING_PROFILE_KEY, JSON.stringify(traveler));
+    } catch {
+      // Ignore local storage write issues.
+    }
+  }, [traveler]);
+
+  useEffect(() => {
+    if (!paymentMethods.length && bookingPaymentMode === "saved_card") {
+      setBookingPaymentMode("card");
+    }
+  }, [bookingPaymentMode, paymentMethods.length]);
+
   function pushMonitorAlert(alert: Omit<MonitorAlert, "createdAt">) {
     const nextAlert: MonitorAlert = { ...alert, createdAt: new Date().toISOString() };
     setMonitorAlerts((prev) => [nextAlert, ...prev].slice(0, 20));
@@ -857,6 +947,10 @@ export default function TeamDetailsClient({ initialParams }: Props) {
   ]);
 
   function goBackOneStep() {
+    if (inlineMode) {
+      onClose?.();
+      return;
+    }
     const qs = new URLSearchParams(window.location.search);
     const requestedTab = (
       initialParams.returnTab
@@ -1403,6 +1497,50 @@ export default function TeamDetailsClient({ initialParams }: Props) {
     }
   }
 
+  async function detectBrowserLocationLabel() {
+    if (typeof navigator === "undefined" || !navigator.geolocation) return null;
+    const position = await new Promise<GeolocationPosition | null>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve(pos),
+        () => resolve(null),
+        { enableHighAccuracy: true, timeout: 9000, maximumAge: 30000 }
+      );
+    });
+    if (!position) return null;
+
+    try {
+      const reverse = await fetch(
+        `/api/maps/reverse-geocode?lat=${position.coords.latitude}&lng=${position.coords.longitude}`,
+        { cache: "no-store" }
+      );
+      if (reverse.ok) {
+        const data = await reverse.json().catch(() => ({}));
+        const label = String(data?.location?.label || "").trim();
+        if (label) return label;
+      }
+    } catch {
+      // Keep default label below.
+    }
+    return "Current location";
+  }
+
+  async function resolveCoachStartLocation() {
+    const raw = coachStartLocation.trim();
+    if (raw && !/^current (city|location)$/i.test(raw)) {
+      return { label: raw, source: "manual" as const };
+    }
+
+    const detected = await detectBrowserLocationLabel();
+    if (detected) {
+      setCoachStartLocation(detected);
+      return { label: detected, source: "live" as const };
+    }
+
+    const fallback = "Current location";
+    setCoachStartLocation(fallback);
+    return { label: fallback, source: "fallback" as const };
+  }
+
   async function recommendTravel(from: string, to: string) {
     const fromGeo = await geocodeLocation(from);
     const toGeo = await geocodeLocation(to);
@@ -1621,7 +1759,10 @@ export default function TeamDetailsClient({ initialParams }: Props) {
   }
 
   async function approveRecommendation() {
-    if (!generatedSteps.length) return;
+    if (!generatedSteps.length) {
+      setPlannerStatus("Generate recommendation first, then approve.");
+      return;
+    }
     const selectedSet = new Set(selectedPlayers);
     const selectedRoster = rosterRows.filter((row) => selectedSet.has(rosterRowKey(row)));
     const travelLegs = generatedSteps.filter((step) => step.mode);
@@ -1650,20 +1791,25 @@ export default function TeamDetailsClient({ initialParams }: Props) {
         mode: step.mode || ""
       }))
     };
-
+    setApprovedPlan(true);
+    setPlannerStatus("Recommendation approved. Syncing coach schedule...");
     const res = await fetch("/api/schedules", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
     if (!res.ok) {
-      setPlannerStatus("Could not approve schedule right now.");
-      return;
+      setPlannerStatus("Recommendation approved locally. Cloud sync is unavailable right now.");
+    } else {
+      setPlannerStatus("Recommendation approved and saved for the coach.");
     }
-    setApprovedPlan(true);
-    setPlannerStatus("Schedule approved and saved for the coach.");
+
     if (hasTravelerForBooking(traveler)) {
-      if (bookingPaymentRequired && bookingPaymentMode === "card" && !selectedPaymentMethodId) {
+      if (
+        bookingPaymentRequired
+        && (bookingPaymentMode === "saved_card" || bookingPaymentMode === "card")
+        && !selectedPaymentMethodId
+      ) {
         setBookingStatus("Add/select a saved card, then click Book Approved Travel.");
       } else if (bookingPaymentRequired && bookingPaymentMode === "upi" && !upiAuthorized) {
         setBookingStatus("Complete UPI authorization, then click Book Approved Travel.");
@@ -1671,8 +1817,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
         await executeProviderBookings({ trigger: "approve" });
       }
     } else {
-      setBookingStatus("Approved. Enter traveler profile to create real bookings.");
-      goToCoachScheduleTab();
+      setBookingStatus("Approved. Using saved coach profile for booking. Click Edit Profile if anything needs to change.");
     }
   }
 
@@ -1734,8 +1879,8 @@ export default function TeamDetailsClient({ initialParams }: Props) {
       return;
     }
     if (bookingPaymentRequired) {
-      if (bookingPaymentMode === "card" && !selectedPaymentMethodId) {
-        setBookingStatus("Add/select a saved card first.");
+      if ((bookingPaymentMode === "saved_card" || bookingPaymentMode === "card") && !selectedPaymentMethodId) {
+        setBookingStatus("Add/select a saved card first for card payment.");
         return;
       }
       if (bookingPaymentMode === "upi" && !upiAuthorized) {
@@ -1750,7 +1895,8 @@ export default function TeamDetailsClient({ initialParams }: Props) {
     }
 
     if (!hasTravelerForBooking(traveler)) {
-      setBookingStatus("Traveler profile is required for real OTA bookings.");
+      setProfileEditorOpen(true);
+      setBookingStatus("Coach booking profile is incomplete. Click Edit Profile and update missing fields.");
       return;
     }
 
@@ -1768,7 +1914,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
     setBookingStatus("");
     setBookingResults([]);
     try {
-      if (bookingPaymentRequired && bookingPaymentMode === "card") {
+      if (bookingPaymentRequired && (bookingPaymentMode === "saved_card" || bookingPaymentMode === "card")) {
         const authRes = await fetch("/api/payments/travel-authorize", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1813,7 +1959,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
         .map((item) => `${item.provider}: ${item.reference}`)
         .join(" | ");
       const parts = [`Booking run complete. Booked: ${booked}, Quoted: ${quoted}, Failed: ${failed}, Skipped: ${skipped}${refs ? ` (${refs})` : ""}`];
-      if (bookingPaymentRequired && bookingPaymentMode === "card") {
+      if (bookingPaymentRequired && (bookingPaymentMode === "saved_card" || bookingPaymentMode === "card")) {
         parts.push("Card authorization succeeded with selected saved card.");
       } else if (bookingPaymentRequired && bookingPaymentMode === "upi") {
         parts.push("UPI authorization completed via checkout.");
@@ -1877,8 +2023,11 @@ export default function TeamDetailsClient({ initialParams }: Props) {
     node.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  const cardBasedMode = bookingPaymentMode === "saved_card" || bookingPaymentMode === "card";
   const paymentReady = !bookingPaymentRequired
-    || (bookingPaymentMode === "card" ? Boolean(selectedPaymentMethodId) : upiAuthorized);
+    || (cardBasedMode ? Boolean(selectedPaymentMethodId) : upiAuthorized);
+  const travelerProfileComplete = hasTravelerForBooking(traveler);
+  const travelerName = `${traveler.firstName} ${traveler.lastName}`.trim();
   const orgPrimary = sessionTheme?.orgPrimary || "#1f3a5f";
   const orgAccent = sessionTheme?.orgAccent || "#d7a316";
   const bgValue = "#060b16";
@@ -1911,7 +2060,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
             type="button"
             onClick={goBackOneStep}
           >
-            Back
+            {inlineMode ? "Close" : "Back"}
           </button>
           {initialParams.teamUrl ? (
             <button className="secondary" type="button" onClick={() => window.open(initialParams.teamUrl, "_blank", "noopener,noreferrer")}>
@@ -2274,10 +2423,10 @@ export default function TeamDetailsClient({ initialParams }: Props) {
         </div>
         {bookingPaymentRequired ? (
           <p className="muted" style={{ marginTop: 6 }}>
-            {bookingPaymentMode === "card"
+            {cardBasedMode
               ? (selectedPaymentMethodId
-                ? "Saved card selected. Booking can proceed with card authorization."
-                : "Select a saved card (or add one) before booking.")
+                ? "Card payment is ready. Booking can proceed with card authorization."
+                : "Add/select a card before booking.")
               : (upiAuthorized
                 ? "UPI authorization complete. Booking can proceed."
                 : "Run UPI authorization first, then booking can proceed.")}
@@ -2288,14 +2437,20 @@ export default function TeamDetailsClient({ initialParams }: Props) {
             Payment Option
             <select
               value={bookingPaymentMode}
-              onChange={(e) => setBookingPaymentMode((e.target.value === "upi" ? "upi" : "card"))}
+              onChange={(e) => {
+                const nextValue = e.target.value;
+                if (nextValue === "upi" || nextValue === "card" || nextValue === "saved_card") {
+                  setBookingPaymentMode(nextValue);
+                }
+              }}
             >
-              <option value="card">Saved Card</option>
               <option value="upi">UPI</option>
+              <option value="card">Credit / Debit Card</option>
+              {paymentMethods.length ? <option value="saved_card">Saved Card</option> : null}
             </select>
           </label>
         </div>
-        {bookingPaymentMode === "card" ? (
+        {cardBasedMode ? (
           <div className="row wrap" style={{ marginBottom: 8 }}>
             <label style={{ minWidth: 320 }}>
               Saved Payment Method
@@ -2304,7 +2459,7 @@ export default function TeamDetailsClient({ initialParams }: Props) {
                 onChange={(e) => setSelectedPaymentMethodId(e.target.value)}
                 disabled={paymentMethodsLoading}
               >
-                <option value="">Select saved method</option>
+                <option value="">{paymentMethods.length ? "Select saved method" : "No saved cards yet"}</option>
                 {paymentMethods.map((pm) => (
                   <option key={pm.id} value={pm.id}>{pm.label}</option>
                 ))}
@@ -2318,6 +2473,11 @@ export default function TeamDetailsClient({ initialParams }: Props) {
             >
               {paymentMethodsLoading ? "Refreshing..." : "Refresh Methods"}
             </button>
+            {!paymentMethodsLoading && !paymentMethods.length ? (
+              <p className="muted" style={{ margin: "4px 0 0 0" }}>
+                No saved cards found. Use Add / Manage Payment Methods to add a card.
+              </p>
+            ) : null}
           </div>
         ) : (
           <p className="muted" style={{ marginBottom: 8 }}>
@@ -2335,77 +2495,97 @@ export default function TeamDetailsClient({ initialParams }: Props) {
           </label>
         ) : null}
         <div className="panel" style={{ marginTop: 8 }}>
-          <h3 style={{ marginTop: 0 }}>Traveler Profile (for OTA booking)</h3>
-          <div className="grid2">
-            <label>
-              First Name
-              <input
-                value={traveler.firstName}
-                onChange={(e) => setTraveler((prev) => ({ ...prev, firstName: e.target.value }))}
-                placeholder="Coach first name"
-              />
-            </label>
-            <label>
-              Last Name
-              <input
-                value={traveler.lastName}
-                onChange={(e) => setTraveler((prev) => ({ ...prev, lastName: e.target.value }))}
-                placeholder="Coach last name"
-              />
-            </label>
-            <label>
-              Date of Birth
-              <input
-                type="date"
-                value={traveler.dateOfBirth}
-                onChange={(e) => setTraveler((prev) => ({ ...prev, dateOfBirth: e.target.value }))}
-              />
-            </label>
-            <label>
-              Gender
-              <select
-                value={traveler.gender}
-                onChange={(e) => setTraveler((prev) => ({ ...prev, gender: e.target.value as TravelerProfile["gender"] }))}
-              >
-                <option value="UNSPECIFIED">Unspecified</option>
-                <option value="MALE">Male</option>
-                <option value="FEMALE">Female</option>
-              </select>
-            </label>
-            <label>
-              Email
-              <input
-                type="email"
-                value={traveler.email}
-                onChange={(e) => setTraveler((prev) => ({ ...prev, email: e.target.value }))}
-                placeholder="coach@team.com"
-              />
-            </label>
-            <label>
-              Phone Number
-              <input
-                value={traveler.phone}
-                onChange={(e) => setTraveler((prev) => ({ ...prev, phone: e.target.value }))}
-                placeholder="4085551234"
-              />
-            </label>
-            <label>
-              Country Calling Code
-              <input
-                value={traveler.countryCallingCode}
-                onChange={(e) => setTraveler((prev) => ({ ...prev, countryCallingCode: e.target.value }))}
-                placeholder="1"
-              />
-            </label>
-            <label>
-              Nationality (2-letter)
-              <input
-                value={traveler.nationality}
-                onChange={(e) => setTraveler((prev) => ({ ...prev, nationality: e.target.value.toUpperCase() }))}
-                placeholder="US"
-              />
-            </label>
+          <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <h3 style={{ margin: 0 }}>Coach Booking Profile</h3>
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => setProfileEditorOpen((prev) => !prev)}
+            >
+              {profileEditorOpen ? "Close Edit" : "Edit Profile"}
+            </button>
           </div>
+          <p className="muted" style={{ marginTop: 8 }}>
+            Auto-filled from coach login and reused for flight/hotel booking.
+          </p>
+          <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
+            {travelerProfileComplete
+              ? "Profile ready."
+              : "Profile needs required details before booking can run."}{" "}
+            Name: {travelerName || "Not set"} · Email: {traveler.email || "Not set"} · Phone: {traveler.phone || "Not set"}
+          </p>
+          {profileEditorOpen ? (
+            <div className="grid2">
+              <label>
+                First Name
+                <input
+                  value={traveler.firstName}
+                  onChange={(e) => setTraveler((prev) => ({ ...prev, firstName: e.target.value }))}
+                  placeholder="Coach first name"
+                />
+              </label>
+              <label>
+                Last Name
+                <input
+                  value={traveler.lastName}
+                  onChange={(e) => setTraveler((prev) => ({ ...prev, lastName: e.target.value }))}
+                  placeholder="Coach last name"
+                />
+              </label>
+              <label>
+                Date of Birth
+                <input
+                  type="date"
+                  value={traveler.dateOfBirth}
+                  onChange={(e) => setTraveler((prev) => ({ ...prev, dateOfBirth: e.target.value }))}
+                />
+              </label>
+              <label>
+                Gender
+                <select
+                  value={traveler.gender}
+                  onChange={(e) => setTraveler((prev) => ({ ...prev, gender: e.target.value as TravelerProfile["gender"] }))}
+                >
+                  <option value="UNSPECIFIED">Unspecified</option>
+                  <option value="MALE">Male</option>
+                  <option value="FEMALE">Female</option>
+                </select>
+              </label>
+              <label>
+                Email
+                <input
+                  type="email"
+                  value={traveler.email}
+                  onChange={(e) => setTraveler((prev) => ({ ...prev, email: e.target.value }))}
+                  placeholder="coach@team.com"
+                />
+              </label>
+              <label>
+                Phone Number
+                <input
+                  value={traveler.phone}
+                  onChange={(e) => setTraveler((prev) => ({ ...prev, phone: e.target.value }))}
+                  placeholder="4085551234"
+                />
+              </label>
+              <label>
+                Country Calling Code
+                <input
+                  value={traveler.countryCallingCode}
+                  onChange={(e) => setTraveler((prev) => ({ ...prev, countryCallingCode: e.target.value }))}
+                  placeholder="1"
+                />
+              </label>
+              <label>
+                Nationality (2-letter)
+                <input
+                  value={traveler.nationality}
+                  onChange={(e) => setTraveler((prev) => ({ ...prev, nationality: e.target.value.toUpperCase() }))}
+                  placeholder="US"
+                />
+              </label>
+            </div>
+          ) : null}
         </div>
         {plannerStatus ? <p className="muted">{plannerStatus}</p> : null}
         {bookingStatus ? <p className="muted">{bookingStatus}</p> : null}

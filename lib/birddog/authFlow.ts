@@ -13,6 +13,9 @@ export type TrustedAuthPayload = {
   v: number;
   email: string;
   passwordHash: string;
+  gender?: "MALE" | "FEMALE" | "UNSPECIFIED";
+  phone?: string;
+  countryCallingCode?: string;
   exp: number;
 };
 
@@ -21,8 +24,12 @@ export type PendingMfaPayload = {
   name: string;
   email: string;
   passwordHash: string;
-  codeOneHash: string;
-  codeTwoHash: string;
+  codeHash?: string;
+  codeOneHash?: string;
+  codeTwoHash?: string;
+  gender: "MALE" | "FEMALE" | "UNSPECIFIED";
+  phone: string;
+  countryCallingCode: string;
   exp: number;
 };
 
@@ -123,11 +130,20 @@ export function isAdminLogin(email: string, password: string) {
   return normalized === admin.email || normalized === admin.fallbackAlias;
 }
 
-export function buildTrustedAuthToken(input: { email: string; passwordHash: string }) {
+export function buildTrustedAuthToken(input: {
+  email: string;
+  passwordHash: string;
+  gender?: "MALE" | "FEMALE" | "UNSPECIFIED";
+  phone?: string;
+  countryCallingCode?: string;
+}) {
   const payload: TrustedAuthPayload = {
     v: VERSION,
     email: normalizeEmail(input.email),
     passwordHash: input.passwordHash,
+    gender: input.gender,
+    phone: String(input.phone || "").trim(),
+    countryCallingCode: String(input.countryCallingCode || "").trim(),
     exp: nowUnix() + TRUSTED_TTL_SECONDS
   };
   return encodeSigned(payload);
@@ -161,16 +177,20 @@ export function buildPendingMfaToken(input: {
   name: string;
   email: string;
   passwordHash: string;
-  codeOneHash: string;
-  codeTwoHash: string;
+  codeHash: string;
+  gender: "MALE" | "FEMALE" | "UNSPECIFIED";
+  phone: string;
+  countryCallingCode: string;
 }) {
   const payload: PendingMfaPayload = {
     v: VERSION,
     name: String(input.name || "").trim(),
     email: normalizeEmail(input.email),
     passwordHash: input.passwordHash,
-    codeOneHash: input.codeOneHash,
-    codeTwoHash: input.codeTwoHash,
+    codeHash: input.codeHash,
+    gender: input.gender,
+    phone: String(input.phone || "").trim(),
+    countryCallingCode: String(input.countryCallingCode || "").trim(),
     exp: nowUnix() + MFA_TTL_SECONDS
   };
   return encodeSigned(payload);
@@ -200,12 +220,11 @@ export async function clearPendingMfaCookie() {
   cookieStore.set(MFA_PENDING_COOKIE, "", { path: "/", maxAge: 0 });
 }
 
-export function verifyMfaCodes(input: {
+export function verifyMfaCode(input: {
   pending: PendingMfaPayload;
-  codeOne: string;
-  codeTwo: string;
+  code: string;
 }) {
-  const codeOneHash = hashSecret(String(input.codeOne || "").trim());
-  const codeTwoHash = hashSecret(String(input.codeTwo || "").trim());
-  return safeEqual(input.pending.codeOneHash, codeOneHash) && safeEqual(input.pending.codeTwoHash, codeTwoHash);
+  if (!input.pending.codeHash) return false;
+  const codeHash = hashSecret(String(input.code || "").trim());
+  return safeEqual(input.pending.codeHash, codeHash);
 }

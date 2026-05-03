@@ -8,8 +8,20 @@ create table if not exists public.scout_users (
   org_id text not null,
   name text not null,
   email text not null unique,
+  gender text not null default 'UNSPECIFIED' check (gender in ('MALE', 'FEMALE', 'UNSPECIFIED')),
+  phone text,
+  country_calling_code text not null default '1',
   created_at timestamptz not null default now()
 );
+
+alter table public.scout_users
+  add column if not exists gender text not null default 'UNSPECIFIED';
+
+alter table public.scout_users
+  add column if not exists phone text;
+
+alter table public.scout_users
+  add column if not exists country_calling_code text not null default '1';
 
 create table if not exists public.circuit_inventory (
   id uuid primary key default gen_random_uuid(),

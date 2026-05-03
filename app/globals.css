@@ -41,11 +41,13 @@ body {
 }
 
 .login-card input,
+.login-card select,
 .login-card button {
   font: inherit;
 }
 
-.login-card input {
+.login-card input,
+.login-card select {
   width: 100%;
   border: 1px solid rgba(172, 193, 226, 0.38);
   border-radius: 10px;
@@ -132,4 +134,23 @@ body {
   margin: 2px 0 0;
   font-weight: 700;
   color: #f7fbff;
+}
+
+.auth-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.auth-toggle button {
+  background: rgba(9, 19, 36, 0.72);
+  border: 1px solid rgba(176, 197, 230, 0.35);
+  color: #dce7fb;
+}
+
+.auth-toggle button.active {
+  background: linear-gradient(140deg, var(--login-primary), rgba(13, 30, 56, 0.95));
+  border-color: rgba(215, 163, 22, 0.45);
+  color: #fff;
 }

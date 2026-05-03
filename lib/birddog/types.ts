@@ -64,6 +64,9 @@ export type SessionUser = {
   orgLogoUrl?: string;
   isAdmin?: boolean;
   authMethod?: "admin" | "password" | "password_mfa" | "passkey";
+  gender?: "MALE" | "FEMALE" | "UNSPECIFIED";
+  phone?: string;
+  countryCallingCode?: string;
 };
 
 export type ScoutNote = {

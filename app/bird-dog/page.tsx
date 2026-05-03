@@ -162,6 +162,20 @@ type HotelSuggestion = {
 
 type TeamRef = NonNullable<Tournament["teams"]>[number];
 
+type InlineTeamNoteTarget = {
+  teamId: string;
+  teamName: string;
+  playerId?: string;
+  playerName?: string;
+  selectionKey?: string;
+};
+
+type InlineTeamNoteDraft = {
+  text: string;
+  audioUrl: string;
+  updatedAt: string;
+};
+
 type TeamRosterSearchRow = {
   no?: string;
   name: string;
@@ -773,6 +787,11 @@ export default function BirdDogPage() {
   const [openError, setOpenError] = useState("");
   const [selectedInventorySlug, setSelectedInventorySlug] = useState("");
   const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes" | "coaches" | "bestPlayers">("tournaments");
+  const [inlineTeamNoteTarget, setInlineTeamNoteTarget] = useState<InlineTeamNoteTarget | null>(null);
+  const [inlineTeamNoteText, setInlineTeamNoteText] = useState("");
+  const [inlineTeamNoteAudioUrl, setInlineTeamNoteAudioUrl] = useState("");
+  const [inlineTeamNoteStatus, setInlineTeamNoteStatus] = useState("");
+  const [inlineTeamNoteRecorderState, setInlineTeamNoteRecorderState] = useState<RecorderState>("idle");
   const [menuOpen, setMenuOpen] = useState(false);
   const [queryStateApplied, setQueryStateApplied] = useState(false);
 
@@ -863,6 +882,9 @@ export default function BirdDogPage() {
   const tournamentPlayerIndexKeyRef = useRef("");
   const tournamentPlayerIndexLoadingRef = useRef<Promise<TournamentPlayerIndexRow[]> | null>(null);
   const autoPlannerRef = useRef<{ busy: boolean; key: string }>({ busy: false, key: "" });
+  const inlineTeamNoteMediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const inlineTeamNoteMediaStreamRef = useRef<MediaStream | null>(null);
+  const inlineTeamNoteAudioChunksRef = useRef<Blob[]>([]);
 
   function setAndPersistPlanWorkflowStatus(next: PlanWorkflowStatus) {
     setPlanWorkflowStatus(next);
@@ -873,6 +895,13 @@ export default function BirdDogPage() {
     }
     safeLocalSet(planWorkflowStatusKey, next);
   }
+
+  useEffect(() => {
+    if (!isAdminUser) return;
+    if (/locked for your organization/i.test(openError)) {
+      setOpenError("");
+    }
+  }, [isAdminUser, openError]);
 
   useEffect(() => {
     let mounted = true;
@@ -1013,6 +1042,10 @@ export default function BirdDogPage() {
     mediaRecorderRef.current = null;
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     mediaStreamRef.current = null;
+    inlineTeamNoteMediaRecorderRef.current?.stop();
+    inlineTeamNoteMediaRecorderRef.current = null;
+    inlineTeamNoteMediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    inlineTeamNoteMediaStreamRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -1776,6 +1809,32 @@ export default function BirdDogPage() {
     return fromHint || "";
   }
 
+  function inlineTeamNoteStorageKey(target: InlineTeamNoteTarget) {
+    const scope = [selectedInventorySlug || "inventory", selectedTournamentId || "tournament", target.teamId, target.selectionKey || target.playerId || "team"];
+    return `bird_dog:inline_team_note:v1:${scope.join(":")}`;
+  }
+
+  function openInlineTeamNote(input: { team: TeamRef; player?: DesiredPlayer }) {
+    const target: InlineTeamNoteTarget = {
+      teamId: input.team.id,
+      teamName: input.team.name,
+      playerId: input.player?.playerId,
+      playerName: input.player?.name,
+      selectionKey: input.player ? desiredPlayerSelectionKey(input.player) : undefined
+    };
+    setInlineTeamNoteTarget(target);
+    const raw = safeLocalGet(inlineTeamNoteStorageKey(target));
+    const parsed = parseJsonSafe<InlineTeamNoteDraft | null>(raw, null);
+    setInlineTeamNoteText(parsed?.text || "");
+    setInlineTeamNoteAudioUrl(parsed?.audioUrl || "");
+    setInlineTeamNoteStatus("");
+    if (typeof document !== "undefined") {
+      window.requestAnimationFrame(() => {
+        document.getElementById("inline-team-note-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+  }
+
   function viewTeamScheduleAndRoster(team: TeamRef, returnTab: "notes" | "schedule" = "notes") {
     const params = new URLSearchParams();
     params.set("inventorySlug", selectedInventorySlug);
@@ -2005,25 +2064,30 @@ export default function BirdDogPage() {
     if (geocodeCacheRef.current.has(normalized)) {
       return geocodeCacheRef.current.get(normalized) || null;
     }
-    const res = await fetch(`/api/maps/geocode?address=${encodeURIComponent(address)}`, { cache: "no-store" });
-    if (!res.ok) {
+    try {
+      const res = await fetch(`/api/maps/geocode?address=${encodeURIComponent(address)}`, { cache: "no-store" });
+      if (!res.ok) {
+        geocodeCacheRef.current.set(normalized, null);
+        return null;
+      }
+      const data = await res.json().catch(() => ({}));
+      const lat = data?.location?.lat;
+      const lng = data?.location?.lng;
+      if (typeof lat !== "number" || typeof lng !== "number") {
+        geocodeCacheRef.current.set(normalized, null);
+        return null;
+      }
+      const point: GeoLocation = {
+        lat,
+        lng,
+        label: String(data?.location?.label || address)
+      };
+      geocodeCacheRef.current.set(normalized, point);
+      return point;
+    } catch {
       geocodeCacheRef.current.set(normalized, null);
       return null;
     }
-    const data = await res.json().catch(() => ({}));
-    const lat = data?.location?.lat;
-    const lng = data?.location?.lng;
-    if (typeof lat !== "number" || typeof lng !== "number") {
-      geocodeCacheRef.current.set(normalized, null);
-      return null;
-    }
-    const point: GeoLocation = {
-      lat,
-      lng,
-      label: String(data?.location?.label || address)
-    };
-    geocodeCacheRef.current.set(normalized, point);
-    return point;
   }
 
   async function detectCoachStartPoint() {
@@ -2241,6 +2305,25 @@ export default function BirdDogPage() {
     return `Recommended hotel near ${cleanDestination}`;
   }
 
+  function buildInstantRecommendation(targetPlayers: DesiredPlayer[]): PlanItem[] {
+    const now = Date.now() + 10 * 60 * 1000;
+    const source = scheduleForm.flightSource.trim() || "Current location";
+    const destination = scheduleForm.flightDestination.trim()
+      || destinationForPlayer(targetPlayers[0])
+      || "Tournament Venue";
+    const travel: PlanItem = {
+      at: new Date(now).toISOString(),
+      title: `Travel: ${source} -> ${destination}`,
+      detail: "Instant recommendation preview generated from selected players."
+    };
+    const scoutStops = targetPlayers.slice(0, 8).map((player, index) => ({
+      at: new Date(now + (index + 1) * 75 * 60 * 1000).toISOString(),
+      title: `Scout ${player.name} (${player.team})`,
+      detail: `Target location: ${destinationForPlayer(player) || player.team || "Tournament Venue"}`
+    }));
+    return [travel, ...scoutStops];
+  }
+
   async function generateScheduleFromSmartPlayers(options?: { keepActiveTab?: boolean; autoRun?: boolean }) {
     if (!desiredPlayers.length) {
       const msg = "Select at least one player, then generate schedule.";
@@ -2248,6 +2331,19 @@ export default function BirdDogPage() {
       setPlanWorkflowNote(msg);
       return;
     }
+    if (options?.keepActiveTab !== false) {
+      setActiveTab("schedule");
+    }
+    const instantFlightDestination = scheduleForm.flightDestination || destinationForPlayer(desiredPlayers[0]) || "";
+    const instantForm = {
+      ...scheduleForm,
+      flightDestination: instantFlightDestination
+    };
+    const instantPlan = buildInstantRecommendation(desiredPlayers);
+    setScheduleForm(instantForm);
+    setMyGeneratedPlan(instantPlan);
+    setAndPersistPlanWorkflowStatus("pending_approval");
+    setPlanWorkflowNote("Generating recommendation...");
     setPlayerSearchStatus(`Generating optimized route for ${desiredPlayers.length} selected players...`);
     try {
       const rawSource = scheduleForm.flightSource.trim();
@@ -2257,7 +2353,11 @@ export default function BirdDogPage() {
 
       const optimized = await buildOptimizedCoachPlan(desiredPlayers, preferredSource);
       if (!optimized.plan.length) {
-        const msg = "Could not generate route. Try selecting players with valid hometown/team city.";
+        const msg = "Live route data is limited right now. Showing instant recommendation preview.";
+        setScheduleForm(instantForm);
+        setMyGeneratedPlan(instantPlan);
+        setAndPersistPlanWorkflowStatus("pending_approval");
+        await saveSchedule(instantPlan, desiredPlayers, instantForm);
         setPlayerSearchStatus(msg);
         setPlanWorkflowNote(msg);
         return;
@@ -2300,9 +2400,6 @@ export default function BirdDogPage() {
         setPlanWorkflowNote(optimized.blockedReason || "Recommendation generated, but this route is not feasible within the next 12 hours.");
       }
       await saveSchedule(finalPlan, desiredPlayers, nextForm);
-      if (options?.keepActiveTab !== false) {
-        setActiveTab("schedule");
-      }
       if (!isFeasible) {
         setPlayerSearchStatus(
           `Recommendation generated with feasibility warning. ${optimized.blockedReason || "At least one leg is not feasible in the next 12 hours."}${quotedPlan.quoteSummary ? ` ${quotedPlan.quoteSummary}` : ""}`
@@ -2317,7 +2414,23 @@ export default function BirdDogPage() {
         setPlayerSearchStatus(`Optimized route generated. ${locationStatus}${unresolvedStatus} Hotel recommendation added.${quotedPlan.quoteSummary ? ` ${quotedPlan.quoteSummary}` : ""}`);
       }
     } catch {
-      const msg = "Route generation failed. Please allow location access and retry.";
+      const emergencyPlan: PlanItem[] = instantPlan;
+      if (emergencyPlan.length) {
+        const fallbackForm = {
+          ...instantForm,
+          flightSource: instantForm.flightSource || "Current location",
+          flightDestination: instantForm.flightDestination || destinationForPlayer(desiredPlayers[0]),
+          notes: scheduleForm.notes || "Fallback recommendation generated while map services are unavailable."
+        };
+        setScheduleForm(fallbackForm);
+        setMyGeneratedPlan(emergencyPlan);
+        setAndPersistPlanWorkflowStatus("pending_approval");
+        setPlanWorkflowNote("Fallback recommendation generated. You can approve and proceed.");
+        await saveSchedule(emergencyPlan, desiredPlayers, fallbackForm);
+        setPlayerSearchStatus("Fallback recommendation generated from selected players.");
+        return;
+      }
+      const msg = "Route generation failed. Please retry.";
       setPlayerSearchStatus(msg);
       setPlanWorkflowNote(msg);
     }
@@ -2389,10 +2502,10 @@ export default function BirdDogPage() {
         firstName: firstName || "Coach",
         lastName: rest.join(" ") || "User",
         dateOfBirth: "1990-01-01",
-        gender: "UNSPECIFIED" as const,
+        gender: (user?.gender || "UNSPECIFIED") as "MALE" | "FEMALE" | "UNSPECIFIED",
         email: String(user?.email || ""),
-        phone: "9999999999",
-        countryCallingCode: "1",
+        phone: String(user?.phone || "9999999999"),
+        countryCallingCode: String(user?.countryCallingCode || "1"),
         nationality: "US"
       };
 
@@ -2456,10 +2569,10 @@ export default function BirdDogPage() {
       firstName: parts[0] || "Coach",
       lastName: parts.slice(1).join(" ") || "User",
       dateOfBirth: "1990-01-01",
-      gender: "UNSPECIFIED",
+      gender: (user?.gender || "UNSPECIFIED") as "MALE" | "FEMALE" | "UNSPECIFIED",
       email: String(user?.email || ""),
-      phone: "0000000000",
-      countryCallingCode: "1",
+      phone: String(user?.phone || "0000000000"),
+      countryCallingCode: String(user?.countryCallingCode || "1"),
       nationality: "US"
     };
     const reviewDraft: BookingReviewDraft = {
@@ -2833,6 +2946,98 @@ export default function BirdDogPage() {
     setTranscript("");
   }
 
+  async function startInlineTeamNoteRecording() {
+    if (!inlineTeamNoteTarget) {
+      setInlineTeamNoteStatus("Select a player card first.");
+      return;
+    }
+    if (inlineTeamNoteRecorderState === "recording") return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      inlineTeamNoteMediaStreamRef.current = stream;
+      const mimeType = chooseRecorderMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 128000 })
+        : new MediaRecorder(stream);
+      inlineTeamNoteAudioChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) inlineTeamNoteAudioChunksRef.current.push(event.data);
+      };
+      recorder.onerror = () => setInlineTeamNoteStatus("Recording failed. Please retry.");
+      recorder.start(500);
+      inlineTeamNoteMediaRecorderRef.current = recorder;
+      setInlineTeamNoteRecorderState("recording");
+      setInlineTeamNoteStatus("Recording...");
+    } catch {
+      setInlineTeamNoteStatus("Microphone permission denied or unavailable.");
+    }
+  }
+
+  async function stopInlineTeamNoteRecording() {
+    if (inlineTeamNoteRecorderState !== "recording") return;
+    const recorder = inlineTeamNoteMediaRecorderRef.current;
+    const stream = inlineTeamNoteMediaStreamRef.current;
+    if (!recorder) {
+      setInlineTeamNoteRecorderState("idle");
+      return;
+    }
+    const stoppedBlob = new Promise<Blob | null>((resolve) => {
+      recorder.addEventListener("stop", () => {
+        const mime = recorder.mimeType || "audio/webm";
+        const blob = inlineTeamNoteAudioChunksRef.current.length
+          ? new Blob(inlineTeamNoteAudioChunksRef.current, { type: mime })
+          : null;
+        resolve(blob);
+      }, { once: true });
+    });
+
+    recorder.stop();
+    stream?.getTracks().forEach((track) => track.stop());
+    inlineTeamNoteMediaStreamRef.current = null;
+    inlineTeamNoteMediaRecorderRef.current = null;
+    setInlineTeamNoteRecorderState("idle");
+    const blob = await stoppedBlob;
+    if (!blob || blob.size < 1024) {
+      setInlineTeamNoteStatus("No usable audio captured. Try again.");
+      return;
+    }
+    try {
+      const audioDataUrl = await blobToDataUrl(blob);
+      setInlineTeamNoteAudioUrl(audioDataUrl);
+      setInlineTeamNoteStatus("Audio captured. Click Save.");
+    } catch {
+      setInlineTeamNoteStatus("Could not process audio recording.");
+    }
+  }
+
+  function saveInlineTeamNote() {
+    if (!inlineTeamNoteTarget) return;
+    const cleanedText = inlineTeamNoteText.trim();
+    if (!cleanedText && !inlineTeamNoteAudioUrl) {
+      setInlineTeamNoteStatus("Type a note or record audio before saving.");
+      return;
+    }
+    const draft: InlineTeamNoteDraft = {
+      text: cleanedText,
+      audioUrl: inlineTeamNoteAudioUrl,
+      updatedAt: new Date().toISOString()
+    };
+    safeLocalSet(inlineTeamNoteStorageKey(inlineTeamNoteTarget), JSON.stringify(draft));
+    setNotes((prev) => [
+      {
+        id: crypto.randomUUID(),
+        gameId: selectedGameId || `team:${inlineTeamNoteTarget.teamId}`,
+        playerId: inlineTeamNoteTarget.playerId || undefined,
+        transcript: cleanedText || "(Audio note only)",
+        audioUrl: inlineTeamNoteAudioUrl || undefined,
+        createdAt: new Date().toISOString(),
+        synced: false
+      },
+      ...prev
+    ]);
+    setInlineTeamNoteStatus("Saved.");
+  }
+
   async function syncNow() {
     if (!user || syncing || !online) return;
     const pendingNotes = notes.filter((n) => !n.synced);
@@ -2975,6 +3180,52 @@ export default function BirdDogPage() {
   const showNotes = activeTab === "notes";
   const showBestPlayers = activeTab === "bestPlayers";
   const showCoaches = activeTab === "coaches";
+  const inlineTeamNotePanel = inlineTeamNoteTarget ? (
+    <section className="panel" id="inline-team-note-panel">
+      <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ margin: 0 }}>
+          Team Notes + Audio: {inlineTeamNoteTarget.playerName || inlineTeamNoteTarget.teamName || "Selected Team"}
+        </h3>
+        <button className="secondary" type="button" onClick={() => setInlineTeamNoteTarget(null)}>
+          Close Notes + Audio
+        </button>
+      </div>
+      <p className="muted">
+        Team: {inlineTeamNoteTarget.teamName} {inlineTeamNoteTarget.playerName ? `· Player: ${inlineTeamNoteTarget.playerName}` : ""}
+      </p>
+      <label>
+        Notes
+        <textarea
+          rows={4}
+          value={inlineTeamNoteText}
+          onChange={(event) => setInlineTeamNoteText(event.target.value)}
+          placeholder="Type your scouting note"
+        />
+      </label>
+      <div className="row wrap">
+        <button
+          className="secondary"
+          type="button"
+          onClick={() => {
+            if (inlineTeamNoteRecorderState === "recording") {
+              void stopInlineTeamNoteRecording();
+            } else {
+              void startInlineTeamNoteRecording();
+            }
+          }}
+        >
+          {inlineTeamNoteRecorderState === "recording" ? "Stop Audio" : "Record Audio"}
+        </button>
+        <button type="button" onClick={saveInlineTeamNote}>
+          Save
+        </button>
+      </div>
+      {inlineTeamNoteAudioUrl ? (
+        <audio controls preload="none" src={inlineTeamNoteAudioUrl} style={{ width: "100%", marginTop: 8 }} />
+      ) : null}
+      {inlineTeamNoteStatus ? <p className="muted" style={{ marginTop: 8 }}>{inlineTeamNoteStatus}</p> : null}
+    </section>
+  ) : null;
 
   useEffect(() => {
     if (!user) return;
@@ -3419,7 +3670,11 @@ export default function BirdDogPage() {
               </div>
             </>
           ) : (
-            <p className="muted">No coaches schedules yet.</p>
+            myGeneratedPlan.length ? (
+              <p className="muted">Recommendation generated for you. Review steps in Coach Schedule (left panel).</p>
+            ) : (
+              <p className="muted">No coaches schedules yet.</p>
+            )
           )}
         </div>
       </section>
@@ -3666,7 +3921,7 @@ export default function BirdDogPage() {
                   <p>Notes: {notesForPlayer.length} · Audio clips: {audioCount}</p>
                   <div className="row wrap">
                     {team ? (
-                      <button className="secondary" type="button" onClick={() => viewTeamScheduleAndRoster(team, "notes")}>
+                      <button className="secondary" type="button" onClick={() => openInlineTeamNote({ team, player })}>
                         Open Team Notes + Audio
                       </button>
                     ) : null}
@@ -3691,6 +3946,7 @@ export default function BirdDogPage() {
             Go To My Schedule
           </button>
         </div>
+        {inlineTeamNotePanel}
       </section>
       ) : null}
 
@@ -3865,6 +4121,7 @@ export default function BirdDogPage() {
               </table>
             </div>
           ) : <p className="muted">Participating teams appear after full tournament ingest.</p>}
+          {inlineTeamNotePanel}
         </div>
       </section>
       ) : null}
