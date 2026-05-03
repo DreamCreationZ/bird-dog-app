@@ -112,7 +112,7 @@ export function isUniversityEmail(email: string) {
 }
 
 export function getAdminCredentials() {
-  const defaultEmail = "admin@apointscount.com";
+  const defaultEmail = "admin@apointscout.com";
   const fallbackAlias = "admin@apointscout.com";
   const email = normalizeEmail(process.env.BIRD_DOG_ADMIN_EMAIL || defaultEmail);
   const password = process.env.BIRD_DOG_ADMIN_PASSWORD || "Dreamzlyf!";

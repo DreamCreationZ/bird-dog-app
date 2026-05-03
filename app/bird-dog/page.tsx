@@ -849,6 +849,7 @@ export default function BirdDogPage() {
   const [sourceSuggestions, setSourceSuggestions] = useState<PlaceSuggestion[]>([]);
   const [destinationSuggestions, setDestinationSuggestions] = useState<PlaceSuggestion[]>([]);
   const [hotelSuggestions, setHotelSuggestions] = useState<HotelSuggestion[]>([]);
+  const [tournamentSearchQuery, setTournamentSearchQuery] = useState("");
   const [teamsSearchQuery, setTeamsSearchQuery] = useState("");
   const [playerSearchQuery, setPlayerSearchQuery] = useState("");
   const [playerSearchResults, setPlayerSearchResults] = useState<SmartPlayerResult[]>([]);
@@ -3230,6 +3231,11 @@ export default function BirdDogPage() {
       `${team.name} ${team.from || ""} ${team.record || ""}`.toLowerCase().includes(query)
     );
   }, [selectedTournament?.teams, teamsSearchQuery]);
+  const filteredTournamentInventory = useMemo(() => {
+    const query = tournamentSearchQuery.trim().toLowerCase();
+    if (!query) return displayInventory;
+    return displayInventory.filter((item) => item.name.toLowerCase().includes(query));
+  }, [displayInventory, tournamentSearchQuery]);
   const desiredPlayerIdSet = useMemo(
     () => new Set(desiredPlayers.map((item) => desiredPlayerSelectionKey(item))),
     [desiredPlayers]
@@ -4115,8 +4121,17 @@ export default function BirdDogPage() {
         <h2>Tournament Dashboard</h2>
         {inventoryRefreshing ? <p className="muted small">Syncing latest data from Perfect Game...</p> : null}
         {openError ? <p className="muted">{openError}</p> : null}
+        <label style={{ display: "block", maxWidth: 420, marginTop: 8 }}>
+          Search Tournament
+          <input
+            value={tournamentSearchQuery}
+            onChange={(e) => setTournamentSearchQuery(e.target.value)}
+            placeholder="Search by tournament name"
+            style={{ fontSize: 14 }}
+          />
+        </label>
         <div className="tournament-grid" style={{ marginTop: 12 }}>
-          {displayInventory.length ? displayInventory.map((item) => {
+          {filteredTournamentInventory.length ? filteredTournamentInventory.map((item) => {
             const locked = isTournamentLocked(item, { forceUnlocked: isAdminUser });
             const opened = selectedInventorySlug === item.slug;
             return (
@@ -4142,7 +4157,7 @@ export default function BirdDogPage() {
                 {unlockingSlug === item.slug ? <p className="small">Opening Checkout...</p> : null}
               </article>
             );
-          }) : <p className="muted">No tournaments found.</p>}
+          }) : <p className="muted">No tournaments matched your search.</p>}
         </div>
       </section>
       ) : null}
