@@ -333,6 +333,28 @@ function isPlanWorkflowStatus(value: string | null | undefined): value is PlanWo
   return value === "draft" || value === "pending_approval" || value === "approved";
 }
 
+function isTravelPlanItem(item: PlanItem) {
+  return /^travel\s+\d+:/i.test(String(item.title || ""));
+}
+
+function recommendationItemTone(item: PlanItem) {
+  const detail = String(item.detail || "").toLowerCase();
+  if (/not feasible within next|cannot reach|same-day scouting may be impossible/.test(detail)) return "blocked";
+  if (/live quote unavailable|credentials are not configured|did not return a bookable fare|endpoint is not configured/.test(detail)) return "limited";
+  if (isTravelPlanItem(item)) return "ready";
+  return "neutral";
+}
+
+function getBookingBlockReasonFromPlan(plan: PlanItem[]) {
+  const travelItems = plan.filter((item) => isTravelPlanItem(item));
+  if (!travelItems.length) return "No travel legs are available yet.";
+  const blocked = travelItems.some((item) => recommendationItemTone(item) === "blocked");
+  if (blocked) return "No feasible route is available for this destination right now.";
+  const hasReadyTravel = travelItems.some((item) => recommendationItemTone(item) === "ready");
+  if (!hasReadyTravel) return "No live bookable option is available right now.";
+  return "";
+}
+
 function localScheduleFallbackKey(user: SessionUser | null) {
   if (!user) return "";
   return `${LOCAL_SCHEDULE_FALLBACK_KEY}:${user.orgId}:${user.userId}`;
@@ -852,6 +874,11 @@ export default function BirdDogPage() {
     () => displayInventory.find((item) => item.slug === selectedInventorySlug) || null,
     [displayInventory, selectedInventorySlug]
   );
+  const bookingBlockReason = useMemo(
+    () => getBookingBlockReasonFromPlan(myGeneratedPlan),
+    [myGeneratedPlan]
+  );
+  const canBookRecommendation = myGeneratedPlan.length > 0 && !bookingBlockReason;
   const isAdminUser = Boolean(user?.isAdmin) || String(user?.email || "").trim().toLowerCase() === "admin@apointscout.com";
   const canAccessLockedPages = Boolean(selectedInventory && !isTournamentLocked(selectedInventory, { forceUnlocked: isAdminUser }));
   const planWorkflowStatusKey = useMemo(() => {
@@ -2569,6 +2596,10 @@ export default function BirdDogPage() {
   }
 
   async function bookApprovedRecommendation() {
+    if (bookingBlockReason) {
+      setPlanWorkflowNote(`Booking unavailable: ${bookingBlockReason}`);
+      return;
+    }
     const travelLegs = extractTravelLegsFromPlan(myGeneratedPlan);
     if (!travelLegs.length) {
       setPlanWorkflowNote("No valid travel legs found in this recommendation.");
@@ -3655,7 +3686,7 @@ export default function BirdDogPage() {
             </button>
             <button
               type="button"
-              disabled={!myGeneratedPlan.length}
+              disabled={!canBookRecommendation}
               onClick={() => void bookApprovedRecommendation()}
             >
               Book Approved Recommendation
@@ -3664,6 +3695,11 @@ export default function BirdDogPage() {
           <p className="muted" style={{ marginTop: 8 }}>
             Workflow status: {planWorkflowStatus === "draft" ? "Draft" : planWorkflowStatus === "pending_approval" ? "Ready for booking approval" : "Approved"}
           </p>
+          {bookingBlockReason ? (
+            <p className="muted" style={{ marginTop: 4 }}>
+              Booking unavailable: {bookingBlockReason}
+            </p>
+          ) : null}
           {planWorkflowNote ? <p className="muted" style={{ marginTop: 4 }}>{planWorkflowNote}</p> : null}
           {latestBookingSummary ? (
             <div className="panel" style={{ marginTop: 10 }}>
@@ -3689,11 +3725,26 @@ export default function BirdDogPage() {
             </div>
           ) : null}
           {myGeneratedPlan.length ? (
-            <div className="panel" style={{ marginTop: 10 }}>
+            <div className="panel route-recommendation-panel" style={{ marginTop: 10 }}>
               <h3 style={{ marginTop: 0 }}>My Route Recommendations</h3>
+              <div className="route-summary-chips">
+                <span className="route-summary-chip">Travel legs: {extractTravelLegsFromPlan(myGeneratedPlan).length}</span>
+                <span className={`route-summary-chip ${canBookRecommendation ? "ready" : "blocked"}`}>
+                  {canBookRecommendation ? "Bookable" : "Not Bookable"}
+                </span>
+              </div>
               <div className="log-list" style={{ maxHeight: 260 }}>
                 {myGeneratedPlan.map((plan, idx) => (
-                  <article className="log-card" key={`${plan.at}-${idx}`}>
+                  <article className={`log-card route-card route-card-${recommendationItemTone(plan)}`} key={`${plan.at}-${idx}`}>
+                    <p className="route-card-badge">
+                      {recommendationItemTone(plan) === "ready"
+                        ? "Available"
+                        : recommendationItemTone(plan) === "blocked"
+                          ? "Blocked"
+                          : recommendationItemTone(plan) === "limited"
+                            ? "Limited"
+                            : "Info"}
+                    </p>
                     <p><strong>{dateLabel(plan.at)} {timeLabel(plan.at)} - {plan.title}</strong></p>
                     <p>{plan.detail}</p>
                   </article>

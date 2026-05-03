@@ -92,6 +92,19 @@ function statusColor(status: string | undefined) {
   return "#b7c7de";
 }
 
+function getBookingBlockReasonFromDraft(draft: BookingReviewDraft | null) {
+  if (!draft) return "";
+  if (!draft.travelLegs.length) return "No travel legs are available.";
+  const detailText = draft.planItems.map((item) => String(item.detail || "").toLowerCase()).join(" | ");
+  if (/not feasible within next|cannot reach|same-day scouting may be impossible/.test(detailText)) {
+    return "No feasible route is available for this destination right now.";
+  }
+  if (/live quote unavailable|credentials are not configured|did not return a bookable fare|endpoint is not configured/.test(detailText)) {
+    return "No live bookable option is available right now.";
+  }
+  return "";
+}
+
 export default function BookingReviewPage() {
   const router = useRouter();
   const [returnTo, setReturnTo] = useState("/bird-dog?tab=schedule");
@@ -112,6 +125,7 @@ export default function BookingReviewPage() {
   const [results, setResults] = useState<BookingResult[]>([]);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [bookLoading, setBookLoading] = useState(false);
+  const bookingBlockReason = useMemo(() => getBookingBlockReasonFromDraft(draft), [draft]);
 
   useEffect(() => {
     try {
@@ -193,10 +207,10 @@ export default function BookingReviewPage() {
   }
 
   useEffect(() => {
-    if (!draft || results.length || !editableLegs.length) return;
+    if (!draft || results.length || !editableLegs.length || bookingBlockReason) return;
     void runReview(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft]);
+  }, [bookingBlockReason, draft]);
 
   function validatePaymentInput() {
     if (paymentMethod === "UPI") {
@@ -210,6 +224,10 @@ export default function BookingReviewPage() {
   async function payAndBook() {
     if (!draft || !editableLegs.length) {
       setReviewNote("No travel legs available for booking.");
+      return;
+    }
+    if (bookingBlockReason) {
+      setReviewNote(`Booking unavailable: ${bookingBlockReason}`);
       return;
     }
     if (!planApproved) {
@@ -265,18 +283,32 @@ export default function BookingReviewPage() {
           </button>
           <button
             type="button"
-            disabled={loadingDraft || !draft || !editableLegs.length}
+            disabled={loadingDraft || !draft || !editableLegs.length || Boolean(bookingBlockReason)}
             onClick={() => {
               setPlanApproved(true);
               setReviewNote("Recommendation approved. Continue to payment.");
             }}
-            style={{ borderRadius: 10, border: "1px solid rgba(111, 199, 149, 0.6)", background: "rgba(16, 53, 38, 0.9)", color: "#f5f8ff", padding: "10px 14px", fontWeight: 800, opacity: loadingDraft || !draft || !editableLegs.length ? 0.6 : 1 }}
+            style={{
+              borderRadius: 10,
+              border: "1px solid rgba(111, 199, 149, 0.6)",
+              background: "rgba(16, 53, 38, 0.9)",
+              color: "#f5f8ff",
+              padding: "10px 14px",
+              fontWeight: 800,
+              opacity: loadingDraft || !draft || !editableLegs.length || Boolean(bookingBlockReason) ? 0.55 : 1,
+              filter: loadingDraft || !draft || !editableLegs.length || Boolean(bookingBlockReason) ? "grayscale(0.95)" : "none"
+            }}
           >
             Approve Plan
           </button>
         </div>
 
         {reviewNote ? <p style={{ marginTop: 12, color: "#b9c6d9" }}>{reviewNote}</p> : null}
+        {bookingBlockReason ? (
+          <p style={{ marginTop: 6, color: "#ffb1b1" }}>
+            Booking unavailable: {bookingBlockReason}
+          </p>
+        ) : null}
 
         {!loadingDraft && draft ? (
           <>
@@ -392,8 +424,18 @@ export default function BookingReviewPage() {
               <button
                 type="button"
                 onClick={() => void payAndBook()}
-                disabled={loadingDraft || !draft || bookLoading || !editableLegs.length}
-                style={{ marginTop: 12, borderRadius: 10, border: "1px solid rgba(214, 162, 120, 0.7)", background: "linear-gradient(135deg, rgba(156, 69, 41, 0.45), rgba(11, 27, 52, 0.92))", color: "#f5f8ff", padding: "10px 14px", fontWeight: 800, opacity: loadingDraft || !draft || bookLoading || !editableLegs.length ? 0.6 : 1 }}
+                disabled={loadingDraft || !draft || bookLoading || !editableLegs.length || Boolean(bookingBlockReason)}
+                style={{
+                  marginTop: 12,
+                  borderRadius: 10,
+                  border: "1px solid rgba(214, 162, 120, 0.7)",
+                  background: "linear-gradient(135deg, rgba(156, 69, 41, 0.45), rgba(11, 27, 52, 0.92))",
+                  color: "#f5f8ff",
+                  padding: "10px 14px",
+                  fontWeight: 800,
+                  opacity: loadingDraft || !draft || bookLoading || !editableLegs.length || Boolean(bookingBlockReason) ? 0.5 : 1,
+                  filter: loadingDraft || !draft || bookLoading || !editableLegs.length || Boolean(bookingBlockReason) ? "grayscale(0.95)" : "none"
+                }}
               >
                 {bookLoading ? "Booking..." : "Pay & Book Now"}
               </button>
