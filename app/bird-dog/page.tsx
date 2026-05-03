@@ -2304,7 +2304,9 @@ export default function BirdDogPage() {
         setActiveTab("schedule");
       }
       if (!isFeasible) {
-        setPlayerSearchStatus(`Recommendation generated with feasibility warning. ${optimized.blockedReason || "At least one leg is not feasible in the next 12 hours."}`);
+        setPlayerSearchStatus(
+          `Recommendation generated with feasibility warning. ${optimized.blockedReason || "At least one leg is not feasible in the next 12 hours."}${quotedPlan.quoteSummary ? ` ${quotedPlan.quoteSummary}` : ""}`
+        );
       } else {
         const locationStatus = optimized.usedLiveLocation
           ? "Current location detected."
