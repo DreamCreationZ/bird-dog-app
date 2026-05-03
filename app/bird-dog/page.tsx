@@ -1550,7 +1550,7 @@ export default function BirdDogPage() {
     const onVisible = () => {
       if (document.visibilityState === "visible") tick();
     };
-    const id = window.setInterval(tick, 90000);
+    const id = window.setInterval(tick, 30000);
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -2491,7 +2491,7 @@ export default function BirdDogPage() {
       travelPlan.push({
         at: new Date(scoutAtMs).toISOString(),
         title: `Scout Players at ${destinationLabel}`,
-        detail: `Best players: ${playerList}`
+        detail: `Selected players: ${playerList}`
       });
       completedStops += 1;
 
@@ -3626,7 +3626,7 @@ export default function BirdDogPage() {
                 setMenuOpen(false);
               }}
             >
-              My Best Players
+              My Players
             </button>
             <button
               type="button"
@@ -3856,7 +3856,7 @@ export default function BirdDogPage() {
 
       {showBestPlayers ? (
       <section className="panel">
-        <h2>My Best Players</h2>
+        <h2>My Players</h2>
         <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
         {myBestPlayers.length ? (
           <div className="log-list" style={{ maxHeight: 520 }}>
@@ -3936,7 +3936,7 @@ export default function BirdDogPage() {
             })}
           </div>
         ) : (
-          <p className="muted">No best players selected yet.</p>
+          <p className="muted">No players selected yet.</p>
         )}
         <div className="row wrap">
           <button className="secondary" type="button" onClick={() => setActiveTab("notes")}>
@@ -4070,7 +4070,7 @@ export default function BirdDogPage() {
                 <table className="roster-table">
                   <thead>
                     <tr>
-                      <th>Best</th>
+                      <th>Select</th>
                       <th>Player</th>
                       <th>Hometown</th>
                       <th>Team</th>

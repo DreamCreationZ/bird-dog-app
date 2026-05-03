@@ -585,6 +585,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaChunksRef = useRef<Blob[]>([]);
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const monitorSyncRunningRef = useRef(false);
   const fallbackAudioContextRef = useRef<AudioContext | null>(null);
   const fallbackSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const fallbackProcessorRef = useRef<ScriptProcessorNode | null>(null);
@@ -1621,6 +1622,8 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   }
 
   async function runLiveMonitorSync() {
+    if (monitorSyncRunningRef.current) return;
+    monitorSyncRunningRef.current = true;
     setMonitoring(true);
     try {
       const data = await fetchTeamDetailsRemote();
@@ -1643,9 +1646,32 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     } catch {
       // Keep prior data if monitor sync fails.
     } finally {
+      monitorSyncRunningRef.current = false;
       setMonitoring(false);
     }
   }
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!initialParams.inventorySlug || !initialParams.teamId) return;
+    const tick = () => {
+      if (document.visibilityState !== "visible") return;
+      void runLiveMonitorSync();
+    };
+    const onFocus = () => tick();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    const id = window.setInterval(tick, 30000);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    tick();
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [initialParams.inventorySlug, initialParams.teamId]);
 
   async function approveRegenerateFromAlerts() {
     setMonitorAlerts([]);
@@ -1661,7 +1687,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
       return;
     }
     if (!selectedPlayers.length) {
-      setPlannerStatus("Select at least one best player from roster.");
+      setPlannerStatus("Select at least one player from roster.");
       return;
     }
 
@@ -1720,7 +1746,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
         nextSteps.push({
           at: gameAt.toISOString(),
           title: `Watch ${initialParams.teamName} vs ${opponent}`,
-          detail: `Field: ${game.field || "TBD"} · Best players selected: ${selectedRoster.map((p) => p.name).join(", ")}`
+          detail: `Field: ${game.field || "TBD"} · Selected players: ${selectedRoster.map((p) => p.name).join(", ")}`
         });
 
         currentPoint = venue;
@@ -2052,11 +2078,12 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
             {inlineMode ? "Close" : "Back"}
           </button>
         </div>
-        <h2 style={{ marginTop: 8 }}>{initialParams.tournamentName || "Tournament"}</h2>
       </section>
 
       <section className="panel" id="team-schedule-section">
-        <h2>{initialParams.tournamentName || "Tournament"}</h2>
+        <h2>Team Schedule & Roster</h2>
+        <p className="muted">Tournament: {initialParams.tournamentName || "Tournament"}</p>
+        <p className="muted">Team: {initialParams.teamName || "-"}</p>
         {loading ? <p className="muted">Loading tournament details...</p> : null}
         {error ? <p className="muted">Load error: {error}</p> : null}
         <div className="row wrap" style={{ marginBottom: 8 }}>
@@ -2111,6 +2138,66 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
               )}
             </tbody>
           </table>
+        </div>
+        <div className="panel" style={{ marginTop: 12 }}>
+          <div className="row wrap" style={{ marginBottom: 8 }}>
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => downloadPdfLikeReport(
+                `Team Roster - ${initialParams.teamName}`,
+                ["No", "Name", "Position", "School", "Hometown", "Commitment"],
+                filteredRoster.map((row) => [
+                  row.no || "-",
+                  row.name || "-",
+                  row.position || "-",
+                  row.school || "-",
+                  row.hometown || "-",
+                  row.commitment || "-"
+                ])
+              )}
+            >
+              Download Roster PDF
+            </button>
+          </div>
+          <label>
+            Search Roster
+            <input
+              value={rosterSearch}
+              onChange={(e) => setRosterSearch(e.target.value)}
+              placeholder="Search no, name, position, school, hometown"
+            />
+          </label>
+          <div className="table-wrap" style={{ marginTop: 8 }}>
+            <table className="roster-table">
+              <thead>
+                <tr>
+                  <th>No</th>
+                  <th>Player</th>
+                  <th>Position</th>
+                  <th>School</th>
+                  <th>Hometown</th>
+                  <th>Commitment</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRoster.length ? filteredRoster.map((row, idx) => (
+                  <tr key={`${row.no}-${row.name}-${idx}`}>
+                    <td>{row.no || "-"}</td>
+                    <td>{row.name || "-"}</td>
+                    <td>{row.position || "-"}</td>
+                    <td>{row.school || "-"}</td>
+                    <td>{row.hometown || "-"}</td>
+                    <td>{row.commitment || "-"}</td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={6}>No roster rows found yet for this team.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
