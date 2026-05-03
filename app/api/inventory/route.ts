@@ -45,19 +45,21 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const isAdminUser = Boolean(session.isAdmin) || String(session.email || "").trim().toLowerCase() === "admin@apointscout.com";
   const previewUnlockAll =
     process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
     && process.env.NODE_ENV !== "production";
+  const forceUnlocked = previewUnlockAll || isAdminUser;
   const cookieUnlockedSet = fallbackUnlockedSlugs(req);
 
   try {
     const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
     if (!hasSupabaseConfig) {
       return NextResponse.json({
-        subscribed: previewUnlockAll || cookieUnlockedSet.size > 0,
+        subscribed: forceUnlocked || cookieUnlockedSet.size > 0,
         fallback: true,
         source: "seed_inventory",
-        inventory: fallbackInventory(previewUnlockAll, cookieUnlockedSet)
+        inventory: fallbackInventory(forceUnlocked, cookieUnlockedSet)
       });
     }
     const seedMetaBySlug = new Map(INVENTORY_SEED.map((item) => [item.slug, item]));
@@ -69,16 +71,16 @@ export async function GET(req: NextRequest) {
     ]);
     if (!inventory.length) {
       return NextResponse.json({
-        subscribed: previewUnlockAll || cookieUnlockedSet.size > 0,
+        subscribed: forceUnlocked || cookieUnlockedSet.size > 0,
         fallback: true,
         warning: "Inventory table was empty. Showing seeded tournaments.",
-        inventory: fallbackInventory(previewUnlockAll, cookieUnlockedSet)
+        inventory: fallbackInventory(forceUnlocked, cookieUnlockedSet)
       });
     }
     const unlockedSet = new Set([...unlockedSlugs, ...cookieUnlockedSet]);
 
     return NextResponse.json({
-      subscribed: previewUnlockAll || unlockedSet.size > 0,
+      subscribed: forceUnlocked || unlockedSet.size > 0,
       inventory: inventory.map((item) => {
         const match = item.company === "PG" ? bestGroupedEventMatch(item.name, groupedEvents) : null;
         const seedMeta = seedMetaBySlug.get(item.slug);
@@ -86,7 +88,7 @@ export async function GET(req: NextRequest) {
         const isArchive = isFreeTournamentAccess({ slug: item.slug, name: item.name, displayDate });
         return {
           ...item,
-          locked: previewUnlockAll ? false : (isArchive ? false : !unlockedSet.has(item.slug)),
+          locked: forceUnlocked ? false : (isArchive ? false : !unlockedSet.has(item.slug)),
           isArchive,
           harvestHint: inventoryHarvestHint(item),
           displayDate,
@@ -101,18 +103,18 @@ export async function GET(req: NextRequest) {
       || detail.includes("Missing environment variable: SUPABASE_SERVICE_ROLE_KEY");
     if (missingConfig) {
       return NextResponse.json({
-        subscribed: previewUnlockAll || cookieUnlockedSet.size > 0,
+        subscribed: forceUnlocked || cookieUnlockedSet.size > 0,
         fallback: true,
         source: "seed_inventory",
-        inventory: fallbackInventory(previewUnlockAll, cookieUnlockedSet)
+        inventory: fallbackInventory(forceUnlocked, cookieUnlockedSet)
       });
     }
     return NextResponse.json({
-      subscribed: previewUnlockAll || cookieUnlockedSet.size > 0,
+      subscribed: forceUnlocked || cookieUnlockedSet.size > 0,
       fallback: true,
       warning: "Failed to read inventory from database. Showing seeded tournaments.",
       detail,
-      inventory: fallbackInventory(previewUnlockAll, cookieUnlockedSet)
+      inventory: fallbackInventory(forceUnlocked, cookieUnlockedSet)
     });
   }
 }

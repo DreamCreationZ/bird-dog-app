@@ -119,6 +119,16 @@ type CoachLiveLocation = {
   updated_at: string;
 };
 
+type CoachSharedNote = {
+  id: string;
+  user_id: string;
+  game_id: string;
+  player_id: string | null;
+  transcript: string;
+  audio_url: string | null;
+  observed_at: string;
+};
+
 type CoachMeetSuggestion = {
   kind: "common" | "midpoint" | "none";
   label: string;
@@ -186,8 +196,9 @@ const PLAN_WORKFLOW_STATUS_KEY_PREFIX = "bird_dog:plan_workflow_status:v1";
 const BOOKING_REVIEW_DRAFT_KEY = "bird_dog:booking_review_draft:v1";
 const DEMO_FREE_TOURNAMENT_SLUGS = new Set(["2025-pg-16u-wwba-national-championship"]);
 
-function isTournamentLocked(item: InventoryTournament | null | undefined) {
+function isTournamentLocked(item: InventoryTournament | null | undefined, options?: { forceUnlocked?: boolean }) {
   if (!item) return true;
+  if (options?.forceUnlocked) return false;
   if (PREVIEW_UNLOCK_ALL) return false;
   if (item.isArchive) return false;
   if (DEMO_FREE_TOURNAMENT_SLUGS.has(item.slug)) return false;
@@ -345,6 +356,10 @@ function normalizeLocationText(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function normalizeSearchText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
 function extractedPlanLocation(item: PlanItem): string {
   const title = (item.title || "").trim();
   const detail = (item.detail || "").trim();
@@ -457,6 +472,14 @@ function smartPlayerSelectionKey(teamId: string, playerId: string) {
 
 function desiredPlayerSelectionKey(item: DesiredPlayer) {
   return item.selectionKey || item.playerId;
+}
+
+function coachNoteMatchesPlayer(note: CoachSharedNote, player: DesiredPlayer) {
+  if (note.player_id && note.player_id === player.playerId) return true;
+  const transcriptNorm = normalizeSearchText(note.transcript || "");
+  const playerNorm = normalizeSearchText(player.name || "");
+  if (!transcriptNorm || !playerNorm) return false;
+  return transcriptNorm.includes(playerNorm);
 }
 
 function withHotelReturnLeg(plan: PlanItem[], hotelName: string) {
@@ -736,12 +759,15 @@ export default function BirdDogPage() {
   const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
   const [openError, setOpenError] = useState("");
   const [selectedInventorySlug, setSelectedInventorySlug] = useState("");
-  const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes" | "coaches">("tournaments");
+  const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes" | "coaches" | "bestPlayers">("tournaments");
   const [menuOpen, setMenuOpen] = useState(false);
   const [queryStateApplied, setQueryStateApplied] = useState(false);
 
   const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
   const [viewingSchedule, setViewingSchedule] = useState<CoachSchedule | null>(null);
+  const [viewingPanelMode, setViewingPanelMode] = useState<"schedule" | "notes">("schedule");
+  const [coachSharedNotesByUser, setCoachSharedNotesByUser] = useState<Map<string, CoachSharedNote[]>>(new Map());
+  const [coachSharedNotesLoading, setCoachSharedNotesLoading] = useState(false);
   const [liveLocations, setLiveLocations] = useState<CoachLiveLocation[]>([]);
   const [locationSharingEnabled, setLocationSharingEnabled] = useState(false);
   const [locationStatus, setLocationStatus] = useState("");
@@ -782,7 +808,8 @@ export default function BirdDogPage() {
     () => displayInventory.find((item) => item.slug === selectedInventorySlug) || null,
     [displayInventory, selectedInventorySlug]
   );
-  const canAccessLockedPages = Boolean(selectedInventory && !isTournamentLocked(selectedInventory));
+  const isAdminUser = Boolean(user?.isAdmin) || String(user?.email || "").trim().toLowerCase() === "admin@apointscout.com";
+  const canAccessLockedPages = Boolean(selectedInventory && !isTournamentLocked(selectedInventory, { forceUnlocked: isAdminUser }));
   const planWorkflowStatusKey = useMemo(() => {
     if (!user) return "";
     const scopeSlug = selectedInventorySlug || "inventory";
@@ -948,7 +975,7 @@ export default function BirdDogPage() {
     const tab = params.get("tab");
     const inventorySlug = params.get("inventorySlug");
     const tournamentId = params.get("tournamentId");
-    if (tab === "tournaments" || tab === "schedule" || tab === "notes" || tab === "coaches") {
+    if (tab === "tournaments" || tab === "schedule" || tab === "notes" || tab === "coaches" || tab === "bestPlayers") {
       setActiveTab(tab);
     }
     if (inventorySlug) {
@@ -1128,7 +1155,7 @@ export default function BirdDogPage() {
       const nextInventory = await fetchInventory();
       if (returnInventorySlug) {
         const paidItem = nextInventory.find((item) => item.slug === returnInventorySlug);
-        if (paidItem && !isTournamentLocked(paidItem)) {
+        if (paidItem && !isTournamentLocked(paidItem, { forceUnlocked: isAdminUser })) {
           setSelectedInventorySlug(returnInventorySlug);
         }
       }
@@ -1331,7 +1358,7 @@ export default function BirdDogPage() {
       if (!selectedSlug) return;
       const selectedItem = nextInventory.find((item) => item.slug === selectedSlug);
       if (!selectedItem) return;
-      if (selectedItem.locked && !PREVIEW_UNLOCK_ALL) return;
+      if (isTournamentLocked(selectedItem, { forceUnlocked: isAdminUser })) return;
       await refreshTournamentByInventory(selectedItem);
     } finally {
       setInventoryRefreshing(false);
@@ -1356,7 +1383,7 @@ export default function BirdDogPage() {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [online, user, activeTab, selectedInventorySlug]);
+  }, [online, user, activeTab, selectedInventorySlug, isAdminUser]);
 
   function onPullStart(event: TouchEvent<HTMLElement>) {
     if (activeTab !== "tournaments" || window.scrollY > 0) return;
@@ -1723,8 +1750,9 @@ export default function BirdDogPage() {
     window.open(mapsUrl, "_blank", "noopener,noreferrer");
   }
 
-  function openScheduleView(schedule: CoachSchedule) {
+  function openScheduleView(schedule: CoachSchedule, mode: "schedule" | "notes" = "schedule") {
     setActiveTab("coaches");
+    setViewingPanelMode(mode);
     setViewingSchedule(schedule);
   }
 
@@ -2793,10 +2821,77 @@ export default function BirdDogPage() {
       return true;
     });
   }, [coachFilterDate, coachFilterMeetMode, coachFilterQuery, coachMeetSuggestionById, otherCoachSchedules]);
+  const shareableUserIds = useMemo(
+    () => Array.from(new Set(shareableSchedules.map((item) => item.user_id).filter(Boolean))),
+    [shareableSchedules]
+  );
+  const mySharedNotes = useMemo(
+    () => user ? (coachSharedNotesByUser.get(user.userId) || []) : [],
+    [coachSharedNotesByUser, user]
+  );
+  const myBestPlayers = useMemo(() => {
+    const source = desiredPlayers.length ? desiredPlayers : (myCoachSchedule?.desired_players || []);
+    const deduped = new Map<string, DesiredPlayer>();
+    source.forEach((item) => {
+      deduped.set(desiredPlayerSelectionKey(item), item);
+    });
+    return Array.from(deduped.values());
+  }, [desiredPlayers, myCoachSchedule?.desired_players]);
+  const viewingScheduleSharedNotes = useMemo(
+    () => viewingSchedule ? (coachSharedNotesByUser.get(viewingSchedule.user_id) || []) : [],
+    [coachSharedNotesByUser, viewingSchedule]
+  );
+  const viewingScheduleMeetSuggestion = useMemo(() => {
+    if (!viewingSchedule || viewingSchedule.user_id === user?.userId) return null;
+    return coachMeetSuggestionById.get(viewingSchedule.id) || null;
+  }, [coachMeetSuggestionById, user?.userId, viewingSchedule]);
   const showTournaments = activeTab === "tournaments";
   const showSchedule = activeTab === "schedule";
   const showNotes = activeTab === "notes";
+  const showBestPlayers = activeTab === "bestPlayers";
   const showCoaches = activeTab === "coaches";
+
+  useEffect(() => {
+    if (!user) return;
+    if (!shareableUserIds.length) {
+      setCoachSharedNotesByUser(new Map());
+      return;
+    }
+    let cancelled = false;
+    setCoachSharedNotesLoading(true);
+    void (async () => {
+      try {
+        const res = await fetch(`/api/coach-notes?userIds=${encodeURIComponent(shareableUserIds.join(","))}`, {
+          cache: "no-store"
+        });
+        if (!res.ok) return;
+        const body = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        const notes = Array.isArray(body?.notes) ? body.notes as CoachSharedNote[] : [];
+        const grouped = new Map<string, CoachSharedNote[]>();
+        notes.forEach((note) => {
+          const userId = String(note.user_id || "").trim();
+          if (!userId) return;
+          const row: CoachSharedNote = {
+            id: String(note.id || ""),
+            user_id: userId,
+            game_id: String(note.game_id || ""),
+            player_id: note.player_id ? String(note.player_id) : null,
+            transcript: String(note.transcript || ""),
+            audio_url: note.audio_url ? String(note.audio_url) : null,
+            observed_at: String(note.observed_at || "")
+          };
+          grouped.set(userId, [...(grouped.get(userId) || []), row]);
+        });
+        setCoachSharedNotesByUser(grouped);
+      } finally {
+        if (!cancelled) setCoachSharedNotesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [shareableUserIds, user]);
   useEffect(() => {
     if (!viewingSchedule) return;
     if (!shareableSchedules.some((item) => item.id === viewingSchedule.id)) {
@@ -2814,7 +2909,7 @@ export default function BirdDogPage() {
       setViewingSchedule(null);
       return;
     }
-    if (showNotes || showSchedule || showCoaches) {
+    if (showNotes || showSchedule || showCoaches || showBestPlayers) {
       goToTournamentDashboard();
       return;
     }
@@ -2906,6 +3001,16 @@ export default function BirdDogPage() {
             >
               Coaches Schedules
             </button>
+            <button
+              type="button"
+              className={activeTab === "bestPlayers" ? "active" : ""}
+              onClick={() => {
+                setActiveTab("bestPlayers");
+                setMenuOpen(false);
+              }}
+            >
+              My Best Players
+            </button>
           </div>
         ) : null}
       </section>
@@ -2933,7 +3038,15 @@ export default function BirdDogPage() {
         </div>
         <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
           <h2>
-            {showTournaments ? "Tournament Dashboard" : showNotes ? "Tournament Roster" : showSchedule ? "My Schedule" : "Coaches Schedules"}
+            {showTournaments
+              ? "Tournament Dashboard"
+              : showNotes
+                ? "Tournament Roster"
+                : showSchedule
+                  ? "My Schedule"
+                  : showCoaches
+                    ? "Coaches Schedules"
+                    : "My Best Players"}
           </h2>
           <div className="row wrap" style={{ gap: 8 }}>
             {canGoBackInApp ? <button className="secondary" onClick={goBackInApp}>Back</button> : null}
@@ -2947,7 +3060,9 @@ export default function BirdDogPage() {
               ? "Open team roster and schedule details."
               : showSchedule
                 ? "Auto-generate coach travel recommendation, verify, approve, and proceed to booking."
-                : "See coaches schedules from your university domain."}
+                : showCoaches
+                  ? "See coaches schedules from your university domain."
+                  : "See favorite players with notes/audio, location, team, and tournament context."}
         </p>
       </section>
 
@@ -3168,7 +3283,8 @@ export default function BirdDogPage() {
                         <td>{item.coach_email || "-"}</td>
                         <td>
                           <div className="row wrap">
-                            <button className="secondary" onClick={() => openScheduleView(item)}>View Schedules</button>
+                            <button className="secondary" onClick={() => openScheduleView(item, "schedule")}>View Schedules</button>
+                            <button className="secondary" onClick={() => openScheduleView(item, "notes")}>View Notes</button>
                           </div>
                         </td>
                       </tr>
@@ -3187,36 +3303,80 @@ export default function BirdDogPage() {
       {viewingSchedule ? (
         <section className="panel">
           <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
-            <h2>{viewingSchedule.coach_name} - Schedule</h2>
+            <h2>
+              {viewingSchedule.coach_name} - {viewingPanelMode === "notes" ? "Favorite Player Notes" : "Schedule"}
+            </h2>
             <button className="secondary" onClick={() => setViewingSchedule(null)}>Close</button>
           </div>
           <p>{viewingSchedule.flight_source || "-"} {"->"} {viewingSchedule.flight_destination || "-"}</p>
           <p>{viewingSchedule.flight_arrival_time ? new Date(viewingSchedule.flight_arrival_time).toLocaleString() : "No arrival time"}</p>
           <p>Hotel: {viewingSchedule.hotel_name || "-"}</p>
-          {viewingSchedule.notes && !/^auto-generated/i.test(viewingSchedule.notes.trim()) ? (
-            <p>{viewingSchedule.notes}</p>
-          ) : null}
-          {viewingSchedule.desired_players?.length ? (
-            <p>
-              <strong>Targets:</strong> {viewingSchedule.desired_players.map((p) => `${p.name} (${p.team})`).join(", ")}
+          {viewingScheduleMeetSuggestion ? (
+            <p className="muted">
+              Meet point: {viewingScheduleMeetSuggestion.label} · {viewingScheduleMeetSuggestion.detail}
             </p>
           ) : null}
-          {viewingSchedule.generated_plan?.length ? (
-            <div className="log-list" style={{ maxHeight: 220 }}>
-              {viewingSchedule.generated_plan.map((plan, idx) => (
-                <article key={`${plan.at}-${idx}`} className="log-card">
-                  <p><strong>{dateLabel(plan.at)} {timeLabel(plan.at)} - {plan.title}</strong></p>
-                  <p>{plan.detail}</p>
-                </article>
-              ))}
-            </div>
-          ) : null}
-          <div className="row wrap">
-            <button className="secondary" onClick={() => void startMapForSchedule(viewingSchedule)}>Start Map</button>
-            {viewingSchedule.user_id === user?.userId ? (
-              <button className="secondary" onClick={() => editSchedule(viewingSchedule)}>Edit</button>
-            ) : null}
-          </div>
+          {viewingPanelMode === "schedule" ? (
+            <>
+              {viewingSchedule.notes && !/^auto-generated/i.test(viewingSchedule.notes.trim()) ? (
+                <p>{viewingSchedule.notes}</p>
+              ) : null}
+              {viewingSchedule.desired_players?.length ? (
+                <p>
+                  <strong>Targets:</strong> {viewingSchedule.desired_players.map((p) => `${p.name} (${p.team})`).join(", ")}
+                </p>
+              ) : null}
+              {viewingSchedule.generated_plan?.length ? (
+                <div className="log-list" style={{ maxHeight: 220 }}>
+                  {viewingSchedule.generated_plan.map((plan, idx) => (
+                    <article key={`${plan.at}-${idx}`} className="log-card">
+                      <p><strong>{dateLabel(plan.at)} {timeLabel(plan.at)} - {plan.title}</strong></p>
+                      <p>{plan.detail}</p>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+              <div className="row wrap">
+                <button className="secondary" onClick={() => void startMapForSchedule(viewingSchedule)}>Start Map</button>
+                <button className="secondary" onClick={() => setViewingPanelMode("notes")}>View Notes</button>
+                {viewingSchedule.user_id === user?.userId ? (
+                  <button className="secondary" onClick={() => editSchedule(viewingSchedule)}>Edit</button>
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <>
+              {viewingSchedule.desired_players?.length ? (
+                <p>
+                  <strong>Favorite players:</strong> {viewingSchedule.desired_players.map((p) => `${p.name} (${p.team})`).join(", ")}
+                </p>
+              ) : (
+                <p className="muted">No favorite players selected for this coach yet.</p>
+              )}
+              {viewingSchedule.notes && !/^auto-generated/i.test(viewingSchedule.notes.trim()) ? (
+                <p><strong>Coach note:</strong> {viewingSchedule.notes}</p>
+              ) : null}
+              {coachSharedNotesLoading ? <p className="muted">Loading coach notes...</p> : null}
+              {viewingScheduleSharedNotes.length ? (
+                <div className="log-list" style={{ maxHeight: 260 }}>
+                  {viewingScheduleSharedNotes.map((note) => (
+                    <article key={note.id} className="log-card">
+                      <p>
+                        <strong>{note.observed_at ? new Date(note.observed_at).toLocaleString() : "Observed note"}</strong>
+                      </p>
+                      <p>{note.transcript || "No text transcript."}</p>
+                      {note.audio_url ? <audio controls preload="none" src={note.audio_url} style={{ width: "100%" }} /> : null}
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">No notes for favorite players yet.</p>
+              )}
+              <div className="row wrap">
+                <button className="secondary" onClick={() => setViewingPanelMode("schedule")}>View Schedule</button>
+              </div>
+            </>
+          )}
         </section>
       ) : null}
 
@@ -3334,7 +3494,10 @@ export default function BirdDogPage() {
                             ) : null}
                           </td>
                           <td className="action-cell">
-                            <button className="secondary" onClick={() => openScheduleView(item)}>View Schedule</button>
+                            <div className="row wrap">
+                              <button className="secondary" onClick={() => openScheduleView(item, "schedule")}>View Schedule</button>
+                              <button className="secondary" onClick={() => openScheduleView(item, "notes")}>View Notes</button>
+                            </div>
                           </td>
                         </tr>
                         );
@@ -3355,6 +3518,57 @@ export default function BirdDogPage() {
         </section>
       ) : null}
 
+      {showBestPlayers ? (
+      <section className="panel">
+        <h2>My Best Players</h2>
+        <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
+        {myBestPlayers.length ? (
+          <div className="log-list" style={{ maxHeight: 520 }}>
+            {myBestPlayers.map((player) => {
+              const notesForPlayer = mySharedNotes.filter((note) => coachNoteMatchesPlayer(note, player));
+              const audioCount = notesForPlayer.filter((note) => Boolean(note.audio_url)).length;
+              const team = (selectedTournament?.teams || []).find((item) => {
+                const left = normalizeSmartSearch(item.name);
+                const right = normalizeSmartSearch(player.team);
+                return left === right || left.includes(right) || right.includes(left);
+              }) || null;
+              return (
+                <article key={desiredPlayerSelectionKey(player)} className="log-card">
+                  <p><strong>{player.name}</strong></p>
+                  <p>Location: {player.hometown || "Unknown"}</p>
+                  <p>Team: {player.team}</p>
+                  <p>Tournament: {selectedTournament?.name || tournamentViewTitle || "Not selected"}</p>
+                  <p>Notes: {notesForPlayer.length} · Audio clips: {audioCount}</p>
+                  <div className="row wrap">
+                    {team ? (
+                      <button className="secondary" type="button" onClick={() => viewTeamScheduleAndRoster(team, "notes")}>
+                        Open Team Notes + Audio
+                      </button>
+                    ) : null}
+                    {myCoachSchedule ? (
+                      <button className="secondary" type="button" onClick={() => openScheduleView(myCoachSchedule, "notes")}>
+                        View My Coach Notes
+                      </button>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="muted">No best players selected yet.</p>
+        )}
+        <div className="row wrap">
+          <button className="secondary" type="button" onClick={() => setActiveTab("notes")}>
+            Go To Tournament Roster
+          </button>
+          <button className="secondary" type="button" onClick={() => setActiveTab("schedule")}>
+            Go To My Schedule
+          </button>
+        </div>
+      </section>
+      ) : null}
+
       {showTournaments ? (
       <section className="panel">
         <h2>Tournament Dashboard</h2>
@@ -3362,7 +3576,7 @@ export default function BirdDogPage() {
         {openError ? <p className="muted">{openError}</p> : null}
         <div className="tournament-grid" style={{ marginTop: 12 }}>
           {displayInventory.length ? displayInventory.map((item) => {
-            const locked = isTournamentLocked(item);
+            const locked = isTournamentLocked(item, { forceUnlocked: isAdminUser });
             const opened = selectedInventorySlug === item.slug;
             return (
               <article

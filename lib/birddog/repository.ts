@@ -220,6 +220,16 @@ export type CoachLiveLocation = {
   updated_at: string;
 };
 
+export type ScoutSharedNote = {
+  id: string;
+  user_id: string;
+  game_id: string;
+  player_id: string | null;
+  transcript: string;
+  audio_url: string | null;
+  observed_at: string;
+};
+
 export async function upsertCoachSchedule(input: {
   orgId: string;
   userId: string;
@@ -327,6 +337,35 @@ export async function listCoachLiveLocations(orgId: string): Promise<CoachLiveLo
       limit: "200"
     }
   })) as CoachLiveLocation[];
+  return rows;
+}
+
+function supabaseInClause(values: string[]) {
+  const escaped = values
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .map((value) => `"${value.replace(/"/g, '\\"')}"`);
+  if (!escaped.length) return "";
+  return `in.(${escaped.join(",")})`;
+}
+
+export async function listScoutNotesForUsers(input: {
+  orgId: string;
+  userIds: string[];
+  limit?: number;
+}): Promise<ScoutSharedNote[]> {
+  const inClause = supabaseInClause(input.userIds);
+  if (!inClause) return [];
+  const limit = Math.min(Math.max(input.limit || 200, 1), 500);
+  const rows = (await supabaseRequest("scout_notes", {
+    query: {
+      org_id: `eq.${input.orgId}`,
+      user_id: inClause,
+      select: "id,user_id,game_id,player_id,transcript,audio_url,observed_at",
+      order: "observed_at.desc",
+      limit: String(limit)
+    }
+  })) as ScoutSharedNote[];
   return rows;
 }
 

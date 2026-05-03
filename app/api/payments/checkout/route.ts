@@ -61,6 +61,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const isAdminUser = Boolean(session.isAdmin) || String(session.email || "").trim().toLowerCase() === "admin@apointscout.com";
+    if (isAdminUser) {
+      const successRedirect = withQuery(withQuery(returnTo, "inventorySlug", inventorySlug), "payment", "success");
+      return NextResponse.json({ alreadyUnlocked: true, freeUnlock: true, redirectTo: successRedirect });
+    }
     const cookieUnlocked = fallbackUnlockedSlugs(req);
     const selected = seedMetaBySlug.get(inventorySlug) || null;
     const unlockAmountCents = Number(process.env.BIRD_DOG_TOURNAMENT_UNLOCK_AMOUNT_CENTS || DEFAULT_UNLOCK_AMOUNT_CENTS);
