@@ -131,6 +131,7 @@ type SavedPaymentMethod = {
 type SessionUserTheme = {
   orgPrimary?: string;
   orgAccent?: string;
+  orgName?: string;
   name?: string;
   email?: string;
   gender?: "MALE" | "FEMALE" | "UNSPECIFIED";
@@ -525,6 +526,7 @@ function prepareBookingLegsForProvider(
 
 export default function TeamDetailsClient({ initialParams, inlineMode = false, onClose }: Props) {
   const [sessionTheme, setSessionTheme] = useState<SessionUserTheme | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [scheduleRows, setScheduleRows] = useState<TeamScheduleRow[]>([]);
@@ -981,6 +983,26 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
       nextParams.set("tournamentId", initialParams.returnTournamentId);
     }
     window.location.assign(`/bird-dog?${nextParams.toString()}`);
+  }
+
+  function openAppTab(tab: "tournaments" | "schedule" | "bestPlayers" | "profile") {
+    const nextParams = new URLSearchParams();
+    nextParams.set("tab", tab);
+    if (initialParams.returnInventorySlug || initialParams.inventorySlug) {
+      nextParams.set("inventorySlug", initialParams.returnInventorySlug || initialParams.inventorySlug);
+    }
+    if (initialParams.returnTournamentId) {
+      nextParams.set("tournamentId", initialParams.returnTournamentId);
+    }
+    window.location.assign(`/bird-dog?${nextParams.toString()}`);
+  }
+
+  async function logout() {
+    try {
+      await fetch("/api/session/logout", { method: "POST", cache: "no-store" });
+    } finally {
+      window.location.assign("/login");
+    }
   }
 
   const notesStorageKey = useMemo(
@@ -2068,16 +2090,48 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
         ["--bd-card-muted" as string]: cardMutedValue
       }}
     >
-      <section className="panel">
-        <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
+      <section className="top-menu">
+        <button
+          className="secondary"
+          type="button"
+          onClick={goBackOneStep}
+        >
+          {inlineMode ? "Close" : "Back"}
+        </button>
+        {!inlineMode ? (
           <button
-            className="secondary"
+            className="secondary menu-trigger"
             type="button"
-            onClick={goBackOneStep}
+            aria-label="Open navigation menu"
+            onClick={() => setMenuOpen((prev) => !prev)}
           >
-            {inlineMode ? "Close" : "Back"}
+            ☰
           </button>
-        </div>
+        ) : null}
+        {!inlineMode && menuOpen ? (
+          <div className="menu-dropdown">
+            <div className="menu-brand">
+              <img src="/branding/a-point-scout-icon.svg" alt="APOINT SCOUT" />
+              <div className="menu-brand-copy">
+                <p>APOINT SCOUT</p>
+                <p>{String(sessionTheme?.orgName || "Apoint Scout Admin")}</p>
+              </div>
+            </div>
+            <button type="button" onClick={() => openAppTab("tournaments")}>Tournament Dashboard</button>
+            <button type="button" className="active" onClick={() => openAppTab("schedule")}>Schedules</button>
+            <button type="button" onClick={() => openAppTab("bestPlayers")}>My Players</button>
+            <button type="button" onClick={() => openAppTab("profile")}>My Profile</button>
+            <button
+              type="button"
+              onClick={() => {
+                setMenuOpen(false);
+                void logout();
+              }}
+            >
+              Log Out
+            </button>
+          </div>
+        ) : null}
       </section>
 
       <section className="panel" id="team-schedule-section">

@@ -107,6 +107,7 @@ function getBookingBlockReasonFromDraft(draft: BookingReviewDraft | null) {
 
 export default function BookingReviewPage() {
   const router = useRouter();
+  const [menuOpen, setMenuOpen] = useState(false);
   const [returnTo, setReturnTo] = useState("/bird-dog?tab=schedule");
 
   const [draft, setDraft] = useState<BookingReviewDraft | null>(null);
@@ -243,6 +244,14 @@ export default function BookingReviewPage() {
     await runReview(false);
   }
 
+  async function logout() {
+    try {
+      await fetch("/api/session/logout", { method: "POST", cache: "no-store" });
+    } finally {
+      router.push("/login");
+    }
+  }
+
   const summary = useMemo(() => ({
     booked: results.filter((item) => item.status === "booked").length,
     quoted: results.filter((item) => item.status === "quoted").length,
@@ -251,6 +260,89 @@ export default function BookingReviewPage() {
 
   return (
     <main style={{ minHeight: "100vh", background: "linear-gradient(140deg, #140b15 0%, #08112a 45%, #050915 100%)", color: "#f5f8ff", padding: "18px 14px 30px" }}>
+      <section style={{ maxWidth: 1140, margin: "0 auto 8px", position: "sticky", top: 10, zIndex: 30, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <button
+          type="button"
+          onClick={() => router.push(returnTo)}
+          style={{
+            borderRadius: 12,
+            border: "1px solid rgba(170, 195, 235, 0.3)",
+            background: "rgba(20, 34, 58, 0.9)",
+            color: "#dce9ff",
+            fontWeight: 700,
+            padding: "9px 14px",
+            cursor: "pointer"
+          }}
+        >
+          Back
+        </button>
+        <button
+          type="button"
+          aria-label="Open navigation menu"
+          onClick={() => setMenuOpen((prev) => !prev)}
+          style={{
+            borderRadius: 12,
+            border: "1px solid rgba(170, 195, 235, 0.3)",
+            background: "rgba(20, 34, 58, 0.9)",
+            color: "#dce9ff",
+            fontWeight: 700,
+            padding: "9px 14px",
+            cursor: "pointer"
+          }}
+        >
+          ☰
+        </button>
+        {menuOpen ? (
+          <div style={{
+            position: "absolute",
+            top: 46,
+            right: 0,
+            minWidth: 240,
+            borderRadius: 12,
+            border: "1px solid rgba(214, 202, 170, 0.35)",
+            background: "rgba(10, 19, 35, 0.98)",
+            padding: 8,
+            display: "grid",
+            gap: 8
+          }}>
+            <button
+              type="button"
+              onClick={() => router.push("/bird-dog?tab=tournaments")}
+              style={{ textAlign: "left", borderRadius: 10, border: "1px solid rgba(170, 195, 235, 0.22)", background: "rgba(20, 34, 58, 0.9)", color: "#dce9ff", padding: "10px 12px", fontWeight: 700, cursor: "pointer" }}
+            >
+              Tournament Dashboard
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/bird-dog?tab=schedule")}
+              style={{ textAlign: "left", borderRadius: 10, border: "1px solid rgba(170, 195, 235, 0.22)", background: "rgba(20, 34, 58, 0.9)", color: "#dce9ff", padding: "10px 12px", fontWeight: 700, cursor: "pointer" }}
+            >
+              Schedules
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/bird-dog?tab=bestPlayers")}
+              style={{ textAlign: "left", borderRadius: 10, border: "1px solid rgba(170, 195, 235, 0.22)", background: "rgba(20, 34, 58, 0.9)", color: "#dce9ff", padding: "10px 12px", fontWeight: 700, cursor: "pointer" }}
+            >
+              My Players
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/bird-dog?tab=profile")}
+              style={{ textAlign: "left", borderRadius: 10, border: "1px solid rgba(170, 195, 235, 0.22)", background: "rgba(20, 34, 58, 0.9)", color: "#dce9ff", padding: "10px 12px", fontWeight: 700, cursor: "pointer" }}
+            >
+              My Profile
+            </button>
+            <button
+              type="button"
+              onClick={() => void logout()}
+              style={{ textAlign: "left", borderRadius: 10, border: "1px solid rgba(170, 195, 235, 0.22)", background: "rgba(20, 34, 58, 0.9)", color: "#dce9ff", padding: "10px 12px", fontWeight: 700, cursor: "pointer" }}
+            >
+              Log Out
+            </button>
+          </div>
+        ) : null}
+      </section>
       <section style={{ maxWidth: 1140, margin: "0 auto", border: "1px solid rgba(214, 202, 170, 0.35)", borderRadius: 16, background: "linear-gradient(160deg, rgba(35, 20, 28, 0.62), rgba(8, 18, 38, 0.94))", padding: 16 }}>
         <h1 style={{ margin: 0 }}>Book Recommendation</h1>
         <p style={{ marginTop: 8, color: "#b9c6d9" }}>
