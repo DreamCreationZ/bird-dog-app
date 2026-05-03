@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getOrgByEmail } from "@/lib/birddog/mockData";
 
@@ -40,6 +40,31 @@ type LoginResult = {
   fallbackCodes?: FallbackCodes;
 };
 
+type CountryCodeOption = {
+  country: string;
+  dialCode: string;
+  digits: string;
+};
+
+const DEFAULT_COUNTRY_CODE_OPTIONS: CountryCodeOption[] = [
+  { country: "Australia", dialCode: "+61", digits: "61" },
+  { country: "Brazil", dialCode: "+55", digits: "55" },
+  { country: "Canada", dialCode: "+1", digits: "1" },
+  { country: "China", dialCode: "+86", digits: "86" },
+  { country: "France", dialCode: "+33", digits: "33" },
+  { country: "Germany", dialCode: "+49", digits: "49" },
+  { country: "India", dialCode: "+91", digits: "91" },
+  { country: "Indonesia", dialCode: "+62", digits: "62" },
+  { country: "Japan", dialCode: "+81", digits: "81" },
+  { country: "Mexico", dialCode: "+52", digits: "52" },
+  { country: "Saudi Arabia", dialCode: "+966", digits: "966" },
+  { country: "Singapore", dialCode: "+65", digits: "65" },
+  { country: "South Africa", dialCode: "+27", digits: "27" },
+  { country: "United Arab Emirates", dialCode: "+971", digits: "971" },
+  { country: "United Kingdom", dialCode: "+44", digits: "44" },
+  { country: "United States", dialCode: "+1", digits: "1" }
+];
+
 export default function LoginPage() {
   const router = useRouter();
   const [authIntent, setAuthIntent] = useState<"signup" | "signin">("signin");
@@ -49,6 +74,8 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [gender, setGender] = useState<"MALE" | "FEMALE" | "UNSPECIFIED">("UNSPECIFIED");
   const [countryCallingCode, setCountryCallingCode] = useState("1");
+  const [countryCodeSearch, setCountryCodeSearch] = useState("+1 United States");
+  const [countryCodeOptions, setCountryCodeOptions] = useState<CountryCodeOption[]>(DEFAULT_COUNTRY_CODE_OPTIONS);
   const [phone, setPhone] = useState("");
   const [mfaCode, setMfaCode] = useState("");
   const [loading, setLoading] = useState(false);
@@ -61,6 +88,68 @@ export default function LoginPage() {
   const org = useMemo(() => getOrgByEmail(email), [email]);
   const isAdminEmail = email.trim().toLowerCase() === "admin@apointscout.com";
   const fullName = `${firstName} ${lastName}`.trim() || "Scout User";
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("https://restcountries.com/v3.1/all?fields=name,idd", { cache: "force-cache" });
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ([])) as Array<{
+          name?: { common?: string };
+          idd?: { root?: string; suffixes?: string[] };
+        }>;
+        const dedupe = new Map<string, CountryCodeOption>();
+        data.forEach((item) => {
+          const country = String(item?.name?.common || "").trim();
+          const root = String(item?.idd?.root || "").trim();
+          const suffixes = Array.isArray(item?.idd?.suffixes) ? item.idd.suffixes : [];
+          if (!country || !root.startsWith("+")) return;
+          const roots = suffixes.length ? suffixes : [""];
+          roots.forEach((suffix) => {
+            const digits = `${root}${String(suffix || "").trim()}`.replace(/[^\d]/g, "");
+            if (!digits) return;
+            const dialCode = `+${digits}`;
+            dedupe.set(`${dialCode}:${country.toLowerCase()}`, { country, dialCode, digits });
+          });
+        });
+        if (!dedupe.size || cancelled) return;
+        const next = Array.from(dedupe.values()).sort((a, b) => {
+          if (a.digits.length !== b.digits.length) return a.digits.length - b.digits.length;
+          return a.dialCode.localeCompare(b.dialCode) || a.country.localeCompare(b.country);
+        });
+        setCountryCodeOptions(next);
+      } catch {
+        // Keep fallback list on fetch failure.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!countryCallingCode) return;
+    const exact = countryCodeOptions.find((item) => item.digits === countryCallingCode);
+    if (exact) setCountryCodeSearch(`${exact.dialCode} ${exact.country}`);
+  }, [countryCallingCode, countryCodeOptions]);
+
+  function findCountryCodeMatch(query: string) {
+    const trimmed = query.trim();
+    if (!trimmed) return null;
+    const digits = trimmed.replace(/[^\d]/g, "");
+    const lower = trimmed.toLowerCase();
+    if (digits) {
+      const exact = countryCodeOptions.find((item) => item.digits === digits);
+      if (exact) return exact;
+      const prefix = countryCodeOptions.find((item) => item.digits.startsWith(digits));
+      if (prefix) return prefix;
+    }
+    return countryCodeOptions.find((item) =>
+      item.country.toLowerCase().includes(lower)
+      || item.dialCode.includes(trimmed.replace(/\s+/g, ""))
+    ) || null;
+  }
 
   async function startLogin(event: FormEvent) {
     event.preventDefault();
@@ -153,23 +242,20 @@ export default function LoginPage() {
     }
   }
 
-  async function enableFingerprint() {
+  async function ensureBiometricCredential() {
     if (!("PublicKeyCredential" in window) || !window.PublicKeyCredential) {
       setError("Biometric sign-in is not supported on this browser.");
-      return;
+      return false;
     }
     if (!email.includes("@")) {
       setError("Enter your email first, then set up biometric sign-in.");
-      return;
+      return false;
     }
-    setBiometricLoading(true);
-    setError("");
-    setInfo("");
     try {
       const platformAvailable = await window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
       if (!platformAvailable) {
         setError("No Face ID / fingerprint authenticator is available on this device.");
-        return;
+        return false;
       }
 
       const challenge = crypto.getRandomValues(new Uint8Array(32));
@@ -198,16 +284,15 @@ export default function LoginPage() {
       const rawId = passkey ? new Uint8Array(passkey.rawId) : null;
       if (!rawId || !rawId.length) {
         setError("Could not complete biometric setup on this device.");
-        return;
+        return false;
       }
 
       localStorage.setItem("bd-biometric-email", email.toLowerCase());
       localStorage.setItem("bd-biometric-id", toBase64Url(rawId));
-      setInfo("Biometric sign-in is ready on this device.");
+      return true;
     } catch {
       setError("Biometric setup was cancelled or failed.");
-    } finally {
-      setBiometricLoading(false);
+      return false;
     }
   }
 
@@ -216,17 +301,24 @@ export default function LoginPage() {
       setError("Biometric sign-in is not supported on this browser.");
       return;
     }
-    const storedEmail = localStorage.getItem("bd-biometric-email") || "";
-    const storedId = localStorage.getItem("bd-biometric-id") || "";
-    if (!storedEmail || !storedId || storedEmail !== email.toLowerCase()) {
-      setError("Biometric sign-in is not set up for this email on this device.");
-      return;
-    }
-
     setBiometricLoading(true);
     setError("");
     setInfo("");
     try {
+      const normalizedEmail = email.toLowerCase();
+      let storedEmail = localStorage.getItem("bd-biometric-email") || "";
+      let storedId = localStorage.getItem("bd-biometric-id") || "";
+      if (!storedEmail || !storedId || storedEmail !== normalizedEmail) {
+        const enabled = await ensureBiometricCredential();
+        if (!enabled) return;
+        storedEmail = localStorage.getItem("bd-biometric-email") || "";
+        storedId = localStorage.getItem("bd-biometric-id") || "";
+      }
+      if (!storedEmail || !storedId || storedEmail !== normalizedEmail) {
+        setError("Biometric sign-in could not be initialized for this email.");
+        return;
+      }
+
       const challenge = crypto.getRandomValues(new Uint8Array(32));
       await navigator.credentials.get({
         publicKey: {
@@ -252,6 +344,7 @@ export default function LoginPage() {
         setError(data?.error || "Biometric login failed.");
         return;
       }
+      setInfo("Biometric sign-in successful.");
       router.replace("/bird-dog");
     } catch {
       setError("Biometric verification failed or was cancelled.");
@@ -360,12 +453,33 @@ export default function LoginPage() {
                 <label>
                   Country Code
                   <input
-                    value={countryCallingCode}
-                    onChange={(e) => setCountryCallingCode(e.target.value.replace(/[^\d]/g, ""))}
+                    list="country-codes"
+                    value={countryCodeSearch}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setCountryCodeSearch(value);
+                      const digits = value.replace(/[^\d]/g, "");
+                      setCountryCallingCode(digits);
+                      const exact = countryCodeOptions.find((item) => item.digits === digits);
+                      if (exact && /^\s*\+?\d+\s*$/.test(value)) {
+                        setCountryCodeSearch(`${exact.dialCode} ${exact.country}`);
+                      }
+                    }}
+                    onBlur={() => {
+                      const match = findCountryCodeMatch(countryCodeSearch);
+                      if (!match) return;
+                      setCountryCallingCode(match.digits);
+                      setCountryCodeSearch(`${match.dialCode} ${match.country}`);
+                    }}
                     inputMode="numeric"
-                    placeholder="1"
+                    placeholder="+91 India"
                     required
                   />
+                  <datalist id="country-codes">
+                    {countryCodeOptions.map((item) => (
+                      <option key={`${item.dialCode}-${item.country}`} value={`${item.dialCode} ${item.country}`} />
+                    ))}
+                  </datalist>
                 </label>
                 <label>
                   Mobile Number
@@ -382,17 +496,12 @@ export default function LoginPage() {
             {error ? <p className="error-text">{error}</p> : null}
             {info ? <p className="muted">{info}</p> : null}
             <button type="submit" disabled={loading || biometricLoading}>
-              {loading ? "Checking..." : (authIntent === "signup" ? "Create Account" : "Sign In")}
+              {loading ? "Checking..." : (authIntent === "signup" ? "Create Account" : "Continue")}
             </button>
             {authIntent === "signin" ? (
-              <>
-                <button type="button" className="secondary-btn" disabled={loading || biometricLoading} onClick={loginWithFingerprint}>
-                  {biometricLoading ? "Working..." : "Use Face ID / Fingerprint"}
-                </button>
-                <button type="button" className="secondary-btn" disabled={loading || biometricLoading} onClick={enableFingerprint}>
-                  {biometricLoading ? "Working..." : "Set Up Face ID / Fingerprint"}
-                </button>
-              </>
+              <button type="button" className="secondary-btn" disabled={loading || biometricLoading} onClick={loginWithFingerprint}>
+                {biometricLoading ? "Working..." : "Use Face ID / Fingerprint"}
+              </button>
             ) : (
               <p className="muted">Sign up once with your university email, then use Sign In or biometric next time.</p>
             )}

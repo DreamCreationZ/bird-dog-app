@@ -10,6 +10,12 @@ type TravelLeg = {
   mode: string;
 };
 
+type PlanItem = {
+  at: string;
+  title: string;
+  detail: string;
+};
+
 type Traveler = {
   firstName: string;
   lastName: string;
@@ -23,6 +29,7 @@ type Traveler = {
 
 type BookingReviewDraft = {
   travelLegs: TravelLeg[];
+  planItems: PlanItem[];
   traveler: Traveler;
   teamName: string;
   tournamentName: string;
@@ -38,10 +45,11 @@ type BookingResult = {
 };
 
 const BOOKING_REVIEW_DRAFT_KEY = "bird_dog:booking_review_draft:v1";
+const BOOKING_SUMMARY_KEY = "bird_dog:booking_summary:v1";
 
-function readDraftFromSession(): BookingReviewDraft | null {
+function readDraftFromStorage(): BookingReviewDraft | null {
   try {
-    const raw = window.sessionStorage.getItem(BOOKING_REVIEW_DRAFT_KEY);
+    const raw = window.localStorage.getItem(BOOKING_REVIEW_DRAFT_KEY) || window.sessionStorage.getItem(BOOKING_REVIEW_DRAFT_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<BookingReviewDraft>;
     if (!Array.isArray(parsed.travelLegs) || !parsed.travelLegs.length) return null;
@@ -52,6 +60,13 @@ function readDraftFromSession(): BookingReviewDraft | null {
         to: String(leg?.to || "").trim(),
         mode: String(leg?.mode || "Flight").trim()
       })).filter((leg) => leg.from && leg.to),
+      planItems: Array.isArray(parsed.planItems)
+        ? parsed.planItems.map((item) => ({
+          at: String(item?.at || new Date().toISOString()),
+          title: String(item?.title || "Step"),
+          detail: String(item?.detail || "")
+        }))
+        : [],
       traveler: {
         firstName: String(parsed.traveler?.firstName || "Coach"),
         lastName: String(parsed.traveler?.lastName || "User"),
@@ -82,6 +97,16 @@ export default function BookingReviewPage() {
   const [returnTo, setReturnTo] = useState("/bird-dog?tab=schedule");
 
   const [draft, setDraft] = useState<BookingReviewDraft | null>(null);
+  const [editableLegs, setEditableLegs] = useState<TravelLeg[]>([]);
+  const [modifyMode, setModifyMode] = useState(false);
+  const [planApproved, setPlanApproved] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<"UPI" | "CARD">("UPI");
+  const [upiId, setUpiId] = useState("");
+  const [cardName, setCardName] = useState("");
+  const [cardNumber, setCardNumber] = useState("");
+  const [cardExpiry, setCardExpiry] = useState("");
+  const [cardCvv, setCardCvv] = useState("");
+
   const [loadingDraft, setLoadingDraft] = useState(true);
   const [reviewNote, setReviewNote] = useState("");
   const [results, setResults] = useState<BookingResult[]>([]);
@@ -101,22 +126,23 @@ export default function BookingReviewPage() {
   }, []);
 
   useEffect(() => {
-    const next = readDraftFromSession();
+    const next = readDraftFromStorage();
     setDraft(next);
+    setEditableLegs(next?.travelLegs || []);
     if (!next) {
-      setReviewNote("No approved recommendation draft found. Please open booking from My Schedule again.");
+      setReviewNote("No recommendation draft found. Open booking from My Schedule again.");
     }
     setLoadingDraft(false);
   }, []);
 
   async function runReview(quoteOnly: boolean) {
-    if (!draft) return;
+    if (!draft || !editableLegs.length) return;
     if (quoteOnly) {
       setQuoteLoading(true);
       setReviewNote("Fetching live quotes for all travel legs...");
     } else {
       setBookLoading(true);
-      setReviewNote("Booking all approved legs...");
+      setReviewNote("Booking flights/hotels for approved plan...");
     }
 
     try {
@@ -126,7 +152,7 @@ export default function BookingReviewPage() {
         body: JSON.stringify({
           teamName: draft.teamName,
           tournamentName: draft.tournamentName,
-          travelLegs: draft.travelLegs,
+          travelLegs: editableLegs,
           traveler: draft.traveler,
           quoteOnly
         })
@@ -144,9 +170,22 @@ export default function BookingReviewPage() {
       const skipped = nextResults.filter((item) => item.status === "skipped").length;
       if (quoteOnly) {
         setReviewNote(`Quote review ready. Quoted: ${quoted}, Failed: ${failed}, Skipped: ${skipped}.`);
-      } else {
-        setReviewNote(`Booking run complete. Booked: ${booked}, Quoted: ${quoted}, Failed: ${failed}, Skipped: ${skipped}.`);
+        return;
       }
+
+      const snapshot = {
+        savedAt: new Date().toISOString(),
+        paymentMethod,
+        booked,
+        quoted,
+        failed,
+        results: nextResults
+      };
+      window.localStorage.setItem(BOOKING_SUMMARY_KEY, JSON.stringify(snapshot));
+      setReviewNote(`Booking done. Booked: ${booked}, Quoted: ${quoted}, Failed: ${failed}. Returning to My Schedule...`);
+      window.setTimeout(() => {
+        router.push(returnTo);
+      }, 1200);
     } finally {
       setQuoteLoading(false);
       setBookLoading(false);
@@ -154,11 +193,37 @@ export default function BookingReviewPage() {
   }
 
   useEffect(() => {
-    if (!draft) return;
-    if (results.length) return;
+    if (!draft || results.length || !editableLegs.length) return;
     void runReview(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft]);
+
+  function validatePaymentInput() {
+    if (paymentMethod === "UPI") {
+      return /^[a-zA-Z0-9._-]{2,}@[a-zA-Z]{2,}$/.test(upiId.trim());
+    }
+    const normalizedCard = cardNumber.replace(/\D/g, "");
+    const normalizedCvv = cardCvv.replace(/\D/g, "");
+    return Boolean(cardName.trim()) && normalizedCard.length >= 12 && /^\d{2}\/\d{2}$/.test(cardExpiry) && (normalizedCvv.length === 3 || normalizedCvv.length === 4);
+  }
+
+  async function payAndBook() {
+    if (!draft || !editableLegs.length) {
+      setReviewNote("No travel legs available for booking.");
+      return;
+    }
+    if (!planApproved) {
+      setReviewNote("Approve this recommendation first, then continue to payment.");
+      return;
+    }
+    if (!validatePaymentInput()) {
+      setReviewNote(paymentMethod === "UPI"
+        ? "Enter a valid UPI ID (example: coach@okhdfcbank)."
+        : "Enter valid card holder, card number, expiry (MM/YY), and CVV.");
+      return;
+    }
+    await runReview(false);
+  }
 
   const summary = useMemo(() => ({
     booked: results.filter((item) => item.status === "booked").length,
@@ -169,10 +234,11 @@ export default function BookingReviewPage() {
   return (
     <main style={{ minHeight: "100vh", background: "linear-gradient(140deg, #140b15 0%, #08112a 45%, #050915 100%)", color: "#f5f8ff", padding: "18px 14px 30px" }}>
       <section style={{ maxWidth: 1140, margin: "0 auto", border: "1px solid rgba(214, 202, 170, 0.35)", borderRadius: 16, background: "linear-gradient(160deg, rgba(35, 20, 28, 0.62), rgba(8, 18, 38, 0.94))", padding: 16 }}>
-        <h1 style={{ margin: 0 }}>Book Approved Recommendation</h1>
+        <h1 style={{ margin: 0 }}>Book Recommendation</h1>
         <p style={{ marginTop: 8, color: "#b9c6d9" }}>
-          Review all legs at once, verify quotes, then book once for the whole plan.
+          Review all travel + hotel steps, modify if needed, approve, pay, and complete booking.
         </p>
+
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button
             type="button"
@@ -183,19 +249,30 @@ export default function BookingReviewPage() {
           </button>
           <button
             type="button"
-            onClick={() => void runReview(true)}
-            disabled={loadingDraft || !draft || quoteLoading}
-            style={{ borderRadius: 10, border: "1px solid rgba(120, 154, 202, 0.5)", background: "rgba(11, 27, 52, 0.8)", color: "#f5f8ff", padding: "10px 14px", fontWeight: 700, opacity: loadingDraft || !draft || quoteLoading ? 0.6 : 1 }}
+            onClick={() => setModifyMode((prev) => !prev)}
+            disabled={loadingDraft || !draft}
+            style={{ borderRadius: 10, border: "1px solid rgba(120, 154, 202, 0.5)", background: "rgba(11, 27, 52, 0.8)", color: "#f5f8ff", padding: "10px 14px", fontWeight: 700, opacity: loadingDraft || !draft ? 0.6 : 1 }}
           >
-            {quoteLoading ? "Loading Quotes..." : "Refresh All Quotes"}
+            {modifyMode ? "Stop Editing" : "Modify Itinerary"}
           </button>
           <button
             type="button"
-            onClick={() => void runReview(false)}
-            disabled={loadingDraft || !draft || bookLoading}
-            style={{ borderRadius: 10, border: "1px solid rgba(214, 162, 120, 0.7)", background: "linear-gradient(135deg, rgba(156, 69, 41, 0.45), rgba(11, 27, 52, 0.92))", color: "#f5f8ff", padding: "10px 14px", fontWeight: 800, opacity: loadingDraft || !draft || bookLoading ? 0.6 : 1 }}
+            onClick={() => void runReview(true)}
+            disabled={loadingDraft || !draft || quoteLoading || !editableLegs.length}
+            style={{ borderRadius: 10, border: "1px solid rgba(120, 154, 202, 0.5)", background: "rgba(11, 27, 52, 0.8)", color: "#f5f8ff", padding: "10px 14px", fontWeight: 700, opacity: loadingDraft || !draft || quoteLoading || !editableLegs.length ? 0.6 : 1 }}
           >
-            {bookLoading ? "Booking..." : "Book All Approved Legs"}
+            {quoteLoading ? "Loading Quotes..." : "Refresh Quotes"}
+          </button>
+          <button
+            type="button"
+            disabled={loadingDraft || !draft || !editableLegs.length}
+            onClick={() => {
+              setPlanApproved(true);
+              setReviewNote("Recommendation approved. Continue to payment.");
+            }}
+            style={{ borderRadius: 10, border: "1px solid rgba(111, 199, 149, 0.6)", background: "rgba(16, 53, 38, 0.9)", color: "#f5f8ff", padding: "10px 14px", fontWeight: 800, opacity: loadingDraft || !draft || !editableLegs.length ? 0.6 : 1 }}
+          >
+            Approve Plan
           </button>
         </div>
 
@@ -207,16 +284,120 @@ export default function BookingReviewPage() {
               Tournament: {draft.tournamentName || "-"} {draft.teamName ? `| Team: ${draft.teamName}` : ""}
             </p>
 
-            <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
-              {draft.travelLegs.map((leg, index) => (
-                <article key={`${leg.at}-${leg.from}-${leg.to}-${index}`} style={{ border: "1px solid rgba(126, 152, 195, 0.38)", borderRadius: 12, padding: 12, background: "rgba(5, 20, 43, 0.65)" }}>
-                  <p style={{ margin: 0, fontWeight: 800 }}>Leg {index + 1}: {leg.from} {"->"} {leg.to}</p>
-                  <p style={{ margin: "6px 0 0", color: "#b9c6d9" }}>
-                    {new Date(leg.at).toLocaleString()} | {leg.mode}
-                  </p>
-                </article>
-              ))}
-            </div>
+            {draft.planItems.length ? (
+              <section style={{ marginTop: 14 }}>
+                <h2 style={{ marginTop: 0, marginBottom: 8 }}>Recommendation Steps (Flight + Hotel)</h2>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {draft.planItems.map((item, idx) => (
+                    <article key={`${item.at}-${idx}`} style={{ border: "1px solid rgba(126, 152, 195, 0.38)", borderRadius: 12, padding: 12, background: "rgba(5, 20, 43, 0.65)" }}>
+                      <p style={{ margin: 0, fontWeight: 800 }}>{new Date(item.at).toLocaleString()} - {item.title}</p>
+                      <p style={{ margin: "6px 0 0", color: "#b9c6d9" }}>{item.detail}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            <section style={{ marginTop: 14 }}>
+              <h2 style={{ marginTop: 0, marginBottom: 8 }}>Travel Legs</h2>
+              <div style={{ display: "grid", gap: 10 }}>
+                {editableLegs.map((leg, index) => (
+                  <article key={`${leg.at}-${index}`} style={{ border: "1px solid rgba(126, 152, 195, 0.38)", borderRadius: 12, padding: 12, background: "rgba(5, 20, 43, 0.65)" }}>
+                    <p style={{ margin: 0, fontWeight: 800 }}>Leg {index + 1}</p>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginTop: 8 }}>
+                      <label>
+                        From
+                        <input
+                          value={leg.from}
+                          disabled={!modifyMode}
+                          onChange={(e) => setEditableLegs((prev) => prev.map((row, idx) => idx === index ? { ...row, from: e.target.value } : row))}
+                        />
+                      </label>
+                      <label>
+                        To
+                        <input
+                          value={leg.to}
+                          disabled={!modifyMode}
+                          onChange={(e) => setEditableLegs((prev) => prev.map((row, idx) => idx === index ? { ...row, to: e.target.value } : row))}
+                        />
+                      </label>
+                      <label>
+                        Mode
+                        <select
+                          value={leg.mode}
+                          disabled={!modifyMode}
+                          onChange={(e) => setEditableLegs((prev) => prev.map((row, idx) => idx === index ? { ...row, mode: e.target.value } : row))}
+                        >
+                          <option value="Flight">Flight</option>
+                          <option value="Flight / Bus">Flight / Bus</option>
+                          <option value="Bus">Bus</option>
+                          <option value="Hotel Transfer">Hotel Transfer</option>
+                        </select>
+                      </label>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            <section style={{ marginTop: 16, border: "1px solid rgba(126, 152, 195, 0.38)", borderRadius: 12, padding: 12, background: "rgba(5, 20, 43, 0.65)" }}>
+              <h2 style={{ marginTop: 0, marginBottom: 8 }}>Payment</h2>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod("UPI")}
+                  style={{ borderRadius: 10, border: "1px solid rgba(120, 154, 202, 0.5)", background: paymentMethod === "UPI" ? "rgba(20, 64, 42, 0.9)" : "rgba(11, 27, 52, 0.8)", color: "#f5f8ff", padding: "8px 12px", fontWeight: 700 }}
+                >
+                  UPI
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod("CARD")}
+                  style={{ borderRadius: 10, border: "1px solid rgba(120, 154, 202, 0.5)", background: paymentMethod === "CARD" ? "rgba(20, 64, 42, 0.9)" : "rgba(11, 27, 52, 0.8)", color: "#f5f8ff", padding: "8px 12px", fontWeight: 700 }}
+                >
+                  Credit / Debit Card
+                </button>
+              </div>
+
+              {paymentMethod === "UPI" ? (
+                <label>
+                  UPI ID
+                  <input
+                    value={upiId}
+                    onChange={(e) => setUpiId(e.target.value)}
+                    placeholder="coach@okhdfcbank"
+                  />
+                </label>
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+                  <label>
+                    Name on Card
+                    <input value={cardName} onChange={(e) => setCardName(e.target.value)} placeholder="Coach User" />
+                  </label>
+                  <label>
+                    Card Number
+                    <input value={cardNumber} onChange={(e) => setCardNumber(e.target.value)} placeholder="4111 1111 1111 1111" />
+                  </label>
+                  <label>
+                    Expiry (MM/YY)
+                    <input value={cardExpiry} onChange={(e) => setCardExpiry(e.target.value)} placeholder="12/28" />
+                  </label>
+                  <label>
+                    CVV
+                    <input value={cardCvv} onChange={(e) => setCardCvv(e.target.value)} placeholder="123" />
+                  </label>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => void payAndBook()}
+                disabled={loadingDraft || !draft || bookLoading || !editableLegs.length}
+                style={{ marginTop: 12, borderRadius: 10, border: "1px solid rgba(214, 162, 120, 0.7)", background: "linear-gradient(135deg, rgba(156, 69, 41, 0.45), rgba(11, 27, 52, 0.92))", color: "#f5f8ff", padding: "10px 14px", fontWeight: 800, opacity: loadingDraft || !draft || bookLoading || !editableLegs.length ? 0.6 : 1 }}
+              >
+                {bookLoading ? "Booking..." : "Pay & Book Now"}
+              </button>
+            </section>
           </>
         ) : null}
 

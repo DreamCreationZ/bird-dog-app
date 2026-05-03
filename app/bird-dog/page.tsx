@@ -83,6 +83,7 @@ type BookingReviewDraft = {
     to: string;
     mode: string;
   }>;
+  planItems: PlanItem[];
   traveler: {
     firstName: string;
     lastName: string;
@@ -95,6 +96,15 @@ type BookingReviewDraft = {
   };
   teamName: string;
   tournamentName: string;
+};
+
+type BookingSummarySnapshot = {
+  savedAt: string;
+  paymentMethod: "UPI" | "CARD";
+  booked: number;
+  quoted: number;
+  failed: number;
+  results: BookingQuoteResult[];
 };
 
 type DesiredPlayer = {
@@ -221,6 +231,7 @@ const COACH_LOCATION_SHARING_KEY = "bird_dog:coach_location_sharing";
 const LOCAL_SCHEDULE_FALLBACK_KEY = "bird_dog:local_schedule_fallback:v1";
 const PLAN_WORKFLOW_STATUS_KEY_PREFIX = "bird_dog:plan_workflow_status:v1";
 const BOOKING_REVIEW_DRAFT_KEY = "bird_dog:booking_review_draft:v1";
+const BOOKING_SUMMARY_KEY = "bird_dog:booking_summary:v1";
 const DEMO_FREE_TOURNAMENT_SLUGS = new Set(["2025-pg-16u-wwba-national-championship"]);
 
 function isTournamentLocked(item: InventoryTournament | null | undefined, options?: { forceUnlocked?: boolean }) {
@@ -826,6 +837,7 @@ export default function BirdDogPage() {
   const [myGeneratedPlan, setMyGeneratedPlan] = useState<PlanItem[]>([]);
   const [planWorkflowStatus, setPlanWorkflowStatus] = useState<PlanWorkflowStatus>("draft");
   const [planWorkflowNote, setPlanWorkflowNote] = useState("");
+  const [latestBookingSummary, setLatestBookingSummary] = useState<BookingSummarySnapshot | null>(null);
   const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false);
 
   const selectedTournament = useMemo(
@@ -885,6 +897,7 @@ export default function BirdDogPage() {
   const inlineTeamNoteMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const inlineTeamNoteMediaStreamRef = useRef<MediaStream | null>(null);
   const inlineTeamNoteAudioChunksRef = useRef<Blob[]>([]);
+  const inlineTeamNoteSpeechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
 
   function setAndPersistPlanWorkflowStatus(next: PlanWorkflowStatus) {
     setPlanWorkflowStatus(next);
@@ -895,6 +908,26 @@ export default function BirdDogPage() {
     }
     safeLocalSet(planWorkflowStatusKey, next);
   }
+
+  function refreshBookingSummaryFromStorage() {
+    const raw = safeLocalGet(BOOKING_SUMMARY_KEY);
+    const parsed = parseJsonSafe<BookingSummarySnapshot | null>(raw, null);
+    if (!parsed || !Array.isArray(parsed.results)) {
+      setLatestBookingSummary(null);
+      return;
+    }
+    setLatestBookingSummary(parsed);
+  }
+
+  useEffect(() => {
+    refreshBookingSummaryFromStorage();
+    if (typeof window === "undefined") return;
+    const onFocus = () => refreshBookingSummaryFromStorage();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
 
   useEffect(() => {
     if (!isAdminUser) return;
@@ -2392,8 +2425,8 @@ export default function BirdDogPage() {
         setAndPersistPlanWorkflowStatus("pending_approval");
         setPlanWorkflowNote(
           options?.autoRun
-            ? "Recommendation auto-created. Approve recommendation to continue booking."
-            : "Recommendation created. Approve recommendation to enable booking."
+            ? "Recommendation auto-created. Open booking to approve or modify travel options."
+            : "Recommendation created. Open booking to approve or modify travel options."
         );
       } else {
         setAndPersistPlanWorkflowStatus("draft");
@@ -2425,7 +2458,7 @@ export default function BirdDogPage() {
         setScheduleForm(fallbackForm);
         setMyGeneratedPlan(emergencyPlan);
         setAndPersistPlanWorkflowStatus("pending_approval");
-        setPlanWorkflowNote("Fallback recommendation generated. You can approve and proceed.");
+        setPlanWorkflowNote("Fallback recommendation generated. Open booking to approve or modify options.");
         await saveSchedule(emergencyPlan, desiredPlayers, fallbackForm);
         setPlayerSearchStatus("Fallback recommendation generated from selected players.");
         return;
@@ -2434,20 +2467,6 @@ export default function BirdDogPage() {
       setPlayerSearchStatus(msg);
       setPlanWorkflowNote(msg);
     }
-  }
-
-  function coachApproveRecommendation() {
-    if (!myGeneratedPlan.length) {
-      setPlanWorkflowNote("No recommendation available to approve.");
-      return;
-    }
-    if (isPlanInfeasible(myGeneratedPlan)) {
-      setPlanWorkflowNote("This recommendation includes an infeasible travel leg. Update players or source city before approval.");
-      return;
-    }
-    setAndPersistPlanWorkflowStatus("approved");
-    void saveSchedule(myGeneratedPlan, desiredPlayers);
-    setPlanWorkflowNote("Recommendation approved. Booking is now enabled.");
   }
 
   function extractTravelLegsFromPlan(plan: PlanItem[]) {
@@ -2467,10 +2486,6 @@ export default function BirdDogPage() {
         };
       })
       .filter((item): item is { at: string; from: string; to: string; mode: string } => Boolean(item));
-  }
-
-  function isPlanInfeasible(plan: PlanItem[]) {
-    return plan.some((item) => /not feasible within next/i.test(String(item.detail || "")));
   }
 
   function quoteDetailLine(quote: BookingQuoteResult) {
@@ -2554,10 +2569,6 @@ export default function BirdDogPage() {
   }
 
   async function bookApprovedRecommendation() {
-    if (planWorkflowStatus !== "approved") {
-      setPlanWorkflowNote("Approve recommendation first, then booking will start.");
-      return;
-    }
     const travelLegs = extractTravelLegsFromPlan(myGeneratedPlan);
     if (!travelLegs.length) {
       setPlanWorkflowNote("No valid travel legs found in this recommendation.");
@@ -2579,12 +2590,19 @@ export default function BirdDogPage() {
       teamName: selectedTournament?.name || "",
       tournamentName: selectedTournament?.name || tournamentViewTitle || "",
       travelLegs,
+      planItems: myGeneratedPlan,
       traveler
     };
     try {
-      window.sessionStorage.setItem(BOOKING_REVIEW_DRAFT_KEY, JSON.stringify(reviewDraft));
-      setPlanWorkflowNote("Opening booking review for all approved travel legs...");
-      router.push(`/bookings/review?returnTo=${encodeURIComponent("/bird-dog?tab=schedule")}`);
+      safeLocalSet(BOOKING_REVIEW_DRAFT_KEY, JSON.stringify(reviewDraft));
+      safeLocalRemove(BOOKING_SUMMARY_KEY);
+      setAndPersistPlanWorkflowStatus("pending_approval");
+      setPlanWorkflowNote("Opening booking review in a new tab...");
+      const url = `/bookings/review?returnTo=${encodeURIComponent("/bird-dog?tab=schedule")}`;
+      const popup = window.open(url, "_blank", "noopener,noreferrer");
+      if (!popup) {
+        router.push(url);
+      }
     } catch {
       setPlanWorkflowNote("Unable to open booking review. Please refresh the page and retry.");
     }
@@ -2966,8 +2984,37 @@ export default function BirdDogPage() {
       recorder.onerror = () => setInlineTeamNoteStatus("Recording failed. Please retry.");
       recorder.start(500);
       inlineTeamNoteMediaRecorderRef.current = recorder;
+      const ctor = (window as unknown as { SpeechRecognition?: BrowserSpeechConstructor; webkitSpeechRecognition?: BrowserSpeechConstructor }).SpeechRecognition
+        || (window as unknown as { webkitSpeechRecognition?: BrowserSpeechConstructor }).webkitSpeechRecognition;
+      if (ctor) {
+        try {
+          const recognition = new ctor();
+          recognition.lang = "en-US";
+          recognition.interimResults = true;
+          recognition.continuous = true;
+          recognition.onresult = (event) => {
+            let live = "";
+            for (let i = 0; i < event.results.length; i += 1) {
+              live += `${event.results[i][0].transcript} `;
+            }
+            setInlineTeamNoteText(live.trim());
+          };
+          recognition.onerror = () => {
+            setInlineTeamNoteStatus("Mic is recording, but speech-to-text is unavailable in this browser.");
+          };
+          recognition.onend = () => {
+            if (inlineTeamNoteSpeechRecognitionRef.current === recognition) {
+              inlineTeamNoteSpeechRecognitionRef.current = null;
+            }
+          };
+          recognition.start();
+          inlineTeamNoteSpeechRecognitionRef.current = recognition;
+        } catch {
+          // Continue with audio-only capture.
+        }
+      }
       setInlineTeamNoteRecorderState("recording");
-      setInlineTeamNoteStatus("Recording...");
+      setInlineTeamNoteStatus("Listening... tap Stop to finish.");
     } catch {
       setInlineTeamNoteStatus("Microphone permission denied or unavailable.");
     }
@@ -2995,16 +3042,23 @@ export default function BirdDogPage() {
     stream?.getTracks().forEach((track) => track.stop());
     inlineTeamNoteMediaStreamRef.current = null;
     inlineTeamNoteMediaRecorderRef.current = null;
+    inlineTeamNoteSpeechRecognitionRef.current?.stop();
+    inlineTeamNoteSpeechRecognitionRef.current = null;
     setInlineTeamNoteRecorderState("idle");
     const blob = await stoppedBlob;
     if (!blob || blob.size < 1024) {
-      setInlineTeamNoteStatus("No usable audio captured. Try again.");
+      if (inlineTeamNoteText.trim()) {
+        setInlineTeamNoteAudioUrl("");
+        setInlineTeamNoteStatus("Voice note captured. Tap Save.");
+      } else {
+        setInlineTeamNoteStatus("No usable audio captured. Try again.");
+      }
       return;
     }
     try {
       const audioDataUrl = await blobToDataUrl(blob);
       setInlineTeamNoteAudioUrl(audioDataUrl);
-      setInlineTeamNoteStatus("Audio captured. Click Save.");
+      setInlineTeamNoteStatus("Voice note captured with audio. Tap Save.");
     } catch {
       setInlineTeamNoteStatus("Could not process audio recording.");
     }
@@ -3014,7 +3068,7 @@ export default function BirdDogPage() {
     if (!inlineTeamNoteTarget) return;
     const cleanedText = inlineTeamNoteText.trim();
     if (!cleanedText && !inlineTeamNoteAudioUrl) {
-      setInlineTeamNoteStatus("Type a note or record audio before saving.");
+      setInlineTeamNoteStatus("Tap Speak Note, say your note, then Save.");
       return;
     }
     const draft: InlineTeamNoteDraft = {
@@ -3194,12 +3248,12 @@ export default function BirdDogPage() {
         Team: {inlineTeamNoteTarget.teamName} {inlineTeamNoteTarget.playerName ? `· Player: ${inlineTeamNoteTarget.playerName}` : ""}
       </p>
       <label>
-        Notes
+        Voice Note (optional quick edit)
         <textarea
           rows={4}
           value={inlineTeamNoteText}
           onChange={(event) => setInlineTeamNoteText(event.target.value)}
-          placeholder="Type your scouting note"
+          placeholder="Tap Speak Note and talk. Your words will appear here automatically."
         />
       </label>
       <div className="row wrap">
@@ -3214,7 +3268,7 @@ export default function BirdDogPage() {
             }
           }}
         >
-          {inlineTeamNoteRecorderState === "recording" ? "Stop Audio" : "Record Audio"}
+          {inlineTeamNoteRecorderState === "recording" ? "Stop" : "Speak Note"}
         </button>
         <button type="button" onClick={saveInlineTeamNote}>
           Save
@@ -3435,7 +3489,7 @@ export default function BirdDogPage() {
             : showNotes
               ? "Open team roster and schedule details."
               : showSchedule
-                ? "Auto-generate coach travel recommendation, verify, approve, and proceed to booking."
+                ? "Auto-generate coach travel recommendation, review/modify, and proceed to booking."
                 : showCoaches
                   ? "See coaches schedules from your university domain."
                   : "See favorite players with notes/audio, location, team, and tournament context."}
@@ -3600,25 +3654,40 @@ export default function BirdDogPage() {
               Auto Generate Recommendation
             </button>
             <button
-              className="secondary"
               type="button"
-              disabled={!myGeneratedPlan.length || isPlanInfeasible(myGeneratedPlan)}
-              onClick={coachApproveRecommendation}
-            >
-              Approve Recommendation
-            </button>
-            <button
-              type="button"
-              disabled={planWorkflowStatus !== "approved"}
+              disabled={!myGeneratedPlan.length}
               onClick={() => void bookApprovedRecommendation()}
             >
               Book Approved Recommendation
             </button>
           </div>
           <p className="muted" style={{ marginTop: 8 }}>
-            Workflow status: {planWorkflowStatus === "draft" ? "Draft" : planWorkflowStatus === "pending_approval" ? "Pending coach verification" : "Approved"}
+            Workflow status: {planWorkflowStatus === "draft" ? "Draft" : planWorkflowStatus === "pending_approval" ? "Ready for booking approval" : "Approved"}
           </p>
           {planWorkflowNote ? <p className="muted" style={{ marginTop: 4 }}>{planWorkflowNote}</p> : null}
+          {latestBookingSummary ? (
+            <div className="panel" style={{ marginTop: 10 }}>
+              <h3 style={{ marginTop: 0 }}>Latest Booking Summary</h3>
+              <p className="muted" style={{ marginTop: 4 }}>
+                {new Date(latestBookingSummary.savedAt).toLocaleString()} · Payment: {latestBookingSummary.paymentMethod} ·
+                {" "}Booked: {latestBookingSummary.booked} · Quoted: {latestBookingSummary.quoted} · Failed: {latestBookingSummary.failed}
+              </p>
+              {latestBookingSummary.results.length ? (
+                <div className="log-list" style={{ maxHeight: 220 }}>
+                  {latestBookingSummary.results.map((item, idx) => (
+                    <article className="log-card" key={`${item.provider || "provider"}-${idx}`}>
+                      <p>
+                        <strong>{item.provider || "Provider"}</strong> · {(item.status || "unknown").toUpperCase()}
+                        {item.price ? ` · ${item.price}` : ""}
+                      </p>
+                      <p>{item.leg?.from || "-"} {"->"} {item.leg?.to || "-"}</p>
+                      {item.detail ? <p>{item.detail}</p> : null}
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {myGeneratedPlan.length ? (
             <div className="panel" style={{ marginTop: 10 }}>
               <h3 style={{ marginTop: 0 }}>My Route Recommendations</h3>
