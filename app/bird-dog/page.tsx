@@ -63,6 +63,19 @@ type PlanItem = {
 
 type PlanWorkflowStatus = "draft" | "pending_approval" | "approved";
 
+type BookingQuoteResult = {
+  provider?: string;
+  status?: "booked" | "quoted" | "failed" | "skipped";
+  leg?: {
+    at?: string;
+    from?: string;
+    to?: string;
+    mode?: string;
+  };
+  detail?: string;
+  price?: string;
+};
+
 type BookingReviewDraft = {
   travelLegs: Array<{
     at: string;
@@ -2131,7 +2144,6 @@ export default function BirdDogPage() {
 
       const departIso = new Date(cursorMs).toISOString();
       const arriveMs = cursorMs + travelEstimate.minutes * 60 * 1000;
-      const arriveIso = new Date(arriveMs).toISOString();
       if (travelEstimate.minutes > MAX_FEASIBLE_TRAVEL_MINUTES) {
         const infeasibleDetail = [
           `${travelEstimate.mode} · ETA ${formatEta(travelEstimate.minutes)}`,
@@ -2157,18 +2169,37 @@ export default function BirdDogPage() {
         detail
       });
 
+      const airportTransferMinutes = travelEstimate.minutes >= 15 * 60
+        ? 75
+        : (travelEstimate.minutes >= 6 * 60 ? 45 : 20);
+      const transferAtMs = arriveMs + airportTransferMinutes * 60 * 1000;
+      travelPlan.push({
+        at: new Date(transferAtMs).toISOString(),
+        title: `Airport transfer at ${destinationLabel}`,
+        detail: airportTransferMinutes >= 45
+          ? `Pre-book cab from airport to hotel/venue (~${airportTransferMinutes} min).`
+          : `Take local cab/ride-share from airport to venue (~${airportTransferMinutes} min).`
+      });
+
+      let scoutAtMs = transferAtMs;
+      if (travelEstimate.minutes >= 15 * 60) {
+        travelPlan.push({
+          at: new Date(transferAtMs).toISOString(),
+          title: `Hotel rest window at ${destinationLabel}`,
+          detail: "Recommended rest buffer: 2-3 hours before scouting."
+        });
+        scoutAtMs += 180 * 60 * 1000;
+      }
+
       const playerList = stop.players.map((player) => `${player.name} (${player.team})`).join(", ");
       travelPlan.push({
-        at: arriveIso,
+        at: new Date(scoutAtMs).toISOString(),
         title: `Scout Players at ${destinationLabel}`,
         detail: `Best players: ${playerList}`
       });
       completedStops += 1;
 
-      const postArrivalBufferMinutes = travelEstimate.minutes >= 15 * 60
-        ? 180
-        : (travelEstimate.minutes >= 6 * 60 ? 90 : 30);
-      cursorMs = arriveMs + postArrivalBufferMinutes * 60 * 1000;
+      cursorMs = scoutAtMs + 30 * 60 * 1000;
       prevLabel = destinationLabel;
       prevPoint = stop.point || null;
     }
@@ -2237,7 +2268,11 @@ export default function BirdDogPage() {
       const hotelName = isFeasible
         ? (scheduleForm.hotelName.trim() || await suggestHotelForDestination(destination))
         : "";
-      const finalPlan = isFeasible ? withHotelReturnLeg(optimized.plan, hotelName) : [];
+      const basePlan = isFeasible
+        ? withHotelReturnLeg(optimized.plan, hotelName)
+        : optimized.plan;
+      const quotedPlan = await enrichPlanWithLiveQuotes(basePlan);
+      const finalPlan = quotedPlan.plan;
 
       const nextForm = {
         ...scheduleForm,
@@ -2262,14 +2297,14 @@ export default function BirdDogPage() {
         );
       } else {
         setAndPersistPlanWorkflowStatus("draft");
-        setPlanWorkflowNote("No schedules for scout user yet.");
+        setPlanWorkflowNote(optimized.blockedReason || "Recommendation generated, but this route is not feasible within the next 12 hours.");
       }
       await saveSchedule(finalPlan, desiredPlayers, nextForm);
       if (options?.keepActiveTab !== false) {
         setActiveTab("schedule");
       }
       if (!isFeasible) {
-        setPlayerSearchStatus("No schedules for scout user yet.");
+        setPlayerSearchStatus(`Recommendation generated with feasibility warning. ${optimized.blockedReason || "At least one leg is not feasible in the next 12 hours."}`);
       } else {
         const locationStatus = optimized.usedLiveLocation
           ? "Current location detected."
@@ -2277,7 +2312,7 @@ export default function BirdDogPage() {
         const unresolvedStatus = optimized.unresolvedStops
           ? ` ${optimized.unresolvedStops} destination(s) could not be geocoded; fallback travel estimates were used.`
           : "";
-        setPlayerSearchStatus(`Optimized route generated. ${locationStatus}${unresolvedStatus} Hotel recommendation added.`);
+        setPlayerSearchStatus(`Optimized route generated. ${locationStatus}${unresolvedStatus} Hotel recommendation added.${quotedPlan.quoteSummary ? ` ${quotedPlan.quoteSummary}` : ""}`);
       }
     } catch {
       const msg = "Route generation failed. Please allow location access and retry.";
@@ -2289,6 +2324,10 @@ export default function BirdDogPage() {
   function coachApproveRecommendation() {
     if (!myGeneratedPlan.length) {
       setPlanWorkflowNote("No recommendation available to approve.");
+      return;
+    }
+    if (isPlanInfeasible(myGeneratedPlan)) {
+      setPlanWorkflowNote("This recommendation includes an infeasible travel leg. Update players or source city before approval.");
       return;
     }
     setAndPersistPlanWorkflowStatus("approved");
@@ -2313,6 +2352,90 @@ export default function BirdDogPage() {
         };
       })
       .filter((item): item is { at: string; from: string; to: string; mode: string } => Boolean(item));
+  }
+
+  function isPlanInfeasible(plan: PlanItem[]) {
+    return plan.some((item) => /not feasible within next/i.test(String(item.detail || "")));
+  }
+
+  function quoteDetailLine(quote: BookingQuoteResult) {
+    if (quote.status === "quoted" || quote.status === "booked") {
+      const price = quote.price ? `Price ${quote.price}` : "Price not returned";
+      const detail = String(quote.detail || "").trim();
+      const provider = quote.provider ? ` via ${quote.provider}` : "";
+      return detail
+        ? `Live quote${provider}: ${price} · ${detail}`
+        : `Live quote${provider}: ${price}`;
+    }
+    if (quote.status === "failed") {
+      return `Live quote unavailable: ${String(quote.detail || "No offer found for this leg.")}`;
+    }
+    if (quote.status === "skipped") {
+      return `Live quote unavailable: ${String(quote.detail || "Flight provider is not configured.")}`;
+    }
+    return "";
+  }
+
+  async function enrichPlanWithLiveQuotes(plan: PlanItem[]) {
+    const travelLegs = extractTravelLegsFromPlan(plan);
+    if (!travelLegs.length) return { plan, quoteSummary: "" };
+
+    try {
+      const fallbackName = String(user?.name || "Coach User").trim();
+      const [firstName, ...rest] = fallbackName.split(/\s+/).filter(Boolean);
+      const traveler = {
+        firstName: firstName || "Coach",
+        lastName: rest.join(" ") || "User",
+        dateOfBirth: "1990-01-01",
+        gender: "UNSPECIFIED" as const,
+        email: String(user?.email || ""),
+        phone: "9999999999",
+        countryCallingCode: "1",
+        nationality: "US"
+      };
+
+      const quoteRes = await fetch("/api/bookings/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          quoteOnly: true,
+          teamName: "",
+          tournamentName: selectedTournament?.name || "",
+          traveler,
+          travelLegs
+        })
+      });
+      if (!quoteRes.ok) {
+        return { plan, quoteSummary: "Live quote provider unavailable right now. Showing route estimate." };
+      }
+      const quoteData = await quoteRes.json().catch(() => ({}));
+      const results = Array.isArray(quoteData?.results) ? quoteData.results as BookingQuoteResult[] : [];
+      if (!results.length) {
+        return { plan, quoteSummary: "No live quotes returned. Showing route estimate." };
+      }
+
+      let travelIdx = 0;
+      const nextPlan = plan.map((item) => {
+        if (!/^travel\s+\d+:/i.test(String(item.title || ""))) return item;
+        const quote = results[travelIdx++];
+        if (!quote) return item;
+        const line = quoteDetailLine(quote);
+        if (!line) return item;
+        return {
+          ...item,
+          detail: `${item.detail} · ${line}`
+        };
+      });
+
+      const quoted = results.filter((item) => item.status === "quoted" || item.status === "booked").length;
+      const failed = results.filter((item) => item.status === "failed").length;
+      if (quoted > 0) {
+        return { plan: nextPlan, quoteSummary: `Live quote check complete: ${quoted} leg(s) priced${failed ? `, ${failed} leg(s) unavailable` : ""}.` };
+      }
+      return { plan: nextPlan, quoteSummary: "Live quote check complete. Flight provider did not return a bookable fare for selected legs." };
+    } catch {
+      return { plan, quoteSummary: "Live quote check failed. Showing route estimate." };
+    }
   }
 
   async function bookApprovedRecommendation() {
@@ -3072,7 +3195,7 @@ export default function BirdDogPage() {
           <h2>Coach Schedule</h2>
           <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
             <p className="muted" style={{ margin: 0 }}>
-              Schedule is auto-created from selected players, coach location, and hotel recommendation.
+              Select best players and generate route recommendations with travel, transfer, and hotel guidance.
             </p>
             <button
               className="secondary"
@@ -3226,7 +3349,7 @@ export default function BirdDogPage() {
             <button
               className="secondary"
               type="button"
-              disabled={!myGeneratedPlan.length}
+              disabled={!myGeneratedPlan.length || isPlanInfeasible(myGeneratedPlan)}
               onClick={coachApproveRecommendation}
             >
               Approve Recommendation
@@ -3294,7 +3417,7 @@ export default function BirdDogPage() {
               </div>
             </>
           ) : (
-            <p className="muted">No schedules for scout user yet.</p>
+            <p className="muted">No coaches schedules yet.</p>
           )}
         </div>
       </section>

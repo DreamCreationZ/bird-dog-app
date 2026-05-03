@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
+    const isAdminUser = Boolean(session.isAdmin) || String(session.email || "").trim().toLowerCase() === "admin@apointscout.com";
     const unlocked = await listOrgUnlocks(session.orgId);
     const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
     const displayDate = seedMeta?.displayDate || "";
@@ -46,7 +47,7 @@ export async function POST(req: NextRequest) {
         displayDate
       })
     );
-    if (!previewUnlockAll && !isArchive && !unlocked.includes(inventorySlug)) {
+    if (!previewUnlockAll && !isAdminUser && !isArchive && !unlocked.includes(inventorySlug)) {
       return NextResponse.json({ error: "Tournament is locked for your organization." }, { status: 402 });
     }
 

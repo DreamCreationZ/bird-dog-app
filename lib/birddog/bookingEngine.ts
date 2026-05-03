@@ -263,6 +263,20 @@ async function bookViaAmadeus(leg: TravelLeg, traveler: TravelerProfile, quoteOn
 
     const selectedOffer = searchJson.data[0];
     const price = selectedOffer?.price?.total || "";
+    const itinerary = Array.isArray((selectedOffer as { itineraries?: Array<Record<string, unknown>> })?.itineraries)
+      ? ((selectedOffer as { itineraries?: Array<Record<string, unknown>> }).itineraries?.[0] || {})
+      : {};
+    const segments = Array.isArray((itinerary as { segments?: Array<Record<string, unknown>> })?.segments)
+      ? (((itinerary as { segments?: Array<Record<string, unknown>> }).segments) || [])
+      : [];
+    const firstSegment = segments[0] as { departure?: { at?: string } } | undefined;
+    const lastSegment = segments[segments.length - 1] as { arrival?: { at?: string } } | undefined;
+    const departAt = String(firstSegment?.departure?.at || "");
+    const arriveAt = String(lastSegment?.arrival?.at || "");
+    const stopCount = Math.max(0, segments.length - 1);
+    const timingSnippet = departAt && arriveAt
+      ? ` Depart ${departAt} · Arrive ${arriveAt}${stopCount ? ` · ${stopCount} stop(s)` : " · non-stop/short-connection route"}.`
+      : "";
 
     if (quoteOnly || !config.liveBookingEnabled || !travelerReady(traveler)) {
       return {
@@ -270,8 +284,8 @@ async function bookViaAmadeus(leg: TravelLeg, traveler: TravelerProfile, quoteOn
         status: "quoted",
         leg,
         detail: quoteOnly
-          ? `Quote found ${origin} -> ${destination}${price ? ` ($${price})` : ""}.`
-          : `Offer found ${origin} -> ${destination}${price ? ` ($${price})` : ""}. Airports mapped from trip locations. Enable AMADEUS_ENABLE_LIVE_BOOKING=true for ticketing.`,
+          ? `Quote found ${origin} -> ${destination}${price ? ` ($${price})` : ""}.${timingSnippet}`
+          : `Offer found ${origin} -> ${destination}${price ? ` ($${price})` : ""}.${timingSnippet} Airports mapped from trip locations. Enable AMADEUS_ENABLE_LIVE_BOOKING=true for ticketing.`,
         price
       };
     }
