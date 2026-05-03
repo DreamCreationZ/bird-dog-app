@@ -820,11 +820,11 @@ export default function BirdDogPage() {
   const [openError, setOpenError] = useState("");
   const [selectedInventorySlug, setSelectedInventorySlug] = useState("");
   const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes" | "coaches" | "bestPlayers">("tournaments");
-  const [inlineTeamNoteTarget, setInlineTeamNoteTarget] = useState<InlineTeamNoteTarget | null>(null);
-  const [inlineTeamNoteText, setInlineTeamNoteText] = useState("");
-  const [inlineTeamNoteAudioUrl, setInlineTeamNoteAudioUrl] = useState("");
-  const [inlineTeamNoteStatus, setInlineTeamNoteStatus] = useState("");
+  const [inlineTeamNoteDrafts, setInlineTeamNoteDrafts] = useState<Record<string, InlineTeamNoteDraft>>({});
+  const [inlineTeamNoteStatuses, setInlineTeamNoteStatuses] = useState<Record<string, string>>({});
   const [inlineTeamNoteRecorderState, setInlineTeamNoteRecorderState] = useState<RecorderState>("idle");
+  const [inlineTeamNoteRecordingKey, setInlineTeamNoteRecordingKey] = useState<string | null>(null);
+  const [inlineTeamNoteRecordingTarget, setInlineTeamNoteRecordingTarget] = useState<InlineTeamNoteTarget | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [queryStateApplied, setQueryStateApplied] = useState(false);
 
@@ -1874,25 +1874,55 @@ export default function BirdDogPage() {
     return `bird_dog:inline_team_note:v1:${scope.join(":")}`;
   }
 
-  function openInlineTeamNote(input: { team: TeamRef; player?: DesiredPlayer }) {
-    const target: InlineTeamNoteTarget = {
+  function inlineTeamNoteKey(target: InlineTeamNoteTarget) {
+    return target.selectionKey || target.playerId || `team:${target.teamId}`;
+  }
+
+  function inlineTeamNoteTargetFromInput(input: { team: TeamRef; player?: DesiredPlayer }) {
+    return {
       teamId: input.team.id,
       teamName: input.team.name,
       playerId: input.player?.playerId,
       playerName: input.player?.name,
       selectionKey: input.player ? desiredPlayerSelectionKey(input.player) : undefined
-    };
-    setInlineTeamNoteTarget(target);
+    } satisfies InlineTeamNoteTarget;
+  }
+
+  function readInlineTeamNoteDraft(target: InlineTeamNoteTarget): InlineTeamNoteDraft {
     const raw = safeLocalGet(inlineTeamNoteStorageKey(target));
     const parsed = parseJsonSafe<InlineTeamNoteDraft | null>(raw, null);
-    setInlineTeamNoteText(parsed?.text || "");
-    setInlineTeamNoteAudioUrl(parsed?.audioUrl || "");
-    setInlineTeamNoteStatus("");
-    if (typeof document !== "undefined") {
-      window.requestAnimationFrame(() => {
-        document.getElementById("inline-team-note-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
-    }
+    return {
+      text: parsed?.text || "",
+      audioUrl: parsed?.audioUrl || "",
+      updatedAt: parsed?.updatedAt || ""
+    };
+  }
+
+  function inlineTeamNoteDraftForTarget(target: InlineTeamNoteTarget) {
+    return inlineTeamNoteDrafts[inlineTeamNoteKey(target)] || readInlineTeamNoteDraft(target);
+  }
+
+  function updateInlineTeamNoteDraft(target: InlineTeamNoteTarget, patch: Partial<InlineTeamNoteDraft>) {
+    const key = inlineTeamNoteKey(target);
+    setInlineTeamNoteDrafts((prev) => {
+      const base = prev[key] || readInlineTeamNoteDraft(target);
+      const next = { ...base, ...patch };
+      return { ...prev, [key]: next };
+    });
+  }
+
+  function updateInlineTeamNoteStatus(target: InlineTeamNoteTarget, message: string) {
+    const key = inlineTeamNoteKey(target);
+    setInlineTeamNoteStatuses((prev) => ({ ...prev, [key]: message }));
+  }
+
+  function openInlineTeamNote(target: InlineTeamNoteTarget) {
+    const key = inlineTeamNoteKey(target);
+    setInlineTeamNoteDrafts((prev) => {
+      if (prev[key]) return prev;
+      return { ...prev, [key]: readInlineTeamNoteDraft(target) };
+    });
+    updateInlineTeamNoteStatus(target, "");
   }
 
   function viewTeamScheduleAndRoster(team: TeamRef, returnTab: "notes" | "schedule" = "notes") {
@@ -2995,12 +3025,15 @@ export default function BirdDogPage() {
     setTranscript("");
   }
 
-  async function startInlineTeamNoteRecording() {
-    if (!inlineTeamNoteTarget) {
-      setInlineTeamNoteStatus("Select a player card first.");
+  async function startInlineTeamNoteRecording(target: InlineTeamNoteTarget) {
+    const key = inlineTeamNoteKey(target);
+    if (inlineTeamNoteRecorderState === "recording") {
+      updateInlineTeamNoteStatus(target, "A recording is already in progress. Stop it first.");
       return;
     }
-    if (inlineTeamNoteRecorderState === "recording") return;
+    openInlineTeamNote(target);
+    setInlineTeamNoteRecordingKey(key);
+    setInlineTeamNoteRecordingTarget(target);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       inlineTeamNoteMediaStreamRef.current = stream;
@@ -3012,7 +3045,7 @@ export default function BirdDogPage() {
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) inlineTeamNoteAudioChunksRef.current.push(event.data);
       };
-      recorder.onerror = () => setInlineTeamNoteStatus("Recording failed. Please retry.");
+      recorder.onerror = () => updateInlineTeamNoteStatus(target, "Recording failed. Please retry.");
       recorder.start(500);
       inlineTeamNoteMediaRecorderRef.current = recorder;
       const ctor = (window as unknown as { SpeechRecognition?: BrowserSpeechConstructor; webkitSpeechRecognition?: BrowserSpeechConstructor }).SpeechRecognition
@@ -3028,10 +3061,10 @@ export default function BirdDogPage() {
             for (let i = 0; i < event.results.length; i += 1) {
               live += `${event.results[i][0].transcript} `;
             }
-            setInlineTeamNoteText(live.trim());
+            updateInlineTeamNoteDraft(target, { text: live.trim(), updatedAt: new Date().toISOString() });
           };
           recognition.onerror = () => {
-            setInlineTeamNoteStatus("Mic is recording, but speech-to-text is unavailable in this browser.");
+            updateInlineTeamNoteStatus(target, "Mic is recording, but speech-to-text is unavailable in this browser.");
           };
           recognition.onend = () => {
             if (inlineTeamNoteSpeechRecognitionRef.current === recognition) {
@@ -3045,18 +3078,23 @@ export default function BirdDogPage() {
         }
       }
       setInlineTeamNoteRecorderState("recording");
-      setInlineTeamNoteStatus("Listening... tap Stop to finish.");
+      updateInlineTeamNoteStatus(target, "Listening... tap Stop to finish.");
     } catch {
-      setInlineTeamNoteStatus("Microphone permission denied or unavailable.");
+      setInlineTeamNoteRecordingKey(null);
+      setInlineTeamNoteRecordingTarget(null);
+      updateInlineTeamNoteStatus(target, "Microphone permission denied or unavailable.");
     }
   }
 
   async function stopInlineTeamNoteRecording() {
     if (inlineTeamNoteRecorderState !== "recording") return;
+    const target = inlineTeamNoteRecordingTarget;
     const recorder = inlineTeamNoteMediaRecorderRef.current;
     const stream = inlineTeamNoteMediaStreamRef.current;
     if (!recorder) {
       setInlineTeamNoteRecorderState("idle");
+      setInlineTeamNoteRecordingKey(null);
+      setInlineTeamNoteRecordingTarget(null);
       return;
     }
     const stoppedBlob = new Promise<Blob | null>((resolve) => {
@@ -3076,51 +3114,56 @@ export default function BirdDogPage() {
     inlineTeamNoteSpeechRecognitionRef.current?.stop();
     inlineTeamNoteSpeechRecognitionRef.current = null;
     setInlineTeamNoteRecorderState("idle");
+    setInlineTeamNoteRecordingKey(null);
+    setInlineTeamNoteRecordingTarget(null);
     const blob = await stoppedBlob;
+    if (!target) return;
     if (!blob || blob.size < 1024) {
-      if (inlineTeamNoteText.trim()) {
-        setInlineTeamNoteAudioUrl("");
-        setInlineTeamNoteStatus("Voice note captured. Tap Save.");
+      const existingText = inlineTeamNoteDraftForTarget(target).text.trim();
+      if (existingText) {
+        updateInlineTeamNoteDraft(target, { audioUrl: "", updatedAt: new Date().toISOString() });
+        updateInlineTeamNoteStatus(target, "Voice note captured. Tap Save.");
       } else {
-        setInlineTeamNoteStatus("No usable audio captured. Try again.");
+        updateInlineTeamNoteStatus(target, "No usable audio captured. Try again.");
       }
       return;
     }
     try {
       const audioDataUrl = await blobToDataUrl(blob);
-      setInlineTeamNoteAudioUrl(audioDataUrl);
-      setInlineTeamNoteStatus("Voice note captured with audio. Tap Save.");
+      updateInlineTeamNoteDraft(target, { audioUrl: audioDataUrl, updatedAt: new Date().toISOString() });
+      updateInlineTeamNoteStatus(target, "Voice note captured with audio. Tap Save.");
     } catch {
-      setInlineTeamNoteStatus("Could not process audio recording.");
+      updateInlineTeamNoteStatus(target, "Could not process audio recording.");
     }
   }
 
-  function saveInlineTeamNote() {
-    if (!inlineTeamNoteTarget) return;
-    const cleanedText = inlineTeamNoteText.trim();
-    if (!cleanedText && !inlineTeamNoteAudioUrl) {
-      setInlineTeamNoteStatus("Tap Speak Note, say your note, then Save.");
+  function saveInlineTeamNote(target: InlineTeamNoteTarget) {
+    const draft = inlineTeamNoteDraftForTarget(target);
+    const cleanedText = draft.text.trim();
+    if (!cleanedText && !draft.audioUrl) {
+      updateInlineTeamNoteStatus(target, "Tap Speak, say your note, then Save.");
       return;
     }
-    const draft: InlineTeamNoteDraft = {
+    const nextDraft: InlineTeamNoteDraft = {
       text: cleanedText,
-      audioUrl: inlineTeamNoteAudioUrl,
+      audioUrl: draft.audioUrl,
       updatedAt: new Date().toISOString()
     };
-    safeLocalSet(inlineTeamNoteStorageKey(inlineTeamNoteTarget), JSON.stringify(draft));
+    updateInlineTeamNoteDraft(target, nextDraft);
+    safeLocalSet(inlineTeamNoteStorageKey(target), JSON.stringify(nextDraft));
     setNotes((prev) => [
       {
         id: crypto.randomUUID(),
-        gameId: selectedGameId || `team:${inlineTeamNoteTarget.teamId}`,
-        playerId: inlineTeamNoteTarget.playerId || undefined,
+        gameId: selectedGameId || `team:${target.teamId}`,
+        playerId: target.playerId || undefined,
         transcript: cleanedText || "(Audio note only)",
-        audioUrl: inlineTeamNoteAudioUrl || undefined,
+        audioUrl: draft.audioUrl || undefined,
         createdAt: new Date().toISOString(),
         synced: false
       },
       ...prev
     ]);
-    setInlineTeamNoteStatus("Saved.");
+    updateInlineTeamNoteStatus(target, "Saved.");
   }
 
   async function syncNow() {
@@ -3265,52 +3308,6 @@ export default function BirdDogPage() {
   const showNotes = activeTab === "notes";
   const showBestPlayers = activeTab === "bestPlayers";
   const showCoaches = activeTab === "coaches";
-  const inlineTeamNotePanel = inlineTeamNoteTarget ? (
-    <section className="panel" id="inline-team-note-panel">
-      <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
-        <h3 style={{ margin: 0 }}>
-          Team Notes + Audio: {inlineTeamNoteTarget.playerName || inlineTeamNoteTarget.teamName || "Selected Team"}
-        </h3>
-        <button className="secondary" type="button" onClick={() => setInlineTeamNoteTarget(null)}>
-          Close Notes + Audio
-        </button>
-      </div>
-      <p className="muted">
-        Team: {inlineTeamNoteTarget.teamName} {inlineTeamNoteTarget.playerName ? `· Player: ${inlineTeamNoteTarget.playerName}` : ""}
-      </p>
-      <label>
-        Voice Note (optional quick edit)
-        <textarea
-          rows={4}
-          value={inlineTeamNoteText}
-          onChange={(event) => setInlineTeamNoteText(event.target.value)}
-          placeholder="Tap Speak Note and talk. Your words will appear here automatically."
-        />
-      </label>
-      <div className="row wrap">
-        <button
-          className="secondary"
-          type="button"
-          onClick={() => {
-            if (inlineTeamNoteRecorderState === "recording") {
-              void stopInlineTeamNoteRecording();
-            } else {
-              void startInlineTeamNoteRecording();
-            }
-          }}
-        >
-          {inlineTeamNoteRecorderState === "recording" ? "Stop" : "Speak Note"}
-        </button>
-        <button type="button" onClick={saveInlineTeamNote}>
-          Save
-        </button>
-      </div>
-      {inlineTeamNoteAudioUrl ? (
-        <audio controls preload="none" src={inlineTeamNoteAudioUrl} style={{ width: "100%", marginTop: 8 }} />
-      ) : null}
-      {inlineTeamNoteStatus ? <p className="muted" style={{ marginTop: 8 }}>{inlineTeamNoteStatus}</p> : null}
-    </section>
-  ) : null;
 
   useEffect(() => {
     if (!user) return;
@@ -4032,25 +4029,69 @@ export default function BirdDogPage() {
                 const right = normalizeSmartSearch(player.team);
                 return left === right || left.includes(right) || right.includes(left);
               }) || null;
+              const selectionKey = desiredPlayerSelectionKey(player);
+              const noteTarget: InlineTeamNoteTarget = team
+                ? inlineTeamNoteTargetFromInput({ team, player })
+                : {
+                  teamId: `player:${selectionKey}`,
+                  teamName: player.team || "Unknown Team",
+                  playerId: player.playerId,
+                  playerName: player.name,
+                  selectionKey
+                };
+              const noteKey = inlineTeamNoteKey(noteTarget);
+              const noteDraft = inlineTeamNoteDrafts[noteKey] || readInlineTeamNoteDraft(noteTarget);
+              const noteStatus = inlineTeamNoteStatuses[noteKey] || "";
+              const recordingOnThisCard = inlineTeamNoteRecorderState === "recording" && inlineTeamNoteRecordingKey === noteKey;
+              const recordingOtherCard = inlineTeamNoteRecorderState === "recording" && inlineTeamNoteRecordingKey !== noteKey;
               return (
-                <article key={desiredPlayerSelectionKey(player)} className="log-card">
+                <article key={selectionKey} className="log-card">
                   <p><strong>{player.name}</strong></p>
                   <p>Location: {player.hometown || "Unknown"}</p>
                   <p>Team: {player.team}</p>
                   <p>Tournament: {selectedTournament?.name || tournamentViewTitle || "Not selected"}</p>
                   <p>Notes: {notesForPlayer.length} · Audio clips: {audioCount}</p>
+                  <label style={{ display: "block", marginTop: 8 }}>
+                    Note for {player.name}
+                    <textarea
+                      rows={3}
+                      value={noteDraft.text}
+                      onFocus={() => openInlineTeamNote(noteTarget)}
+                      onChange={(event) => {
+                        updateInlineTeamNoteDraft(noteTarget, { text: event.target.value, updatedAt: new Date().toISOString() });
+                        updateInlineTeamNoteStatus(noteTarget, "");
+                      }}
+                      placeholder="Tap Speak and talk, or type your player note here."
+                    />
+                  </label>
                   <div className="row wrap">
-                    {team ? (
-                      <button className="secondary" type="button" onClick={() => openInlineTeamNote({ team, player })}>
-                        Open Team Notes + Audio
-                      </button>
-                    ) : null}
+                    <button
+                      className="secondary"
+                      type="button"
+                      onClick={() => {
+                        if (recordingOnThisCard) {
+                          void stopInlineTeamNoteRecording();
+                        } else {
+                          void startInlineTeamNoteRecording(noteTarget);
+                        }
+                      }}
+                      disabled={recordingOtherCard}
+                    >
+                      {recordingOnThisCard ? "Stop" : "Speak"}
+                    </button>
+                    <button type="button" onClick={() => saveInlineTeamNote(noteTarget)}>
+                      Save
+                    </button>
                     {myCoachSchedule ? (
                       <button className="secondary" type="button" onClick={() => openScheduleView(myCoachSchedule, "notes")}>
                         View My Coach Notes
                       </button>
                     ) : null}
                   </div>
+                  {noteDraft.audioUrl ? (
+                    <audio controls preload="none" src={noteDraft.audioUrl} style={{ width: "100%", marginTop: 8 }} />
+                  ) : null}
+                  {noteStatus ? <p className="muted" style={{ marginTop: 8 }}>{noteStatus}</p> : null}
                 </article>
               );
             })}
@@ -4066,7 +4107,6 @@ export default function BirdDogPage() {
             Go To My Schedule
           </button>
         </div>
-        {inlineTeamNotePanel}
       </section>
       ) : null}
 
@@ -4241,7 +4281,6 @@ export default function BirdDogPage() {
               </table>
             </div>
           ) : <p className="muted">Participating teams appear after full tournament ingest.</p>}
-          {inlineTeamNotePanel}
         </div>
       </section>
       ) : null}
