@@ -11,6 +11,11 @@ function cleanText(input) {
     .trim();
 }
 
+function safeIso(value, fallbackIso) {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? fallbackIso : parsed.toISOString();
+}
+
 function toAbsolutePgUrl(href) {
   const value = String(href || "").trim();
   if (!value) return "";
@@ -54,6 +59,8 @@ function parseGames(html) {
   ];
   const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => m[1]);
   const games = [];
+  const baseDate = new Date().toISOString().slice(0, 10);
+  const fallbackIso = `${baseDate}T09:00:00.000Z`;
 
   for (const row of rows) {
     const cols = [...row.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((m) => cleanText(m[1]));
@@ -73,7 +80,7 @@ function parseGames(html) {
       id: `pg-game-${games.length + 1}`,
       field: fieldCol,
       fieldLocation: { x: games.length + 1, y: games.length + 1 },
-      startTime: new Date(`${new Date().toISOString().slice(0, 10)} ${timeCol}`).toISOString(),
+      startTime: safeIso(`${baseDate} ${timeCol}`, fallbackIso),
       homeTeam: homeTeam || "Team A",
       awayTeam: awayTeam || "Team B",
       players: []
