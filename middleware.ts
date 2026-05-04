@@ -24,11 +24,9 @@ export function middleware(req: NextRequest) {
   const hasUsableSession = isNonExpiredToken(token);
 
   if (STALE_BIRD_DOG_CHUNKS.has(path)) {
-    const recoverTo = req.nextUrl.clone();
-    recoverTo.pathname = "/login";
-    recoverTo.searchParams.set("_chunkRecover", String(Date.now()));
+    const recoverTo = `/login?_chunkRecover=${Date.now()}`;
     return new NextResponse(
-      `window.location.replace(${JSON.stringify(recoverTo.toString())});`,
+      `window.location.replace(${JSON.stringify(recoverTo)});`,
       {
         status: 200,
         headers: {
