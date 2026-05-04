@@ -14,6 +14,19 @@ git pull --ff-only origin "${BRANCH}"
 npm ci
 npm run build
 
+# Legacy chunk recovery:
+# Some users can retain an old runtime that requests a removed bird-dog chunk.
+# Provide a tiny compatibility shim so the old request triggers a hard refresh
+# to the latest app instead of showing a fatal chunk-load error screen.
+LEGACY_BIRD_DOG_CHUNK=".next/static/chunks/app/bird-dog/page-3da0868d4720a619.js"
+mkdir -p "$(dirname "$LEGACY_BIRD_DOG_CHUNK")"
+cat > "$LEGACY_BIRD_DOG_CHUNK" <<'EOF'
+try {
+  window.location.replace("/login?_chunkRecover=" + Date.now());
+} catch (_) {}
+(self.webpackChunk_N_E = self.webpackChunk_N_E || []).push([[935], {}]);
+EOF
+
 set -a
 source /etc/bird-dog/.env.production
 set +a
