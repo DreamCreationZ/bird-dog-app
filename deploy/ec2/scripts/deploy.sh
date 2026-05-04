@@ -33,8 +33,10 @@ set +a
 
 PM2_RUNNER="${PM2_RUNNER:-ec2-user}"
 if id "$PM2_RUNNER" >/dev/null 2>&1; then
-  sudo -u "$PM2_RUNNER" pm2 startOrReload deploy/ec2/ecosystem.config.cjs --update-env
-  sudo -u "$PM2_RUNNER" pm2 save
+  # Preserve loaded /etc/bird-dog env vars when switching user, so worker/web
+  # processes always receive Supabase/Stripe/runtime credentials.
+  sudo -E -u "$PM2_RUNNER" pm2 startOrReload deploy/ec2/ecosystem.config.cjs --update-env
+  sudo -E -u "$PM2_RUNNER" pm2 save
 else
   pm2 startOrReload deploy/ec2/ecosystem.config.cjs --update-env
   pm2 save

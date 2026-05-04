@@ -29,6 +29,7 @@ module.exports = {
       script: "npm",
       args: "run start",
       env: {
+        ...process.env,
         ...fileEnv,
         NODE_ENV: "production",
         PORT: "3000"
@@ -40,6 +41,7 @@ module.exports = {
       script: "npm",
       args: "run worker:harvest",
       env: {
+        ...process.env,
         ...fileEnv,
         NODE_ENV: "production"
       }
