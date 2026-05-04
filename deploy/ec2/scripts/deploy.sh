@@ -30,8 +30,15 @@ EOF
 set -a
 source /etc/bird-dog/.env.production
 set +a
-pm2 startOrReload deploy/ec2/ecosystem.config.cjs --update-env
-pm2 save
+
+PM2_RUNNER="${PM2_RUNNER:-ec2-user}"
+if id "$PM2_RUNNER" >/dev/null 2>&1; then
+  sudo -u "$PM2_RUNNER" pm2 startOrReload deploy/ec2/ecosystem.config.cjs --update-env
+  sudo -u "$PM2_RUNNER" pm2 save
+else
+  pm2 startOrReload deploy/ec2/ecosystem.config.cjs --update-env
+  pm2 save
+fi
 
 curl -fsS http://127.0.0.1:3000/api/health >/dev/null
 echo "Deploy complete and health check passed."
