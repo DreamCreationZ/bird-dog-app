@@ -62,6 +62,13 @@ cd /Users/swati/Documents/bird-dog-app
 npm run worker:harvest
 ```
 
+Continuous sync is enabled by default in the worker. It auto-queues background refresh jobs on an interval so tournament/roster data stays current from Perfect Game.
+Key env controls:
+- `HARVEST_AUTO_SYNC_ENABLED=true`
+- `HARVEST_AUTO_SYNC_INTERVAL_SECONDS=300`
+- `HARVEST_AUTO_SYNC_SCOPE=all` (`unlocked` also supported)
+- `HARVEST_AUTO_SYNC_COMPANIES=PG`
+
 ## Stripe unlock flow setup
 
 1. Set these env vars:
