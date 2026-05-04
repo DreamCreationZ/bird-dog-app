@@ -205,37 +205,42 @@ function parseParticipatingTeams(html: string) {
     "teams",
     "events"
   ];
-  const looksLikeFromCell = (value: string) => /^[A-Za-z .'-]+,\s*[A-Z]{2}$/.test(value.trim());
   const tableHtml = getParticipatingTeamsTableHtml(html);
   const rows = [...tableHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => m[1]);
+  const seen = new Set<string>();
   for (const row of rows) {
-    const colsRaw = [...row.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((m) => m[1]);
-    const cols = colsRaw.map((cell) => cleanText(cell));
-    if (cols.length < 3) continue;
-    const teamIndex = cols.findIndex((c) => /(u|prime|tigers|scout|baseball|club|elite|stars|sparks|lions|heat|hawks|national|mafia|prospects)/i.test(c));
-    const teamCol = teamIndex >= 0 ? cols[teamIndex] : "";
-    if (!teamCol) continue;
-    const fromCol = cols[cols.length - 1];
-    if (!fromCol || /^from$/i.test(fromCol)) continue;
-    const loweredRow = `${teamCol} ${fromCol}`.toLowerCase();
+    const linkMatch = row.match(/id=["'][^"']*_hlTeams["'][^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i)
+      || row.match(/href=["']([^"']*Tournaments\/Teams\/Default\.aspx\?team=\d+[^"']*)["'][^>]*>([\s\S]*?)<\/a>/i);
+    if (!linkMatch) continue;
+
+    const href = toAbsolutePgUrl(linkMatch[1]);
+    const teamLabel = cleanText(linkMatch[2]);
+    if (!teamLabel || /^team$/i.test(teamLabel)) continue;
+
+    const fromCol = cleanText(row.match(/id=["'][^"']*_lblCity["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
+    const loweredRow = `${teamLabel} ${fromCol}`.toLowerCase();
     if (blockedTokens.some((token) => loweredRow.includes(token))) continue;
-    if (!looksLikeFromCell(fromCol)) continue;
-    const normalized = teamCol.replace(/\(\d+-\d+-\d+.*?\)/g, "").trim();
-    const record = (teamCol.match(/\(([^)]+)\)/)?.[1] || "").trim();
+
+    const normalized = teamLabel.replace(/\(\d+-\d+-\d+.*?\)/g, "").trim();
+    const record = cleanText(row.match(/id=["'][^"']*_lblwlt["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] || "")
+      .replace(/^\(|\)$/g, "")
+      .trim();
     if (!normalized || normalized.length < 3) continue;
-    const hrefMatch = colsRaw[teamIndex >= 0 ? teamIndex : 0]?.match(/href=["']([^"']+)["']/i);
-    const href = hrefMatch?.[1] ? toAbsolutePgUrl(hrefMatch[1]) : null;
+
     const teamNum = href ? (href.match(/[?&]team=(\d+)/i)?.[1] || "") : "";
     const externalId = teamNum ? `pg-team-${teamNum}` : `pg-team-${teams.length + 1}`;
-    if (!teams.find((t) => t.name === normalized && t.from === fromCol)) {
-      teams.push({
-        id: externalId,
-        name: normalized,
-        from: fromCol,
-        record,
-        href
-      });
-    }
+
+    const dedupeKey = `${externalId}:${normalized.toLowerCase()}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    teams.push({
+      id: externalId,
+      name: normalized,
+      from: fromCol || "-",
+      record,
+      href
+    });
   }
   return teams;
 }
