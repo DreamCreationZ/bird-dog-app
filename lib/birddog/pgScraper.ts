@@ -237,7 +237,7 @@ function parseParticipatingTeams(html: string) {
       });
     }
   }
-  return teams.slice(0, 120);
+  return teams;
 }
 
 function gamesFromTeams(teams: ParsedTeam[], date: string): Tournament["games"] {

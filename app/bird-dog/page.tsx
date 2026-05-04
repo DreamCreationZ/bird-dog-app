@@ -2193,7 +2193,7 @@ export default function BirdDogPage() {
       if (quickRows.length) {
         const fast = quickRows
           .filter((row) => {
-            const blob = normalizeSmartSearch(`${row.name} ${row.hometown || ""} ${row.teamName}`);
+            const blob = normalizeSmartSearch(row.name);
             return queryTokens.every((token) => blob.includes(token));
           })
           .map((row) => ({
@@ -2205,7 +2205,7 @@ export default function BirdDogPage() {
             teamName: row.teamName
           }))
           .sort((a, b) => a.name.localeCompare(b.name) || a.teamName.localeCompare(b.teamName))
-          .slice(0, 120);
+          .slice(0, 300);
         setPlayerSearchResults(fast);
         setPlayerSearchStatus(
           fast.length
@@ -2216,7 +2216,7 @@ export default function BirdDogPage() {
       }
 
       const matches = new Map<string, SmartPlayerResult>();
-      const scanList = teams.slice(0, 80);
+      const scanList = teams;
       const chunkSize = 20;
 
       for (let start = 0; start < scanList.length; start += chunkSize) {
@@ -2234,7 +2234,7 @@ export default function BirdDogPage() {
               teamName: team.name
             });
 
-            const blob = normalizeSmartSearch(`${row.name} ${row.hometown || ""} ${team.name}`);
+            const blob = normalizeSmartSearch(row.name);
             if (!queryTokens.every((token) => blob.includes(token))) return;
             const key = `${team.id}::${normalizedName}::${row.no || ""}`;
             if (matches.has(key)) return;
@@ -2251,7 +2251,7 @@ export default function BirdDogPage() {
 
         const scanned = Math.min(start + chunk.length, scanList.length);
         setPlayerSearchStatus(`Deep scan ${scanned}/${scanList.length} teams...`);
-        if (matches.size >= 120 && scanned >= 20) break;
+        if (matches.size >= 300 && scanned >= 20) break;
       }
 
       tournamentPlayerIndexRef.current = Array.from(deepIndexMap.values());
@@ -2259,12 +2259,12 @@ export default function BirdDogPage() {
 
       const result = Array.from(matches.values())
         .sort((a, b) => a.name.localeCompare(b.name) || a.teamName.localeCompare(b.teamName))
-        .slice(0, 120);
+        .slice(0, 300);
       setPlayerSearchResults(result);
       setPlayerSearchStatus(
         result.length
           ? `Found ${result.length} players. Select players and click Generate My Schedule.`
-          : "No player match found. Try another name, hometown, or team keyword."
+          : "No player match found. Try another player name."
       );
     } finally {
       setPlayerSearchLoading(false);
@@ -3389,9 +3389,7 @@ export default function BirdDogPage() {
     const query = teamsSearchQuery.trim().toLowerCase();
     const teams = selectedTournament?.teams || [];
     if (!query) return teams;
-    return teams.filter((team) =>
-      `${team.name} ${team.from || ""} ${team.record || ""}`.toLowerCase().includes(query)
-    );
+    return teams.filter((team) => team.name.toLowerCase().includes(query));
   }, [selectedTournament?.teams, teamsSearchQuery]);
   const filteredTournamentInventory = useMemo(() => {
     const query = tournamentSearchQuery.trim().toLowerCase();
@@ -4025,13 +4023,13 @@ export default function BirdDogPage() {
             <input
               value={teamsSearchQuery}
               onChange={(e) => setTeamsSearchQuery(e.target.value)}
-              placeholder="Search by team, city, or record"
+              placeholder="Search by team name"
             />
           </label>
           <div className="panel" style={{ marginTop: 10 }}>
             <h3 style={{ marginTop: 0 }}>Coach Player Search (Tournament-Wide)</h3>
             <p className="muted" style={{ marginTop: 4 }}>
-              Search player name, hometown, or team. Select players and generate schedule from this same page.
+              Search player name only. Select players and generate schedule from this same page.
             </p>
             <div className="row wrap" style={{ alignItems: "end" }}>
               <label style={{ flex: "1 1 380px" }}>
@@ -4039,7 +4037,7 @@ export default function BirdDogPage() {
                 <input
                   value={playerSearchQuery}
                   onChange={(e) => setPlayerSearchQuery(e.target.value)}
-                  placeholder="Example: max johnson / miami / wall nj"
+                  placeholder="Example: max johnson"
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
                       event.preventDefault();
@@ -4072,7 +4070,6 @@ export default function BirdDogPage() {
                     <tr>
                       <th>Select</th>
                       <th>Player</th>
-                      <th>Hometown</th>
                       <th>Team</th>
                     </tr>
                   </thead>
@@ -4087,7 +4084,6 @@ export default function BirdDogPage() {
                           />
                         </td>
                         <td>{item.name}</td>
-                        <td>{item.hometown || "-"}</td>
                         <td>{item.teamName}</td>
                       </tr>
                     ))}
@@ -4096,9 +4092,28 @@ export default function BirdDogPage() {
               </div>
             ) : null}
             {desiredPlayers.length ? (
-              <p className="muted" style={{ marginTop: 8 }}>
-                Selected players: {desiredPlayers.length}
-              </p>
+              <div style={{ marginTop: 8 }}>
+                <p className="muted" style={{ marginTop: 0 }}>Selected players: {desiredPlayers.length}</p>
+                <div className="table-wrap" style={{ marginTop: 6 }}>
+                  <table className="roster-table">
+                    <thead>
+                      <tr>
+                        <th>Player</th>
+                        <th>Team</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {desiredPlayers.map((player) => (
+                        <tr key={player.selectionKey}>
+                          <td>{player.name}</td>
+                          <td>{player.team}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="muted" style={{ marginTop: 6 }}>Uncheck any player above to go back and adjust before generating schedule.</p>
+              </div>
             ) : null}
           </div>
           {selectedTournament?.teams?.length ? (
