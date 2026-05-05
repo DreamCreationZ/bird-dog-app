@@ -59,6 +59,11 @@
   border-radius: 12px;
 }
 
+.bd-root .menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
 .bd-root .menu-dropdown {
   position: absolute;
   top: 46px;

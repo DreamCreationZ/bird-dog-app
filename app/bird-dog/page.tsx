@@ -886,6 +886,7 @@ export default function BirdDogPage() {
   const [inlineTeamNoteRecordingKey, setInlineTeamNoteRecordingKey] = useState<string | null>(null);
   const [inlineTeamNoteRecordingTarget, setInlineTeamNoteRecordingTarget] = useState<InlineTeamNoteTarget | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuContainerRef = useRef<HTMLDivElement | null>(null);
   const [queryStateApplied, setQueryStateApplied] = useState(false);
 
   const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
@@ -3634,6 +3635,25 @@ export default function BirdDogPage() {
       setViewingSchedule(null);
     }
   }, [shareableSchedules, viewingSchedule]);
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (!menuContainerRef.current?.contains(target)) {
+        setMenuOpen(false);
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [menuOpen]);
   const canGoBackInApp = Boolean(viewingSchedule) || !showTournaments;
   function goToTournamentDashboard() {
     setActiveTab("tournaments");
@@ -3690,75 +3710,77 @@ export default function BirdDogPage() {
             Back
           </button>
         ) : null}
-        <button
-          className="secondary menu-trigger"
-          type="button"
-          aria-label="Open navigation menu"
-          onClick={() => setMenuOpen((prev) => !prev)}
-        >
-          ☰
-        </button>
-        {menuOpen ? (
-          <div className="menu-dropdown">
-            <div className="menu-brand">
-              <img src="/branding/a-point-scout-icon.svg" alt="APOINT SCOUT" />
-              <div className="menu-brand-copy">
-                <p>APOINT SCOUT</p>
-                <p>{orgDisplayName}</p>
+        <div className="menu-anchor" ref={menuContainerRef}>
+          <button
+            className="secondary menu-trigger"
+            type="button"
+            aria-label="Open navigation menu"
+            onClick={() => setMenuOpen((prev) => !prev)}
+          >
+            ☰
+          </button>
+          {menuOpen ? (
+            <div className="menu-dropdown">
+              <div className="menu-brand">
+                <img src="/branding/a-point-scout-icon.svg" alt="APOINT SCOUT" />
+                <div className="menu-brand-copy">
+                  <p>APOINT SCOUT</p>
+                  <p>{orgDisplayName}</p>
+                </div>
               </div>
+              <button
+                type="button"
+                className={activeTab === "tournaments" ? "active" : ""}
+                onClick={() => {
+                  setActiveTab("tournaments");
+                  setMenuOpen(false);
+                }}
+              >
+                Tournament Dashboard
+              </button>
+              <button
+                type="button"
+                className={activeTab === "schedule" ? "active" : ""}
+                onClick={() => {
+                  setActiveTab("schedule");
+                  setMenuOpen(false);
+                  void fetchSchedules();
+                }}
+              >
+                Schedules
+              </button>
+              <button
+                type="button"
+                className={activeTab === "bestPlayers" ? "active" : ""}
+                onClick={() => {
+                  setActiveTab("bestPlayers");
+                  setMenuOpen(false);
+                }}
+              >
+                My Players
+              </button>
+              <button
+                type="button"
+                className={activeTab === "profile" ? "active" : ""}
+                onClick={() => {
+                  setActiveTab("profile");
+                  setMenuOpen(false);
+                }}
+              >
+                My Profile
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  void logout();
+                }}
+              >
+                Log Out
+              </button>
             </div>
-            <button
-              type="button"
-              className={activeTab === "tournaments" ? "active" : ""}
-              onClick={() => {
-                setActiveTab("tournaments");
-                setMenuOpen(false);
-              }}
-            >
-              Tournament Dashboard
-            </button>
-            <button
-              type="button"
-              className={activeTab === "schedule" ? "active" : ""}
-              onClick={() => {
-                setActiveTab("schedule");
-                setMenuOpen(false);
-                void fetchSchedules();
-              }}
-            >
-              Schedules
-            </button>
-            <button
-              type="button"
-              className={activeTab === "bestPlayers" ? "active" : ""}
-              onClick={() => {
-                setActiveTab("bestPlayers");
-                setMenuOpen(false);
-              }}
-            >
-              My Players
-            </button>
-            <button
-              type="button"
-              className={activeTab === "profile" ? "active" : ""}
-              onClick={() => {
-                setActiveTab("profile");
-                setMenuOpen(false);
-              }}
-            >
-              My Profile
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMenuOpen(false);
-                void logout();
-              }}
-            >
-              Log Out
-            </button>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
       </section>
 
       {showSchedule ? (
