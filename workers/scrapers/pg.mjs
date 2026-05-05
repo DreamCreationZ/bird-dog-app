@@ -157,6 +157,11 @@ function parseParticipatingTeams(html) {
 
 function gamesFromTeams(teams, date) {
   const out = [];
+  const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))
+    ? String(date)
+    : new Date().toISOString().slice(0, 10);
+  const fallbackIso = `${safeDate}T09:00:00.000Z`;
+
   for (let i = 0; i < teams.length; i += 2) {
     const home = teams[i];
     const away = teams[i + 1];
@@ -166,7 +171,7 @@ function gamesFromTeams(teams, date) {
       id: `pg-team-game-${out.length + 1}`,
       field: `Field ${out.length + 1}`,
       fieldLocation: { x: out.length + 1, y: out.length + 1 },
-      startTime: new Date(`${date}T${String(hour).padStart(2, "0")}:00:00Z`).toISOString(),
+      startTime: safeIso(`${safeDate}T${String(hour).padStart(2, "0")}:00:00Z`, fallbackIso),
       homeTeam: home.name,
       awayTeam: away.name,
       players: []
