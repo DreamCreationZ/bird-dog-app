@@ -371,6 +371,39 @@ function localScheduleFallbackKey(user: SessionUser | null) {
   return `${LOCAL_SCHEDULE_FALLBACK_KEY}:${user.orgId}:${user.userId}`;
 }
 
+function normalizeStorageScope(value: string) {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "na";
+}
+
+function rosterCartStorageKey(input: { inventorySlug: string; tournamentScope: string }) {
+  const inventoryScope = normalizeStorageScope(input.inventorySlug || "inventory");
+  const tournamentScope = normalizeStorageScope(input.tournamentScope || "tournament");
+  return `bird_dog:roster_cart:v1:${inventoryScope}:${tournamentScope}`;
+}
+
+function readRosterCartStorage(key: string) {
+  const raw = safeLocalGet(key);
+  const parsed = parseJsonSafe<Array<Record<string, unknown>>>(raw, []);
+  if (!Array.isArray(parsed)) return [] as DesiredPlayer[];
+  return parsed
+    .map((item) => ({
+      playerId: String(item?.playerId || ""),
+      selectionKey: item?.selectionKey ? String(item.selectionKey) : undefined,
+      name: String(item?.name || ""),
+      team: String(item?.team || ""),
+      hometown: item?.hometown ? String(item.hometown) : undefined
+    }))
+    .filter((item) => item.playerId && item.name && item.team);
+}
+
+function writeRosterCartStorage(key: string, rows: DesiredPlayer[]) {
+  safeLocalSet(key, JSON.stringify(rows));
+}
+
 function splitNameParts(name: string) {
   const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
   if (!parts.length) {
@@ -882,7 +915,9 @@ export default function BirdDogPage() {
   const [playerSearchResults, setPlayerSearchResults] = useState<SmartPlayerResult[]>([]);
   const [playerSearchLoading, setPlayerSearchLoading] = useState(false);
   const [playerSearchStatus, setPlayerSearchStatus] = useState("");
+  const [playerSearchCanDeepScan, setPlayerSearchCanDeepScan] = useState(false);
   const [desiredPlayers, setDesiredPlayers] = useState<DesiredPlayer[]>([]);
+  const [teamRosterCartPlayers, setTeamRosterCartPlayers] = useState<DesiredPlayer[]>([]);
   const [desiredPlayerId, setDesiredPlayerId] = useState("");
   const [myGeneratedPlan, setMyGeneratedPlan] = useState<PlanItem[]>([]);
   const [planWorkflowStatus, setPlanWorkflowStatus] = useState<PlanWorkflowStatus>("draft");
@@ -925,6 +960,14 @@ export default function BirdDogPage() {
     const scopeTournament = selectedTournamentId || "tournament";
     return `${PLAN_WORKFLOW_STATUS_KEY_PREFIX}:${user.orgId}:${user.userId}:${scopeSlug}:${scopeTournament}`;
   }, [selectedInventorySlug, selectedTournamentId, user]);
+  const teamRosterCartStorageKey = useMemo(
+    () =>
+      rosterCartStorageKey({
+        inventorySlug: selectedInventorySlug || "inventory",
+        tournamentScope: selectedTournamentId || selectedTournament?.name || "tournament"
+      }),
+    [selectedInventorySlug, selectedTournament?.name, selectedTournamentId]
+  );
 
   const games = selectedTournament?.games || [];
   const players = useMemo(() => uniquePlayers(games), [games]);
@@ -1195,6 +1238,18 @@ export default function BirdDogPage() {
     tournamentPlayerIndexKeyRef.current = "";
     tournamentPlayerIndexLoadingRef.current = null;
   }, [selectedTournamentId, selectedInventorySlug]);
+
+  useEffect(() => {
+    setTeamRosterCartPlayers(readRosterCartStorage(teamRosterCartStorageKey));
+  }, [teamRosterCartStorageKey]);
+
+  useEffect(() => {
+    if (!teamRosterCartPlayers.length) return;
+    setDesiredPlayers((prev) => {
+      if (prev.length) return prev;
+      return teamRosterCartPlayers;
+    });
+  }, [teamRosterCartPlayers]);
 
   useEffect(() => {
     if (activeTab !== "schedule") return;
@@ -2165,23 +2220,25 @@ export default function BirdDogPage() {
     return rows;
   }
 
-  async function runTournamentPlayerSearch() {
+  async function runTournamentPlayerSearch(forceDeepScan = false) {
     const query = normalizeSmartSearch(playerSearchQuery);
     if (query.length < 2) {
       setPlayerSearchStatus("Type at least 2 characters to search players.");
       setPlayerSearchResults([]);
+      setPlayerSearchCanDeepScan(false);
       return;
     }
     const teams = selectedTournament?.teams || [];
     if (!teams.length) {
       setPlayerSearchStatus("Open a tournament first to search players.");
       setPlayerSearchResults([]);
+      setPlayerSearchCanDeepScan(false);
       return;
     }
 
     setPlayerSearchLoading(true);
     setPlayerSearchStatus("Searching players...");
-    setPlayerSearchResults([]);
+    setPlayerSearchCanDeepScan(false);
 
     try {
       const queryTokens = query.split(" ").filter(Boolean);
@@ -2213,6 +2270,12 @@ export default function BirdDogPage() {
             : "No instant match yet. Running deep scan..."
         );
         if (fast.length) return;
+        if (!forceDeepScan) {
+          setPlayerSearchStatus("No instant match yet. Click Run Deep Scan for exhaustive search.");
+          setPlayerSearchResults([]);
+          setPlayerSearchCanDeepScan(true);
+          return;
+        }
       }
 
       const matches = new Map<string, SmartPlayerResult>();
@@ -3055,6 +3118,55 @@ export default function BirdDogPage() {
     autoPlannerRef.current.key = "";
     setAndPersistPlanWorkflowStatus("draft");
     setPlanWorkflowNote("Target player removed. Recommendation is regenerating.");
+  }
+
+  function persistTeamRosterCart(next: DesiredPlayer[]) {
+    setTeamRosterCartPlayers(next);
+    writeRosterCartStorage(teamRosterCartStorageKey, next);
+  }
+
+  function removeTeamRosterCartPlayer(selectionKey: string) {
+    persistTeamRosterCart(
+      teamRosterCartPlayers.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey)
+    );
+    setDesiredPlayers((prev) => prev.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey));
+    autoPlannerRef.current.key = "";
+    setAndPersistPlanWorkflowStatus("draft");
+  }
+
+  function clearTeamRosterCart() {
+    persistTeamRosterCart([]);
+    setDesiredPlayers((prev) =>
+      prev.filter((item) => !String(desiredPlayerSelectionKey(item)).startsWith("team:"))
+    );
+    autoPlannerRef.current.key = "";
+    setAndPersistPlanWorkflowStatus("draft");
+    setPlanWorkflowNote("Cross-team roster cart cleared.");
+  }
+
+  function useTeamRosterCartForSchedule(mode: "replace" | "merge" = "replace") {
+    if (!teamRosterCartPlayers.length) {
+      setPlanWorkflowNote("Roster cart is empty. Add players from team rosters first.");
+      return;
+    }
+
+    setDesiredPlayers((prev) => {
+      if (mode === "replace") return teamRosterCartPlayers;
+      const merged = new Map<string, DesiredPlayer>(
+        prev.map((item) => [desiredPlayerSelectionKey(item), item])
+      );
+      teamRosterCartPlayers.forEach((item) => {
+        merged.set(desiredPlayerSelectionKey(item), item);
+      });
+      return Array.from(merged.values());
+    });
+    autoPlannerRef.current.key = "";
+    setAndPersistPlanWorkflowStatus("draft");
+    setPlanWorkflowNote(
+      mode === "replace"
+        ? `Loaded ${teamRosterCartPlayers.length} cross-team cart players for final schedule generation.`
+        : `Merged ${teamRosterCartPlayers.length} cross-team cart players into current selection.`
+    );
   }
 
   function sendPulse() {
@@ -4027,6 +4139,57 @@ export default function BirdDogPage() {
             />
           </label>
           <div className="panel" style={{ marginTop: 10 }}>
+            <h3 style={{ marginTop: 0 }}>Cross-Team Roster Cart</h3>
+            <p className="muted" style={{ marginTop: 4 }}>
+              Add players from each team roster, then load this cart for final schedule creation.
+            </p>
+            {teamRosterCartPlayers.length ? (
+              <>
+                <p className="muted" style={{ marginTop: 0 }}>Cart players: {teamRosterCartPlayers.length}</p>
+                <div className="table-wrap" style={{ marginTop: 6 }}>
+                  <table className="roster-table">
+                    <thead>
+                      <tr>
+                        <th>Player</th>
+                        <th>Team</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {teamRosterCartPlayers.map((player) => {
+                        const selectionKey = desiredPlayerSelectionKey(player);
+                        return (
+                          <tr key={selectionKey}>
+                            <td>{player.name}</td>
+                            <td>{player.team}</td>
+                            <td className="action-cell">
+                              <button type="button" className="secondary" onClick={() => removeTeamRosterCartPlayer(selectionKey)}>
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="row wrap" style={{ marginTop: 8 }}>
+                  <button type="button" onClick={() => useTeamRosterCartForSchedule("replace")}>
+                    Use Cart Players For Schedule
+                  </button>
+                  <button type="button" className="secondary" onClick={() => useTeamRosterCartForSchedule("merge")}>
+                    Merge Cart Into Current Selection
+                  </button>
+                  <button type="button" className="secondary" onClick={clearTeamRosterCart}>
+                    Clear Cart
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="muted">No cart players yet. Open any team and add roster players to cart.</p>
+            )}
+          </div>
+          <div className="panel" style={{ marginTop: 10 }}>
             <h3 style={{ marginTop: 0 }}>Coach Player Search (Tournament-Wide)</h3>
             <p className="muted" style={{ marginTop: 4 }}>
               Search player name only. Select players and generate schedule from this same page.
@@ -4036,7 +4199,10 @@ export default function BirdDogPage() {
                 Search Players
                 <input
                   value={playerSearchQuery}
-                  onChange={(e) => setPlayerSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                    setPlayerSearchQuery(e.target.value);
+                    setPlayerSearchCanDeepScan(false);
+                  }}
                   placeholder="Example: max johnson"
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
@@ -4053,6 +4219,14 @@ export default function BirdDogPage() {
                 disabled={playerSearchLoading}
               >
                 {playerSearchLoading ? "Searching..." : "Search Players"}
+              </button>
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => void runTournamentPlayerSearch(true)}
+                disabled={playerSearchLoading || !playerSearchCanDeepScan}
+              >
+                {playerSearchLoading && playerSearchCanDeepScan ? "Deep Scanning..." : "Run Deep Scan"}
               </button>
               <button
                 type="button"
@@ -4100,19 +4274,29 @@ export default function BirdDogPage() {
                       <tr>
                         <th>Player</th>
                         <th>Team</th>
+                        <th>Action</th>
                       </tr>
                     </thead>
                     <tbody>
                       {desiredPlayers.map((player) => (
-                        <tr key={player.selectionKey}>
+                        <tr key={desiredPlayerSelectionKey(player)}>
                           <td>{player.name}</td>
                           <td>{player.team}</td>
+                          <td className="action-cell">
+                            <button
+                              type="button"
+                              className="secondary"
+                              onClick={() => removeDesiredPlayer(desiredPlayerSelectionKey(player))}
+                            >
+                              Remove
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-                <p className="muted" style={{ marginTop: 6 }}>Uncheck any player above to go back and adjust before generating schedule.</p>
+                <p className="muted" style={{ marginTop: 6 }}>Remove players here to finalize your selection before generating schedule.</p>
               </div>
             ) : null}
           </div>

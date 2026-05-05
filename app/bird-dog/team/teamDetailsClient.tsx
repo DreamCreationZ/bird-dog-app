@@ -42,6 +42,16 @@ type TeamRosterRow = {
   commitment?: string;
 };
 
+type CrossTeamCartPlayer = {
+  playerId: string;
+  selectionKey?: string;
+  name: string;
+  team: string;
+  hometown?: string;
+  sourceTeamId?: string;
+  sourceTeamName?: string;
+};
+
 type GeneratedCoachStep = {
   at: string;
   title: string;
@@ -314,6 +324,56 @@ function rosterSearchHaystack(row: TeamRosterRow) {
   );
 }
 
+function normalizeStorageScope(value: string) {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "na";
+}
+
+function desiredSelectionKey(player: CrossTeamCartPlayer) {
+  return player.selectionKey || player.playerId;
+}
+
+function rosterCartStorageKey(params: Props["initialParams"]) {
+  const inventoryScope = normalizeStorageScope(params.returnInventorySlug || params.inventorySlug || "inventory");
+  const tournamentScope = normalizeStorageScope(params.returnTournamentId || params.tournamentName || "tournament");
+  return `bird_dog:roster_cart:v1:${inventoryScope}:${tournamentScope}`;
+}
+
+function readRosterCartStorage(key: string): CrossTeamCartPlayer[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as Array<Record<string, unknown>>;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => ({
+        playerId: String(item?.playerId || ""),
+        selectionKey: item?.selectionKey ? String(item.selectionKey) : undefined,
+        name: String(item?.name || ""),
+        team: String(item?.team || ""),
+        hometown: item?.hometown ? String(item.hometown) : undefined,
+        sourceTeamId: item?.sourceTeamId ? String(item.sourceTeamId) : undefined,
+        sourceTeamName: item?.sourceTeamName ? String(item.sourceTeamName) : undefined
+      }))
+      .filter((item) => item.playerId && item.name && item.team);
+  } catch {
+    return [];
+  }
+}
+
+function writeRosterCartStorage(key: string, rows: CrossTeamCartPlayer[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(rows));
+  } catch {
+    // Ignore storage write errors.
+  }
+}
+
 function rosterSearchScore(row: TeamRosterRow, query: string, tokens: string[]) {
   const name = normalizeSearchText(row.name);
   const team = normalizeSearchText(row.team || "");
@@ -541,6 +601,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   const [playerNotes, setPlayerNotes] = useState<PlayerNotesMap>({});
   const [notesStatus, setNotesStatus] = useState("");
   const [selectedPlayers, setSelectedPlayers] = useState<string[]>([]);
+  const [crossTeamCartPlayers, setCrossTeamCartPlayers] = useState<CrossTeamCartPlayer[]>([]);
   const [coachStartLocation, setCoachStartLocation] = useState("Current location");
   const [includeCompletedGames, setIncludeCompletedGames] = useState(
     process.env.NEXT_PUBLIC_BIRD_DOG_ALLOW_PAST_GAMES === "1"
@@ -620,6 +681,19 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     () => `bd-team-planner-v2:${initialParams.inventorySlug}:${initialParams.teamId}`,
     [initialParams.inventorySlug, initialParams.teamId]
   );
+  const cartStorageKey = useMemo(
+    () => rosterCartStorageKey(initialParams),
+    [
+      initialParams.inventorySlug,
+      initialParams.returnInventorySlug,
+      initialParams.returnTournamentId,
+      initialParams.tournamentName
+    ]
+  );
+
+  useEffect(() => {
+    setCrossTeamCartPlayers(readRosterCartStorage(cartStorageKey));
+  }, [cartStorageKey]);
 
   useEffect(() => {
     let mounted = true;
@@ -1476,6 +1550,71 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     setSelectedPlayers((prev) => (prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key]));
   }
 
+  function clearTeamSelection() {
+    setSelectedPlayers([]);
+  }
+
+  function addSelectedPlayersToCart() {
+    const selectedSet = new Set(selectedPlayers);
+    const selectedRoster = rosterRows.filter((row) => selectedSet.has(rosterRowKey(row)));
+    if (!selectedRoster.length) {
+      setPlannerStatus("Select at least one player from this roster before adding to cart.");
+      return;
+    }
+
+    setCrossTeamCartPlayers((prev) => {
+      const merged = new Map<string, CrossTeamCartPlayer>(
+        prev.map((item) => [desiredSelectionKey(item), item])
+      );
+      selectedRoster.forEach((row) => {
+        const rowKey = rosterRowKey(row);
+        const selectionKey = `team:${initialParams.teamId}:${rowKey}`;
+        merged.set(selectionKey, {
+          playerId: selectionKey,
+          selectionKey,
+          name: row.name || "-",
+          team: row.team || initialParams.teamName || "Unknown Team",
+          hometown: row.hometown || "",
+          sourceTeamId: initialParams.teamId || "",
+          sourceTeamName: initialParams.teamName || row.team || ""
+        });
+      });
+      const next = Array.from(merged.values());
+      writeRosterCartStorage(cartStorageKey, next);
+      return next;
+    });
+
+    setPlannerStatus(
+      `Added ${selectedRoster.length} player(s) from ${initialParams.teamName || "this team"} to final cart. Open another team to keep adding.`
+    );
+  }
+
+  function removeCartPlayer(selectionKey: string) {
+    setCrossTeamCartPlayers((prev) => {
+      const next = prev.filter((item) => desiredSelectionKey(item) !== selectionKey);
+      writeRosterCartStorage(cartStorageKey, next);
+      return next;
+    });
+  }
+
+  function clearCrossTeamCart() {
+    setCrossTeamCartPlayers([]);
+    writeRosterCartStorage(cartStorageKey, []);
+    setPlannerStatus("Final player cart cleared.");
+  }
+
+  function goToTournamentRosterSelection() {
+    const nextParams = new URLSearchParams();
+    nextParams.set("tab", "notes");
+    if (initialParams.returnInventorySlug || initialParams.inventorySlug) {
+      nextParams.set("inventorySlug", initialParams.returnInventorySlug || initialParams.inventorySlug);
+    }
+    if (initialParams.returnTournamentId) {
+      nextParams.set("tournamentId", initialParams.returnTournamentId);
+    }
+    window.location.assign(`/bird-dog?${nextParams.toString()}`);
+  }
+
   function hasTravelerForBooking(profile: TravelerProfile) {
     return Boolean(
       profile.firstName.trim()
@@ -2222,10 +2361,22 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
               placeholder="Search no, name, position, school, hometown"
             />
           </label>
+          <div className="row wrap" style={{ marginTop: 6 }}>
+            <p className="muted" style={{ margin: 0 }}>
+              Team selections: {selectedBestPlayerRows.length} | Final cart (all teams): {crossTeamCartPlayers.length}
+            </p>
+            <button type="button" className="secondary" onClick={clearTeamSelection} disabled={!selectedPlayers.length}>
+              Clear Team Selection
+            </button>
+            <button type="button" onClick={addSelectedPlayersToCart} disabled={!selectedPlayers.length}>
+              Add Selected To Final Cart
+            </button>
+          </div>
           <div className="table-wrap" style={{ marginTop: 8 }}>
             <table className="roster-table">
               <thead>
                 <tr>
+                  <th>Select</th>
                   <th>No</th>
                   <th>Player</th>
                   <th>Position</th>
@@ -2237,6 +2388,13 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
               <tbody>
                 {filteredRoster.length ? filteredRoster.map((row, idx) => (
                   <tr key={`${row.no}-${row.name}-${idx}`}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selectedPlayers.includes(rosterRowKey(row))}
+                        onChange={() => toggleBestPlayer(row)}
+                      />
+                    </td>
                     <td>{row.no || "-"}</td>
                     <td>{row.name || "-"}</td>
                     <td>{row.position || "-"}</td>
@@ -2246,11 +2404,58 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan={6}>No roster rows found yet for this team.</td>
+                    <td colSpan={7}>No roster rows found yet for this team.</td>
                   </tr>
                 )}
               </tbody>
             </table>
+          </div>
+          <div className="panel" style={{ marginTop: 12 }}>
+            <h3 style={{ marginTop: 0 }}>Final Player Cart (All Teams)</h3>
+            <p className="muted">Add players from any team roster, then go back to tournament view for final schedule generation.</p>
+            {crossTeamCartPlayers.length ? (
+              <>
+                <div className="table-wrap" style={{ marginTop: 8 }}>
+                  <table className="roster-table">
+                    <thead>
+                      <tr>
+                        <th>Player</th>
+                        <th>Team</th>
+                        <th>From Team</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {crossTeamCartPlayers.map((player) => {
+                        const selectionKey = desiredSelectionKey(player);
+                        return (
+                          <tr key={selectionKey}>
+                            <td>{player.name}</td>
+                            <td>{player.team}</td>
+                            <td>{player.sourceTeamName || "-"}</td>
+                            <td className="action-cell">
+                              <button type="button" className="secondary" onClick={() => removeCartPlayer(selectionKey)}>
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="row wrap" style={{ marginTop: 8 }}>
+                  <button type="button" className="secondary" onClick={clearCrossTeamCart}>
+                    Clear Final Cart
+                  </button>
+                  <button type="button" onClick={goToTournamentRosterSelection}>
+                    Finalize In Tournament View
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="muted">No players in final cart yet.</p>
+            )}
           </div>
         </div>
       </section>
