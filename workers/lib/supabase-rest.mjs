@@ -85,5 +85,15 @@ export async function supabaseRequest(pathname, options = {}) {
   }
 
   if (response.status === 204) return null;
-  return response.json();
+
+  const payload = await response.text();
+  if (!payload || !payload.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(payload);
+  } catch {
+    throw new Error(`Supabase ${method} ${pathname} returned invalid JSON payload.`);
+  }
 }
