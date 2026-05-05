@@ -4,6 +4,7 @@ import { INVENTORY_SEED, inventoryHarvestHint } from "@/lib/birddog/inventoryCat
 import { bestGroupedEventMatch, fetchPgGroupedEvents } from "@/lib/birddog/pgGroupedEvents";
 import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
+import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 
 const FALLBACK_UNLOCK_COOKIE = "bird_dog_fallback_unlocks";
 
@@ -45,7 +46,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const isAdminUser = Boolean(session.isAdmin) || String(session.email || "").trim().toLowerCase() === "admin@apointscout.com";
+  const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
   const previewUnlockAll =
     process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
     && process.env.NODE_ENV !== "production";

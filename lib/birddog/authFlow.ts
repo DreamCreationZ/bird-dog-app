@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomInt, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
 import { NextRequest } from "next/server";
+import { AJAY_ADMIN_EMAIL, isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 
 const TRUSTED_AUTH_COOKIE = "bird_dog_trusted_auth";
 const MFA_PENDING_COOKIE = "bird_dog_mfa_pending";
@@ -116,16 +117,22 @@ export function getAdminCredentials() {
   const fallbackAlias = "admin@apointscout.com";
   const email = normalizeEmail(process.env.BIRD_DOG_ADMIN_EMAIL || defaultEmail);
   const password = process.env.BIRD_DOG_ADMIN_PASSWORD || "Dreamzlyf!";
+  const ajayPassword = process.env.BIRD_DOG_AJAY_ADMIN_PASSWORD || "Welcome@123";
   return {
     email,
     fallbackAlias,
-    password
+    password,
+    ajayPassword
   };
 }
 
 export function isAdminLogin(email: string, password: string) {
   const admin = getAdminCredentials();
   const normalized = normalizeEmail(email);
+  if (!isPrivilegedAdminEmail(normalized) && normalized !== admin.email) return false;
+  if (normalized === AJAY_ADMIN_EMAIL) {
+    return password === admin.ajayPassword;
+  }
   if (password !== admin.password) return false;
   return normalized === admin.email || normalized === admin.fallbackAlias;
 }

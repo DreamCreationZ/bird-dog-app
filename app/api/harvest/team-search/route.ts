@@ -4,6 +4,7 @@ import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
 import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 import { Tournament } from "@/lib/birddog/types";
+import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 
 const SNAPSHOT_TTL_MS = 60_000;
 const tournamentSnapshotCache = new Map<string, { savedAt: number; tournament: Tournament | null }>();
@@ -52,7 +53,7 @@ export async function POST(req: NextRequest) {
   }
 
   const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
-  const isAdminUser = Boolean(session.isAdmin) || String(session.email || "").trim().toLowerCase() === "admin@apointscout.com";
+  const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
   const unlocked: string[] = await listOrgUnlocks(session.orgId).catch(() => []);
   const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
   const displayDate = seedMeta?.displayDate || "";

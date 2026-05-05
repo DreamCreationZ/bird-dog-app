@@ -4,6 +4,7 @@ import { resolvePgTeamUrl, scrapePgTeamLive } from "@/lib/birddog/pgScraper";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
 import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
+import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -83,7 +84,7 @@ export async function POST(req: NextRequest) {
   }
 
   const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
-  const isAdminUser = Boolean(session.isAdmin) || String(session.email || "").trim().toLowerCase() === "admin@apointscout.com";
+  const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
   const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   const unlocked: string[] = await listOrgUnlocks(session.orgId).catch(() => []);
   const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);

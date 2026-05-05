@@ -9,6 +9,7 @@ import {
   readTrustedAuthFromRequest,
   setTrustedAuthCookie
 } from "@/lib/birddog/authFlow";
+import { adminUserIdFromEmail, isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 import { SessionUser } from "@/lib/birddog/types";
 
 const VALID_GENDERS = new Set(["MALE", "FEMALE", "UNSPECIFIED"]);
@@ -35,7 +36,6 @@ export async function PATCH(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => ({}));
-  const adminEmail = "admin@apointscout.com";
   const nextName = String(body?.name || session.name || "").trim() || "Scout User";
   const nextEmail = normalizeEmail(String(body?.email || session.email || ""));
   const nextGender = normalizeGender(body?.gender, (session.gender || "UNSPECIFIED") as GenderValue);
@@ -45,11 +45,11 @@ export async function PATCH(req: NextRequest) {
   if (!nextEmail.includes("@")) {
     return NextResponse.json({ error: "Valid email is required." }, { status: 400 });
   }
-  if (session.isAdmin && nextEmail !== adminEmail) {
-    return NextResponse.json({ error: "Admin email cannot be changed." }, { status: 400 });
+  if (session.isAdmin && !isPrivilegedAdminEmail(nextEmail)) {
+    return NextResponse.json({ error: "Admin email cannot be changed to a non-admin address." }, { status: 400 });
   }
   if (!session.isAdmin) {
-    if (nextEmail === adminEmail) {
+    if (isPrivilegedAdminEmail(nextEmail)) {
       return NextResponse.json({ error: "That email is reserved for admin access." }, { status: 400 });
     }
     if (!isUniversityEmail(nextEmail)) {
@@ -63,10 +63,10 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Enter a valid mobile number." }, { status: 400 });
   }
 
-  const nextIsAdmin = Boolean(session.isAdmin) || nextEmail === adminEmail;
+  const nextIsAdmin = Boolean(session.isAdmin) || isPrivilegedAdminEmail(nextEmail);
   const org = getOrgByEmail(nextEmail);
   const nextUser: SessionUser = {
-    userId: nextIsAdmin ? "u_admin_apointscout" : `u_${Buffer.from(nextEmail).toString("base64url")}`,
+    userId: nextIsAdmin ? adminUserIdFromEmail(nextEmail) : `u_${Buffer.from(nextEmail).toString("base64url")}`,
     name: nextName,
     email: nextEmail,
     orgId: nextIsAdmin ? "admin" : org.orgId,

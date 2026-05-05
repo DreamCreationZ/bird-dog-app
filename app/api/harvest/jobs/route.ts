@@ -3,6 +3,7 @@ import { createHarvestJob, listHarvestJobs, listOrgUnlocks } from "@/lib/birddog
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
 import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
+import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 
 export async function GET(req: NextRequest) {
   const session = readSessionFromRequest(req);
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
-    const isAdminUser = Boolean(session.isAdmin) || String(session.email || "").trim().toLowerCase() === "admin@apointscout.com";
+    const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
     const unlocked = await listOrgUnlocks(session.orgId);
     const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
     const displayDate = seedMeta?.displayDate || "";

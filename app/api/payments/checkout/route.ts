@@ -4,6 +4,7 @@ import { unlockTournamentForOrg } from "@/lib/birddog/repository";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
 import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
+import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 
 const DEFAULT_UNLOCK_AMOUNT_CENTS = 50000;
 const FALLBACK_UNLOCK_COOKIE = "bird_dog_fallback_unlocks";
@@ -61,7 +62,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const isAdminUser = Boolean(session.isAdmin) || String(session.email || "").trim().toLowerCase() === "admin@apointscout.com";
+    const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
     if (isAdminUser) {
       const successRedirect = withQuery(withQuery(returnTo, "inventorySlug", inventorySlug), "payment", "success");
       return NextResponse.json({ alreadyUnlocked: true, freeUnlock: true, redirectTo: successRedirect });

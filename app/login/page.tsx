@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getOrgByEmail } from "@/lib/birddog/mockData";
+import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 
 function toAlpha(hex: string, alpha: number) {
   const raw = (hex || "").replace("#", "").trim();
@@ -80,7 +81,7 @@ export default function LoginPage() {
   const [stage, setStage] = useState<"credentials" | "mfa">("credentials");
 
   const org = useMemo(() => getOrgByEmail(email), [email]);
-  const isAdminEmail = email.trim().toLowerCase() === "admin@apointscout.com";
+  const isAdminEmail = isPrivilegedAdminEmail(email);
   const fullName = `${firstName} ${lastName}`.trim() || "Scout User";
 
   useEffect(() => {

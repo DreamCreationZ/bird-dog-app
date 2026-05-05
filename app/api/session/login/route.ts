@@ -17,6 +17,7 @@ import {
   setTrustedAuthCookie,
   verifyMfaCode
 } from "@/lib/birddog/authFlow";
+import { adminUserIdFromEmail, isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 import { sendMfaCodes } from "@/lib/birddog/mfaMailer";
 import { SessionUser } from "@/lib/birddog/types";
 
@@ -48,7 +49,7 @@ function buildUser(input: {
 }) {
   const org = getOrgByEmail(input.email);
   return {
-    userId: input.isAdmin ? "u_admin_apointscout" : `u_${Buffer.from(input.email).toString("base64url")}`,
+    userId: input.isAdmin ? adminUserIdFromEmail(input.email) : `u_${Buffer.from(input.email).toString("base64url")}`,
     name: input.name,
     email: input.email,
     orgId: input.isAdmin ? "admin" : org.orgId,
@@ -115,6 +116,9 @@ export async function POST(req: NextRequest) {
       authMethod: "admin"
     });
     return finishLogin(adminUser, ADMIN_SESSION_TTL_SECONDS);
+  }
+  if (isPrivilegedAdminEmail(email)) {
+    return NextResponse.json({ error: "Invalid admin credentials." }, { status: 401 });
   }
 
   if (!isUniversityEmail(email)) {

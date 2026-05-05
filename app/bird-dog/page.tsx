@@ -6,6 +6,7 @@ import { Game, ItineraryStop, Player, PulseEvent, ScoutNote, SessionUser, Tourna
 import { loadHarvestDataset, loadHarvestOverview, loadHarvestTournament } from "@/lib/birddog/clientHarvest";
 import { INVENTORY_SEED, inventoryHarvestHint } from "@/lib/birddog/inventoryCatalog";
 import { isFreeTournamentAccess, isPastTournament } from "@/lib/birddog/tournamentAccess";
+import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 
 type RecorderState = "idle" | "recording";
 
@@ -953,7 +954,7 @@ export default function BirdDogPage() {
     [myGeneratedPlan]
   );
   const canBookRecommendation = myGeneratedPlan.length > 0 && !bookingBlockReason;
-  const isAdminUser = Boolean(user?.isAdmin) || String(user?.email || "").trim().toLowerCase() === "admin@apointscout.com";
+  const isAdminUser = Boolean(user?.isAdmin) || isPrivilegedAdminEmail(String(user?.email || ""));
   const canAccessLockedPages = Boolean(selectedInventory && !isTournamentLocked(selectedInventory, { forceUnlocked: isAdminUser }));
   const planWorkflowStatusKey = useMemo(() => {
     if (!user) return "";
@@ -1920,7 +1921,7 @@ export default function BirdDogPage() {
     const normalizedCode = profileForm.countryCallingCode.replace(/[^\d]/g, "");
     const normalizedPhone = profileForm.mobileNumber.replace(/[^\d]/g, "");
     const fullName = `${firstName} ${lastName}`.trim();
-    const isAdminEmail = normalizedEmail === "admin@apointscout.com";
+    const isAdminEmail = isPrivilegedAdminEmail(normalizedEmail);
     if (!firstName) {
       setProfileStatus("First name is required.");
       return;
