@@ -4139,63 +4139,12 @@ export default function BirdDogPage() {
             />
           </label>
           <div className="panel" style={{ marginTop: 10 }}>
-            <h3 style={{ marginTop: 0 }}>Cross-Team Roster Cart</h3>
-            <p className="muted" style={{ marginTop: 4 }}>
-              Add players from each team roster, then load this cart for final schedule creation.
-            </p>
-            {teamRosterCartPlayers.length ? (
-              <>
-                <p className="muted" style={{ marginTop: 0 }}>Cart players: {teamRosterCartPlayers.length}</p>
-                <div className="table-wrap" style={{ marginTop: 6 }}>
-                  <table className="roster-table">
-                    <thead>
-                      <tr>
-                        <th>Player</th>
-                        <th>Team</th>
-                        <th>Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {teamRosterCartPlayers.map((player) => {
-                        const selectionKey = desiredPlayerSelectionKey(player);
-                        return (
-                          <tr key={selectionKey}>
-                            <td>{player.name}</td>
-                            <td>{player.team}</td>
-                            <td className="action-cell">
-                              <button type="button" className="secondary" onClick={() => removeTeamRosterCartPlayer(selectionKey)}>
-                                Remove
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="row wrap" style={{ marginTop: 8 }}>
-                  <button type="button" onClick={() => useTeamRosterCartForSchedule("replace")}>
-                    Use Cart Players For Schedule
-                  </button>
-                  <button type="button" className="secondary" onClick={() => useTeamRosterCartForSchedule("merge")}>
-                    Merge Cart Into Current Selection
-                  </button>
-                  <button type="button" className="secondary" onClick={clearTeamRosterCart}>
-                    Clear Cart
-                  </button>
-                </div>
-              </>
-            ) : (
-              <p className="muted">No cart players yet. Open any team and add roster players to cart.</p>
-            )}
-          </div>
-          <div className="panel" style={{ marginTop: 10 }}>
             <h3 style={{ marginTop: 0 }}>Coach Player Search (Tournament-Wide)</h3>
             <p className="muted" style={{ marginTop: 4 }}>
               Search player name only. Select players and generate schedule from this same page.
             </p>
             <div className="row wrap" style={{ alignItems: "end" }}>
-              <label style={{ flex: "1 1 380px" }}>
+              <label style={{ flex: "0 1 560px", minWidth: 300 }}>
                 Search Players
                 <input
                   value={playerSearchQuery}
@@ -4234,6 +4183,27 @@ export default function BirdDogPage() {
                 disabled={!desiredPlayers.length}
               >
                 Generate My Schedule
+              </button>
+            </div>
+            <div className="row wrap" style={{ alignItems: "center", marginTop: 8 }}>
+              <p className="muted" style={{ margin: 0 }}>
+                Cart players from team rosters: {teamRosterCartPlayers.length}
+              </p>
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => useTeamRosterCartForSchedule("merge")}
+                disabled={!teamRosterCartPlayers.length}
+              >
+                Merge Cart Into Current Selection
+              </button>
+              <button
+                className="secondary"
+                type="button"
+                onClick={clearTeamRosterCart}
+                disabled={!teamRosterCartPlayers.length}
+              >
+                Clear Cart
               </button>
             </div>
             {playerSearchStatus ? <p className="muted" style={{ marginTop: 8 }}>{playerSearchStatus}</p> : null}

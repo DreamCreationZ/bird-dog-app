@@ -1,40 +1,37 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">APOINT SCOUT Icon</title>
-  <desc id="desc">Metallic A mark with blue compass diamond.</desc>
+  <desc id="desc">Compass over metallic A mark with crossbar through both legs.</desc>
   <defs>
-    <linearGradient id="metalA" x1="230" y1="340" x2="780" y2="900" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#fafbfc"/>
-      <stop offset="0.42" stop-color="#eceff3"/>
-      <stop offset="0.75" stop-color="#d8dde5"/>
-      <stop offset="1" stop-color="#bcc4cf"/>
+    <linearGradient id="metal" x1="150" y1="360" x2="860" y2="930" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.45" stop-color="#eef2f7"/>
+      <stop offset="0.8" stop-color="#d7dde6"/>
+      <stop offset="1" stop-color="#b7c0cc"/>
     </linearGradient>
-    <linearGradient id="diamondBlue" x1="360" y1="160" x2="665" y2="430" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#103766"/>
-      <stop offset="1" stop-color="#07192f"/>
+    <linearGradient id="diamondBlue" x1="340" y1="180" x2="690" y2="500" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0f3a6e"/>
+      <stop offset="1" stop-color="#071a32"/>
     </linearGradient>
-    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.28"/>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#000" flood-opacity="0.35"/>
     </filter>
   </defs>
 
-  <g filter="url(#softShadow)">
-    <polygon fill="url(#metalA)" points="174,906 322,906 430,482 342,482"/>
-    <polygon fill="url(#metalA)" points="598,482 684,482 850,906 706,906"/>
-    <polygon fill="url(#metalA)" points="296,770 730,770 716,834 281,834"/>
-    <polygon fill="url(#metalA)" points="160,906 332,906 324,946 142,946"/>
-    <polygon fill="url(#metalA)" points="690,906 866,906 884,946 698,946"/>
+  <g filter="url(#drop)">
+    <line x1="238" y1="920" x2="452" y2="460" stroke="url(#metal)" stroke-width="86" stroke-linecap="square"/>
+    <line x1="786" y1="920" x2="572" y2="460" stroke="url(#metal)" stroke-width="86" stroke-linecap="square"/>
+    <line x1="130" y1="760" x2="894" y2="760" stroke="url(#metal)" stroke-width="64" stroke-linecap="square"/>
   </g>
 
-  <g transform="translate(0 -6)" filter="url(#softShadow)">
-    <path d="M512 170L714 332L512 494L310 332L512 170Z" fill="url(#diamondBlue)" stroke="#eef3f8" stroke-width="16" stroke-linejoin="round"/>
-    <path d="M512 234C570 234 617 281 617 339C617 397 570 444 512 444C454 444 407 397 407 339C407 281 454 234 512 234Z" fill="none" stroke="#eff4f9" stroke-width="12"/>
-    <line x1="512" y1="208" x2="512" y2="230" stroke="#eff4f9" stroke-width="8" stroke-linecap="round"/>
-    <line x1="382" y1="339" x2="404" y2="339" stroke="#eff4f9" stroke-width="8" stroke-linecap="round"/>
-    <line x1="620" y1="339" x2="642" y2="339" stroke="#eff4f9" stroke-width="8" stroke-linecap="round"/>
-    <line x1="512" y1="448" x2="512" y2="470" stroke="#eff4f9" stroke-width="8" stroke-linecap="round"/>
-    <polygon points="512,339 582,295 536,365" fill="#f5f8fc"/>
-    <polygon points="512,339 444,385 490,316" fill="#b90f24"/>
-    <circle cx="512" cy="339" r="7" fill="#f6f9fc"/>
-    <path d="M492 486H532L512 508L492 486Z" fill="none" stroke="#eff4f9" stroke-width="8" stroke-linejoin="round"/>
+  <g filter="url(#drop)">
+    <path d="M512 170L730 344L512 518L294 344L512 170Z" fill="url(#diamondBlue)" stroke="#eef3f8" stroke-width="18" stroke-linejoin="round"/>
+    <circle cx="512" cy="344" r="112" fill="none" stroke="#edf3f8" stroke-width="12"/>
+    <line x1="512" y1="206" x2="512" y2="236" stroke="#edf3f8" stroke-width="10" stroke-linecap="round"/>
+    <line x1="512" y1="452" x2="512" y2="482" stroke="#edf3f8" stroke-width="10" stroke-linecap="round"/>
+    <line x1="374" y1="344" x2="404" y2="344" stroke="#edf3f8" stroke-width="10" stroke-linecap="round"/>
+    <line x1="620" y1="344" x2="650" y2="344" stroke="#edf3f8" stroke-width="10" stroke-linecap="round"/>
+    <polygon points="512,344 598,286 540,372" fill="#f4f8fd"/>
+    <polygon points="512,344 426,402 484,316" fill="#b40d24"/>
+    <circle cx="512" cy="344" r="9" fill="#f4f8fd"/>
   </g>
 </svg>
