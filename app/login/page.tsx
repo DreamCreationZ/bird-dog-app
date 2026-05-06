@@ -367,7 +367,7 @@ export default function LoginPage() {
     >
       <section className="login-card">
         <img
-          src="/branding/a-point-scout-icon.svg?v=20260506e"
+          src="/branding/a-point-scout-icon.svg?v=20260506f"
           alt="APOINT SCOUT"
           className="login-brand-mark"
         />
