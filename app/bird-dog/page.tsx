@@ -1044,6 +1044,7 @@ export default function BirdDogPage() {
   const tournamentPlayerIndexKeyRef = useRef("");
   const tournamentPlayerIndexLoadingRef = useRef<Promise<TournamentPlayerIndexRow[]> | null>(null);
   const selectedTournamentHydrationKeyRef = useRef("");
+  const selectedTournamentHydrationAttemptAtRef = useRef<Record<string, number>>({});
   const autoPlannerRef = useRef<{ busy: boolean; key: string }>({ busy: false, key: "" });
   const inlineTeamNoteMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const inlineTeamNoteMediaStreamRef = useRef<MediaStream | null>(null);
@@ -1315,17 +1316,27 @@ export default function BirdDogPage() {
     const current = tournaments.find((item) => item.id === selectedTournamentId);
     if (!current) return;
     const hasTeams = Array.isArray(current.teams) && current.teams.length > 0;
-    const hasGames = Array.isArray(current.games) && current.games.length > 0;
-    if (hasTeams || hasGames) return;
+    if (hasTeams) return;
     const hydrationKey = `${company}:${selectedTournamentId}`;
+    const now = Date.now();
+    const lastAttempt = selectedTournamentHydrationAttemptAtRef.current[hydrationKey] || 0;
+    if (now - lastAttempt < 15000) return;
     if (selectedTournamentHydrationKeyRef.current === hydrationKey) return;
+    selectedTournamentHydrationAttemptAtRef.current[hydrationKey] = now;
     selectedTournamentHydrationKeyRef.current = hydrationKey;
-    void loadTournamentDetails(company, selectedTournamentId, true).finally(() => {
+    const hydrate = async () => {
+      if (selectedInventory && !isTournamentLocked(selectedInventory, { forceUnlocked: isAdminUser })) {
+        await refreshTournamentByInventory(selectedInventory);
+        return;
+      }
+      await loadTournamentDetails(company, selectedTournamentId, true);
+    };
+    void hydrate().finally(() => {
       if (selectedTournamentHydrationKeyRef.current === hydrationKey) {
         selectedTournamentHydrationKeyRef.current = "";
       }
     });
-  }, [company, loadingHarvest, selectedTournamentId, tournaments, user]);
+  }, [company, isAdminUser, loadingHarvest, selectedInventory, selectedTournamentId, tournaments, user]);
 
   useEffect(() => {
     if (activeTab !== "schedule") return;
