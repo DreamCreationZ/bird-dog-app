@@ -4276,6 +4276,70 @@ export default function BirdDogPage() {
       {showNotes ? (
       <section className="panel" id="teams-roster-section">
         <div style={{ width: "100%" }}>
+          <div className="panel" style={{ marginBottom: 10 }}>
+            <h3 style={{ marginTop: 0 }}>Final Player Cart (All Teams)</h3>
+            <p className="muted" style={{ marginTop: 4 }}>
+              Coaches can review all selected roster players here before tournament team list and schedule generation.
+            </p>
+            <p className="muted" style={{ marginTop: 6, marginBottom: 8 }}>
+              Cart players: {teamRosterCartPlayers.length}
+            </p>
+            {teamRosterCartPlayers.length ? (
+              <>
+                <div className="table-wrap">
+                  <table className="roster-table">
+                    <thead>
+                      <tr>
+                        <th>Player</th>
+                        <th>Team</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {teamRosterCartPlayers.map((player) => {
+                        const selectionKey = desiredPlayerSelectionKey(player);
+                        return (
+                          <tr key={`final-cart-${selectionKey}`}>
+                            <td>{player.name}</td>
+                            <td>{player.team}</td>
+                            <td className="action-cell">
+                              <button
+                                type="button"
+                                className="secondary"
+                                onClick={() => removeTeamRosterCartPlayer(selectionKey)}
+                              >
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="row wrap" style={{ alignItems: "center", marginTop: 8 }}>
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => useTeamRosterCartForSchedule("merge")}
+                    disabled={!teamRosterCartPlayers.length}
+                  >
+                    Merge Cart Into Current Selection
+                  </button>
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={clearTeamRosterCart}
+                    disabled={!teamRosterCartPlayers.length}
+                  >
+                    Clear Cart
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="muted" style={{ marginTop: 6 }}>No players in final cart yet.</p>
+            )}
+          </div>
           <h2>Participating Teams</h2>
           <p className="muted">Teams in tournament: {selectedTournament?.teams?.length || 0}</p>
           <div className="row wrap" style={{ marginBottom: 8 }}>
