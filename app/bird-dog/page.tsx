@@ -242,6 +242,7 @@ const COACH_LOCATION_SHARING_KEY = "bird_dog:coach_location_sharing";
 const LOCAL_SCHEDULE_FALLBACK_KEY = "bird_dog:local_schedule_fallback:v1";
 const PLAN_WORKFLOW_STATUS_KEY_PREFIX = "bird_dog:plan_workflow_status:v1";
 const DESIRED_PLAYERS_STORAGE_KEY_PREFIX = "bird_dog:desired_players:v1";
+const GLOBAL_ROSTER_CART_STORAGE_KEY = "bird_dog:roster_cart:v2:global";
 const BOOKING_REVIEW_DRAFT_KEY = "bird_dog:booking_review_draft:v1";
 const BOOKING_SUMMARY_KEY = "bird_dog:booking_summary:v1";
 const PROFILE_FORM_STORAGE_KEY_PREFIX = "bird_dog:profile_form:v1";
@@ -381,18 +382,14 @@ function normalizeStorageScope(value: string) {
   return normalized || "na";
 }
 
-function rosterCartStorageKey(input: { inventorySlug: string; tournamentScope: string }) {
-  const inventoryScope = normalizeStorageScope(input.inventorySlug || "inventory");
-  const tournamentScope = normalizeStorageScope(input.tournamentScope || "tournament");
-  return `bird_dog:roster_cart:v1:${inventoryScope}:${tournamentScope}`;
+function rosterCartStorageKey() {
+  return GLOBAL_ROSTER_CART_STORAGE_KEY;
 }
 
-function desiredPlayersScopedStorageKey(input: { orgId: string; userId: string; inventorySlug: string; tournamentScope: string }) {
+function desiredPlayersScopedStorageKey(input: { orgId: string; userId: string }) {
   const orgScope = normalizeStorageScope(input.orgId || "org");
   const userScope = normalizeStorageScope(input.userId || "user");
-  const inventoryScope = normalizeStorageScope(input.inventorySlug || "inventory");
-  const tournamentScope = normalizeStorageScope(input.tournamentScope || "tournament");
-  return `${DESIRED_PLAYERS_STORAGE_KEY_PREFIX}:${orgScope}:${userScope}:${inventoryScope}:${tournamentScope}`;
+  return `${DESIRED_PLAYERS_STORAGE_KEY_PREFIX}:${orgScope}:${userScope}:global`;
 }
 
 function readRosterCartStorage(key: string) {
@@ -412,6 +409,24 @@ function readRosterCartStorage(key: string) {
 
 function writeRosterCartStorage(key: string, rows: DesiredPlayer[]) {
   safeLocalSet(key, JSON.stringify(rows));
+}
+
+function readLegacyRosterCartStorage() {
+  if (typeof window === "undefined") return [] as DesiredPlayer[];
+  const merged = new Map<string, DesiredPlayer>();
+  try {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (!key || !key.startsWith("bird_dog:roster_cart:v1:")) continue;
+      const rows = readRosterCartStorage(key);
+      rows.forEach((item) => {
+        merged.set(String(item.selectionKey || item.playerId), item);
+      });
+    }
+  } catch {
+    return [] as DesiredPlayer[];
+  }
+  return Array.from(merged.values());
 }
 
 function readDesiredPlayersStorage(key: string) {
@@ -434,6 +449,27 @@ function readDesiredPlayersStorage(key: string) {
 function writeDesiredPlayersStorage(key: string, rows: DesiredPlayer[]) {
   if (!key) return;
   safeLocalSet(key, JSON.stringify(rows));
+}
+
+function readLegacyDesiredPlayersStorage(orgId: string, userId: string) {
+  if (typeof window === "undefined") return [] as DesiredPlayer[];
+  const orgScope = normalizeStorageScope(orgId || "org");
+  const userScope = normalizeStorageScope(userId || "user");
+  const prefix = `${DESIRED_PLAYERS_STORAGE_KEY_PREFIX}:${orgScope}:${userScope}:`;
+  const merged = new Map<string, DesiredPlayer>();
+  try {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (!key || !key.startsWith(prefix) || key.endsWith(":global")) continue;
+      const rows = readDesiredPlayersStorage(key) || [];
+      rows.forEach((item) => {
+        merged.set(String(item.selectionKey || item.playerId), item);
+      });
+    }
+  } catch {
+    return [] as DesiredPlayer[];
+  }
+  return Array.from(merged.values());
 }
 
 function splitNameParts(name: string) {
@@ -993,23 +1029,14 @@ export default function BirdDogPage() {
     const scopeTournament = selectedTournamentId || "tournament";
     return `${PLAN_WORKFLOW_STATUS_KEY_PREFIX}:${user.orgId}:${user.userId}:${scopeSlug}:${scopeTournament}`;
   }, [selectedInventorySlug, selectedTournamentId, user]);
-  const teamRosterCartStorageKey = useMemo(
-    () =>
-      rosterCartStorageKey({
-        inventorySlug: selectedInventorySlug || "inventory",
-        tournamentScope: selectedTournamentId || selectedTournament?.name || "tournament"
-      }),
-    [selectedInventorySlug, selectedTournament?.name, selectedTournamentId]
-  );
+  const teamRosterCartStorageKey = useMemo(() => rosterCartStorageKey(), []);
   const desiredPlayersStorageKey = useMemo(() => {
     if (!user) return "";
     return desiredPlayersScopedStorageKey({
       orgId: user.orgId,
-      userId: user.userId,
-      inventorySlug: selectedInventorySlug || "inventory",
-      tournamentScope: selectedTournamentId || selectedTournament?.name || "tournament"
+      userId: user.userId
     });
-  }, [selectedInventorySlug, selectedTournament?.name, selectedTournamentId, user]);
+  }, [user]);
 
   const games = selectedTournament?.games || [];
   const players = useMemo(() => uniquePlayers(games), [games]);
@@ -1294,14 +1321,33 @@ export default function BirdDogPage() {
   }, [selectedTournamentId, selectedInventorySlug]);
 
   useEffect(() => {
+    const raw = safeLocalGet(teamRosterCartStorageKey);
+    if (raw == null) {
+      const legacy = readLegacyRosterCartStorage();
+      if (legacy.length) {
+        writeRosterCartStorage(teamRosterCartStorageKey, legacy);
+        setTeamRosterCartPlayers(legacy);
+        return;
+      }
+    }
     setTeamRosterCartPlayers(readRosterCartStorage(teamRosterCartStorageKey));
   }, [teamRosterCartStorageKey]);
 
   useEffect(() => {
+    if (!desiredPlayersStorageKey) return;
+    const raw = safeLocalGet(desiredPlayersStorageKey);
+    if (raw == null && user) {
+      const legacy = readLegacyDesiredPlayersStorage(user.orgId, user.userId);
+      if (legacy.length) {
+        writeDesiredPlayersStorage(desiredPlayersStorageKey, legacy);
+        setDesiredPlayers(legacy);
+        return;
+      }
+    }
     const persisted = readDesiredPlayersStorage(desiredPlayersStorageKey);
     if (!persisted) return;
     setDesiredPlayers(persisted);
-  }, [desiredPlayersStorageKey]);
+  }, [desiredPlayersStorageKey, user]);
 
   useEffect(() => {
     if (!teamRosterCartPlayers.length) return;

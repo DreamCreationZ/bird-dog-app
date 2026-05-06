@@ -164,6 +164,8 @@ type PlannerCacheState = {
 };
 
 const COACH_BOOKING_PROFILE_KEY = "bd-coach-booking-profile:v1";
+const GLOBAL_ROSTER_CART_STORAGE_KEY = "bird_dog:roster_cart:v2:global";
+const COACH_START_LOCATION_PROMPTED_KEY = "bird_dog:coach_start_location_prompted:v1";
 
 type TeamDetailsCachePayload = {
   schedule: TeamScheduleRow[];
@@ -324,22 +326,12 @@ function rosterSearchHaystack(row: TeamRosterRow) {
   );
 }
 
-function normalizeStorageScope(value: string) {
-  const normalized = String(value || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return normalized || "na";
-}
-
 function desiredSelectionKey(player: CrossTeamCartPlayer) {
   return player.selectionKey || player.playerId;
 }
 
-function rosterCartStorageKey(params: Props["initialParams"]) {
-  const inventoryScope = normalizeStorageScope(params.returnInventorySlug || params.inventorySlug || "inventory");
-  const tournamentScope = normalizeStorageScope(params.returnTournamentId || params.tournamentName || "tournament");
-  return `bird_dog:roster_cart:v1:${inventoryScope}:${tournamentScope}`;
+function rosterCartStorageKey() {
+  return GLOBAL_ROSTER_CART_STORAGE_KEY;
 }
 
 function readRosterCartStorage(key: string): CrossTeamCartPlayer[] {
@@ -372,6 +364,24 @@ function writeRosterCartStorage(key: string, rows: CrossTeamCartPlayer[]) {
   } catch {
     // Ignore storage write errors.
   }
+}
+
+function readLegacyRosterCartStorage(): CrossTeamCartPlayer[] {
+  if (typeof window === "undefined") return [];
+  const merged = new Map<string, CrossTeamCartPlayer>();
+  try {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (!key || !key.startsWith("bird_dog:roster_cart:v1:")) continue;
+      const rows = readRosterCartStorage(key);
+      rows.forEach((item) => {
+        merged.set(desiredSelectionKey(item), item);
+      });
+    }
+  } catch {
+    return [];
+  }
+  return Array.from(merged.values());
 }
 
 function rosterSearchScore(row: TeamRosterRow, query: string, tokens: string[]) {
@@ -681,17 +691,18 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     () => `bd-team-planner-v2:${initialParams.inventorySlug}:${initialParams.teamId}`,
     [initialParams.inventorySlug, initialParams.teamId]
   );
-  const cartStorageKey = useMemo(
-    () => rosterCartStorageKey(initialParams),
-    [
-      initialParams.inventorySlug,
-      initialParams.returnInventorySlug,
-      initialParams.returnTournamentId,
-      initialParams.tournamentName
-    ]
-  );
+  const cartStorageKey = useMemo(() => rosterCartStorageKey(), []);
 
   useEffect(() => {
+    const raw = typeof window === "undefined" ? null : window.localStorage.getItem(cartStorageKey);
+    if (raw == null) {
+      const legacy = readLegacyRosterCartStorage();
+      if (legacy.length) {
+        writeRosterCartStorage(cartStorageKey, legacy);
+        setCrossTeamCartPlayers(legacy);
+        return;
+      }
+    }
     setCrossTeamCartPlayers(readRosterCartStorage(cartStorageKey));
   }, [cartStorageKey]);
 
@@ -815,9 +826,13 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
 
   useEffect(() => {
     if (coachLocationTriedRef.current) return;
+    if (typeof window !== "undefined" && window.localStorage.getItem(COACH_START_LOCATION_PROMPTED_KEY) === "1") return;
     const raw = coachStartLocation.trim().toLowerCase();
     if (raw && raw !== "current city" && raw !== "current location") return;
     coachLocationTriedRef.current = true;
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(COACH_START_LOCATION_PROMPTED_KEY, "1");
+    }
     let cancelled = false;
     void (async () => {
       const resolved = await resolveCoachStartLocation();
