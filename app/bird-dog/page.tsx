@@ -1043,6 +1043,7 @@ export default function BirdDogPage() {
   const tournamentPlayerIndexRef = useRef<TournamentPlayerIndexRow[]>([]);
   const tournamentPlayerIndexKeyRef = useRef("");
   const tournamentPlayerIndexLoadingRef = useRef<Promise<TournamentPlayerIndexRow[]> | null>(null);
+  const selectedTournamentHydrationKeyRef = useRef("");
   const autoPlannerRef = useRef<{ busy: boolean; key: string }>({ busy: false, key: "" });
   const inlineTeamNoteMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const inlineTeamNoteMediaStreamRef = useRef<MediaStream | null>(null);
@@ -1308,6 +1309,23 @@ export default function BirdDogPage() {
       return teamRosterCartPlayers;
     });
   }, [teamRosterCartPlayers]);
+
+  useEffect(() => {
+    if (!user || !selectedTournamentId || loadingHarvest) return;
+    const current = tournaments.find((item) => item.id === selectedTournamentId);
+    if (!current) return;
+    const hasTeams = Array.isArray(current.teams) && current.teams.length > 0;
+    const hasGames = Array.isArray(current.games) && current.games.length > 0;
+    if (hasTeams || hasGames) return;
+    const hydrationKey = `${company}:${selectedTournamentId}`;
+    if (selectedTournamentHydrationKeyRef.current === hydrationKey) return;
+    selectedTournamentHydrationKeyRef.current = hydrationKey;
+    void loadTournamentDetails(company, selectedTournamentId, true).finally(() => {
+      if (selectedTournamentHydrationKeyRef.current === hydrationKey) {
+        selectedTournamentHydrationKeyRef.current = "";
+      }
+    });
+  }, [company, loadingHarvest, selectedTournamentId, tournaments, user]);
 
   useEffect(() => {
     if (activeTab !== "schedule") return;
