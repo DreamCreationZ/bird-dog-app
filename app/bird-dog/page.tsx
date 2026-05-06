@@ -3267,6 +3267,22 @@ export default function BirdDogPage() {
     setPlanWorkflowNote("Target player removed. Recommendation is regenerating.");
   }
 
+  function moveDesiredPlayer(selectionKey: string, direction: -1 | 1) {
+    setDesiredPlayersAndPersist((prev) => {
+      const index = prev.findIndex((item) => desiredPlayerSelectionKey(item) === selectionKey);
+      if (index < 0) return prev;
+      const targetIndex = index + direction;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+    autoPlannerRef.current.key = "";
+    setAndPersistPlanWorkflowStatus("draft");
+    setPlanWorkflowNote("Player order updated. Recommendation will prioritize this order.");
+  }
+
   function persistTeamRosterCart(next: DesiredPlayer[]) {
     setTeamRosterCartPlayers(next);
     writeRosterCartStorage(teamRosterCartStorageKey, next);
@@ -4474,17 +4490,35 @@ export default function BirdDogPage() {
                   <table className="roster-table">
                     <thead>
                       <tr>
+                        <th>Order</th>
                         <th>Player</th>
                         <th>Team</th>
                         <th>Action</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {desiredPlayers.map((player) => (
+                      {desiredPlayers.map((player, index) => (
                         <tr key={desiredPlayerSelectionKey(player)}>
+                          <td>{index + 1}</td>
                           <td>{player.name}</td>
                           <td>{player.team}</td>
                           <td className="action-cell">
+                            <button
+                              type="button"
+                              className="secondary"
+                              onClick={() => moveDesiredPlayer(desiredPlayerSelectionKey(player), -1)}
+                              disabled={index === 0}
+                            >
+                              Up
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary"
+                              onClick={() => moveDesiredPlayer(desiredPlayerSelectionKey(player), 1)}
+                              disabled={index === desiredPlayers.length - 1}
+                            >
+                              Down
+                            </button>
                             <button
                               type="button"
                               className="secondary"
