@@ -1,8 +1,8 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">APOINT SCOUT Icon</title>
+  <title id="title">APOINT SCOUT Logo</title>
   <desc id="desc">Compass over stylized A mark.</desc>
   <defs>
-    <linearGradient id="metal" x1="80" y1="560" x2="944" y2="968" gradientUnits="userSpaceOnUse">
+    <linearGradient id="metal" x1="72" y1="560" x2="944" y2="980" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#edf2fb"/>
       <stop offset="1" stop-color="#d7deea"/>
     </linearGradient>
@@ -13,8 +13,8 @@
   </defs>
 
   <g>
-    <path d="M336 560 L468 560 L332 902 L154 956 L36 956 L36 928 L188 892 Z" fill="url(#metal)"/>
-    <path d="M556 560 L688 560 L836 892 L988 928 L988 956 L870 956 L692 902 Z" fill="url(#metal)"/>
+    <path d="M336 560 L468 560 L332 902 L124 964 L24 1004 L348 1004 L348 944 L168 944 L314 900 Z" fill="url(#metal)"/>
+    <path d="M556 560 L688 560 L710 620 L856 944 L676 944 L676 1004 L1000 1004 L900 964 L692 902 Z" fill="url(#metal)"/>
     <rect x="0" y="732" width="1024" height="54" fill="url(#metal)"/>
   </g>
 
