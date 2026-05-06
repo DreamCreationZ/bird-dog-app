@@ -1,6 +1,6 @@
 "use client";
 
-import { TouchEvent, useEffect, useMemo, useRef, useState } from "react";
+import { SetStateAction, TouchEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Game, ItineraryStop, Player, PulseEvent, ScoutNote, SessionUser, Tournament } from "@/lib/birddog/types";
 import { loadHarvestDataset, loadHarvestOverview, loadHarvestTournament } from "@/lib/birddog/clientHarvest";
@@ -241,6 +241,7 @@ const PREVIEW_UNLOCK_ALL =
 const COACH_LOCATION_SHARING_KEY = "bird_dog:coach_location_sharing";
 const LOCAL_SCHEDULE_FALLBACK_KEY = "bird_dog:local_schedule_fallback:v1";
 const PLAN_WORKFLOW_STATUS_KEY_PREFIX = "bird_dog:plan_workflow_status:v1";
+const DESIRED_PLAYERS_STORAGE_KEY_PREFIX = "bird_dog:desired_players:v1";
 const BOOKING_REVIEW_DRAFT_KEY = "bird_dog:booking_review_draft:v1";
 const BOOKING_SUMMARY_KEY = "bird_dog:booking_summary:v1";
 const PROFILE_FORM_STORAGE_KEY_PREFIX = "bird_dog:profile_form:v1";
@@ -386,6 +387,14 @@ function rosterCartStorageKey(input: { inventorySlug: string; tournamentScope: s
   return `bird_dog:roster_cart:v1:${inventoryScope}:${tournamentScope}`;
 }
 
+function desiredPlayersScopedStorageKey(input: { orgId: string; userId: string; inventorySlug: string; tournamentScope: string }) {
+  const orgScope = normalizeStorageScope(input.orgId || "org");
+  const userScope = normalizeStorageScope(input.userId || "user");
+  const inventoryScope = normalizeStorageScope(input.inventorySlug || "inventory");
+  const tournamentScope = normalizeStorageScope(input.tournamentScope || "tournament");
+  return `${DESIRED_PLAYERS_STORAGE_KEY_PREFIX}:${orgScope}:${userScope}:${inventoryScope}:${tournamentScope}`;
+}
+
 function readRosterCartStorage(key: string) {
   const raw = safeLocalGet(key);
   const parsed = parseJsonSafe<Array<Record<string, unknown>>>(raw, []);
@@ -402,6 +411,28 @@ function readRosterCartStorage(key: string) {
 }
 
 function writeRosterCartStorage(key: string, rows: DesiredPlayer[]) {
+  safeLocalSet(key, JSON.stringify(rows));
+}
+
+function readDesiredPlayersStorage(key: string) {
+  if (!key) return null as DesiredPlayer[] | null;
+  const raw = safeLocalGet(key);
+  if (raw == null) return null as DesiredPlayer[] | null;
+  const parsed = parseJsonSafe<Array<Record<string, unknown>>>(raw, []);
+  if (!Array.isArray(parsed)) return [] as DesiredPlayer[];
+  return parsed
+    .map((item) => ({
+      playerId: String(item?.playerId || ""),
+      selectionKey: item?.selectionKey ? String(item.selectionKey) : undefined,
+      name: String(item?.name || ""),
+      team: String(item?.team || ""),
+      hometown: item?.hometown ? String(item.hometown) : undefined
+    }))
+    .filter((item) => item.playerId && item.name && item.team);
+}
+
+function writeDesiredPlayersStorage(key: string, rows: DesiredPlayer[]) {
+  if (!key) return;
   safeLocalSet(key, JSON.stringify(rows));
 }
 
@@ -970,6 +1001,15 @@ export default function BirdDogPage() {
       }),
     [selectedInventorySlug, selectedTournament?.name, selectedTournamentId]
   );
+  const desiredPlayersStorageKey = useMemo(() => {
+    if (!user) return "";
+    return desiredPlayersScopedStorageKey({
+      orgId: user.orgId,
+      userId: user.userId,
+      inventorySlug: selectedInventorySlug || "inventory",
+      tournamentScope: selectedTournamentId || selectedTournament?.name || "tournament"
+    });
+  }, [selectedInventorySlug, selectedTournament?.name, selectedTournamentId, user]);
 
   const games = selectedTournament?.games || [];
   const players = useMemo(() => uniquePlayers(games), [games]);
@@ -1017,6 +1057,16 @@ export default function BirdDogPage() {
       return;
     }
     safeLocalSet(planWorkflowStatusKey, next);
+  }
+
+  function setDesiredPlayersAndPersist(nextState: SetStateAction<DesiredPlayer[]>) {
+    setDesiredPlayers((prev) => {
+      const next = typeof nextState === "function"
+        ? (nextState as (previous: DesiredPlayer[]) => DesiredPlayer[])(prev)
+        : nextState;
+      writeDesiredPlayersStorage(desiredPlayersStorageKey, next);
+      return next;
+    });
   }
 
   function refreshBookingSummaryFromStorage() {
@@ -1246,8 +1296,14 @@ export default function BirdDogPage() {
   }, [teamRosterCartStorageKey]);
 
   useEffect(() => {
+    const persisted = readDesiredPlayersStorage(desiredPlayersStorageKey);
+    if (!persisted) return;
+    setDesiredPlayers(persisted);
+  }, [desiredPlayersStorageKey]);
+
+  useEffect(() => {
     if (!teamRosterCartPlayers.length) return;
-    setDesiredPlayers((prev) => {
+    setDesiredPlayersAndPersist((prev) => {
       if (prev.length) return prev;
       return teamRosterCartPlayers;
     });
@@ -1719,7 +1775,8 @@ export default function BirdDogPage() {
       hotelName: mine.hotel_name || "",
       notes: mine.notes || ""
     });
-    setDesiredPlayers(mine.desired_players || []);
+    const persistedDesired = readDesiredPlayersStorage(desiredPlayersStorageKey);
+    setDesiredPlayersAndPersist(persistedDesired ?? (mine.desired_players || []));
     const generated = mine.generated_plan || [];
     setMyGeneratedPlan(generated);
     const persistedRaw = planWorkflowStatusKey ? safeLocalGet(planWorkflowStatusKey) : null;
@@ -1907,7 +1964,7 @@ export default function BirdDogPage() {
     const nextPlan = createGeneratedPlan(activeDesired);
     const mergedPlan = [...myGeneratedPlan, ...nextPlan];
     if (desiredOverride) {
-      setDesiredPlayers(desiredOverride);
+      setDesiredPlayersAndPersist(desiredOverride);
     }
     setMyGeneratedPlan(mergedPlan);
     await saveSchedule(mergedPlan, activeDesired);
@@ -1996,7 +2053,7 @@ export default function BirdDogPage() {
       hotelName: item.hotel_name || "",
       notes: item.notes || ""
     });
-    setDesiredPlayers(item.desired_players || []);
+    setDesiredPlayersAndPersist(item.desired_players || []);
     setMyGeneratedPlan(item.generated_plan || []);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -2338,7 +2395,7 @@ export default function BirdDogPage() {
 
   function toggleSmartPlayerSelection(item: SmartPlayerResult) {
     const selectionKey = smartPlayerSelectionKey(item.teamId, item.playerId);
-    setDesiredPlayers((prev) => {
+    setDesiredPlayersAndPersist((prev) => {
       if (prev.some((row) => desiredPlayerSelectionKey(row) === selectionKey)) {
         return prev.filter((row) => desiredPlayerSelectionKey(row) !== selectionKey);
       }
@@ -3106,7 +3163,7 @@ export default function BirdDogPage() {
     const match = playersById.get(desiredPlayerId);
     if (!match) return;
     const selectionKey = `manual:${desiredPlayerId}`;
-    setDesiredPlayers((prev) => {
+    setDesiredPlayersAndPersist((prev) => {
       if (prev.some((item) => item.playerId === desiredPlayerId || desiredPlayerSelectionKey(item) === selectionKey)) return prev;
       return [...prev, { playerId: desiredPlayerId, selectionKey, name: match.name, team: match.school || "Unknown Team" }];
     });
@@ -3116,7 +3173,10 @@ export default function BirdDogPage() {
   }
 
   function removeDesiredPlayer(selectionKey: string) {
-    setDesiredPlayers((prev) => prev.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey));
+    setDesiredPlayersAndPersist((prev) => prev.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey));
+    persistTeamRosterCart(
+      teamRosterCartPlayers.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey)
+    );
     autoPlannerRef.current.key = "";
     setAndPersistPlanWorkflowStatus("draft");
     setPlanWorkflowNote("Target player removed. Recommendation is regenerating.");
@@ -3131,14 +3191,14 @@ export default function BirdDogPage() {
     persistTeamRosterCart(
       teamRosterCartPlayers.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey)
     );
-    setDesiredPlayers((prev) => prev.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey));
+    setDesiredPlayersAndPersist((prev) => prev.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey));
     autoPlannerRef.current.key = "";
     setAndPersistPlanWorkflowStatus("draft");
   }
 
   function clearTeamRosterCart() {
     persistTeamRosterCart([]);
-    setDesiredPlayers((prev) =>
+    setDesiredPlayersAndPersist((prev) =>
       prev.filter((item) => !String(desiredPlayerSelectionKey(item)).startsWith("team:"))
     );
     autoPlannerRef.current.key = "";
@@ -3152,7 +3212,7 @@ export default function BirdDogPage() {
       return;
     }
 
-    setDesiredPlayers((prev) => {
+    setDesiredPlayersAndPersist((prev) => {
       if (mode === "replace") return teamRosterCartPlayers;
       const merged = new Map<string, DesiredPlayer>(
         prev.map((item) => [desiredPlayerSelectionKey(item), item])
@@ -3723,7 +3783,7 @@ export default function BirdDogPage() {
           {menuOpen ? (
             <div className="menu-dropdown">
               <div className="menu-brand">
-                <img src="/branding/a-point-scout-icon.svg?v=20260506n" alt="APOINT SCOUT" />
+                <img src="/branding/a-point-scout-icon.svg?v=20260506p" alt="APOINT SCOUT" />
                 <div className="menu-brand-copy">
                   <p>APOINT SCOUT</p>
                   <p>{orgDisplayName}</p>
