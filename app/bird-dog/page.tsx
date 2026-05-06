@@ -4335,29 +4335,35 @@ export default function BirdDogPage() {
                         const selectionKey = desiredPlayerSelectionKey(player);
                         return (
                           <tr key={`final-cart-${selectionKey}`}>
-                            <td>{player.name}</td>
+                            <td>
+                              <div className="row wrap" style={{ alignItems: "center", gap: 8 }}>
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  aria-label="Move player up"
+                                  title="Move up"
+                                  onClick={() => moveTeamRosterCartPlayer(selectionKey, -1)}
+                                  disabled={index === 0}
+                                  style={{ minWidth: 44, padding: "8px 10px" }}
+                                >
+                                  ↑
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  aria-label="Move player down"
+                                  title="Move down"
+                                  onClick={() => moveTeamRosterCartPlayer(selectionKey, 1)}
+                                  disabled={index === teamRosterCartPlayers.length - 1}
+                                  style={{ minWidth: 44, padding: "8px 10px" }}
+                                >
+                                  ↓
+                                </button>
+                                <span>{player.name}</span>
+                              </div>
+                            </td>
                             <td>{player.team}</td>
                             <td className="action-cell">
-                              <button
-                                type="button"
-                                className="secondary"
-                                aria-label="Move player up"
-                                title="Move up"
-                                onClick={() => moveTeamRosterCartPlayer(selectionKey, -1)}
-                                disabled={index === 0}
-                              >
-                                ↑
-                              </button>
-                              <button
-                                type="button"
-                                className="secondary"
-                                aria-label="Move player down"
-                                title="Move down"
-                                onClick={() => moveTeamRosterCartPlayer(selectionKey, 1)}
-                                disabled={index === teamRosterCartPlayers.length - 1}
-                              >
-                                ↓
-                              </button>
                               <button
                                 type="button"
                                 className="secondary"
