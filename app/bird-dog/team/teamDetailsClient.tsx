@@ -2250,7 +2250,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
         {!inlineMode && menuOpen ? (
           <div className="menu-dropdown">
             <div className="menu-brand">
-              <img src="/branding/a-point-scout-icon.svg?v=20260506h" alt="APOINT SCOUT" />
+              <img src="/branding/a-point-scout-icon.svg?v=20260506i" alt="APOINT SCOUT" />
               <div className="menu-brand-copy">
                 <p>APOINT SCOUT</p>
                 <p>{String(sessionTheme?.orgName || "Apoint Scout Admin")}</p>
