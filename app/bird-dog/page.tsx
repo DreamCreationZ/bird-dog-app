@@ -3723,7 +3723,7 @@ export default function BirdDogPage() {
           {menuOpen ? (
             <div className="menu-dropdown">
               <div className="menu-brand">
-                <img src="/branding/a-point-scout-icon.svg?v=20260506i" alt="APOINT SCOUT" />
+                <img src="/branding/a-point-scout-icon.svg?v=20260506j" alt="APOINT SCOUT" />
                 <div className="menu-brand-copy">
                   <p>APOINT SCOUT</p>
                   <p>{orgDisplayName}</p>
