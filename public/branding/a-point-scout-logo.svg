@@ -22,12 +22,11 @@
   </defs>
 
   <rect x="86" y="86" width="852" height="852" rx="122" fill="url(#bg)" stroke="#35557d" stroke-width="8"/>
-  <rect x="170" y="170" width="684" height="684" rx="74" fill="none" stroke="#2c568d" stroke-width="6"/>
 
   <g filter="url(#shadow)">
-    <path d="M366 472 L446 472 L340 862 L214 896 L398 896 L398 944 L60 944 L60 918 L190 888 Z" fill="url(#metal)"/>
-    <path d="M578 472 L658 472 L834 888 L964 918 L964 944 L626 944 L626 896 L810 896 L684 862 Z" fill="url(#metal)"/>
-    <rect x="108" y="646" width="808" height="62" fill="url(#metal)"/>
+    <path d="M368 472 L448 472 L334 848 L178 900 L58 922 L58 944 L380 944 L380 900 L212 900 Z" fill="url(#metal)"/>
+    <path d="M576 472 L656 472 L812 900 L644 900 L644 944 L966 944 L966 922 L846 900 L690 848 Z" fill="url(#metal)"/>
+    <rect x="102" y="646" width="820" height="62" fill="url(#metal)"/>
   </g>
 
   <g filter="url(#shadow)">
