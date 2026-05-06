@@ -93,8 +93,9 @@ export async function POST(req: NextRequest) {
         const tournamentById = await getHarvestedTournament(session.orgId, tournamentId);
         if (tournamentById) {
           const existingTeamCount = teamCount(tournamentById.teams);
+          const looksIncompleteDataset = company === "PG" && existingTeamCount === 0;
           const looksTruncatedArchive = company === "PG" && isArchive && existingTeamCount > 0 && existingTeamCount <= 120;
-          if (looksTruncatedArchive) {
+          if (looksTruncatedArchive || looksIncompleteDataset) {
             const scrapeHint = tournamentHint || inventoryHarvestHint({
               slug: inventorySlug,
               name: selected?.name || seedMeta?.name || tournamentById.name || "Perfect Game Tournament",
@@ -147,8 +148,9 @@ export async function POST(req: NextRequest) {
           const hydrated = await getHarvestedTournament(session.orgId, found.id).catch(() => null);
           const existingTournament = hydrated || found;
           const existingTeamCount = teamCount(existingTournament?.teams);
+          const looksIncompleteDataset = company === "PG" && existingTeamCount === 0;
           const looksTruncatedArchive = company === "PG" && isArchive && existingTeamCount > 0 && existingTeamCount <= 120;
-          if (looksTruncatedArchive) {
+          if (looksTruncatedArchive || looksIncompleteDataset) {
             const scrapeHint = tournamentHint || inventoryHarvestHint({
               slug: inventorySlug,
               name: selected?.name || seedMeta?.name || found.name || "Perfect Game Tournament",
