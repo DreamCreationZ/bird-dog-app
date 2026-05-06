@@ -13,11 +13,11 @@
   </defs>
 
   <g>
-    <path d="M220 300 L420 300 L332 960 L94 960 Z" fill="url(#metal)"/>
-    <path d="M604 300 L804 300 L930 960 L692 960 Z" fill="url(#metal)"/>
-    <rect x="8" y="722" width="1008" height="64" fill="url(#metal)"/>
-    <path d="M8 1004 L374 1004 L374 952 L252 932 L118 932 L8 972 Z" fill="url(#metal)"/>
-    <path d="M650 952 L650 1004 L1016 1004 L1016 972 L906 932 L772 932 Z" fill="url(#metal)"/>
+    <path d="M250 430 L420 430 L332 960 L110 960 Z" fill="url(#metal)"/>
+    <path d="M604 430 L774 430 L914 960 L692 960 Z" fill="url(#metal)"/>
+    <rect x="24" y="724" width="976" height="60" fill="url(#metal)"/>
+    <path d="M12 1000 L370 1000 L370 954 L254 936 L120 936 L12 972 Z" fill="url(#metal)"/>
+    <path d="M654 954 L654 1000 L1012 1000 L1012 972 L904 936 L770 936 Z" fill="url(#metal)"/>
   </g>
 
   <g>
