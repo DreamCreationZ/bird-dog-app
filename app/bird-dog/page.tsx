@@ -3147,6 +3147,16 @@ export default function BirdDogPage() {
         throw new Error("Tournament data was empty.");
       }
       applyOpenedTournament(openedTournament);
+      const teamCount = Array.isArray(openedTournament.teams) ? openedTournament.teams.length : 0;
+      if (teamCount === 0 && item.company === "PG") {
+        setOpenError("Tournament details are syncing. Rechecking shortly...");
+        await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
+        window.setTimeout(() => {
+          void refreshTournamentByInventory(item);
+        }, 6000);
+      } else {
+        setOpenError("");
+      }
     } catch (error) {
       setOpenError(error instanceof Error ? error.message : "Failed to open tournament.");
       await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
