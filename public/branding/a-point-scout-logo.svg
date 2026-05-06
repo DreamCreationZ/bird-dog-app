@@ -24,9 +24,9 @@
   <rect x="86" y="86" width="852" height="852" rx="122" fill="url(#bg)" stroke="#35557d" stroke-width="8"/>
 
   <g filter="url(#shadow)">
-    <path d="M368 472 L448 472 L334 848 L178 900 L58 922 L58 944 L380 944 L380 900 L212 900 Z" fill="url(#metal)"/>
-    <path d="M576 472 L656 472 L812 900 L644 900 L644 944 L966 944 L966 922 L846 900 L690 848 Z" fill="url(#metal)"/>
-    <rect x="102" y="646" width="820" height="62" fill="url(#metal)"/>
+    <path d="M346 468 L456 468 L330 842 L156 904 L38 926 L38 946 L400 946 L400 900 L214 900 Z" fill="url(#metal)"/>
+    <path d="M568 468 L678 468 L810 900 L624 900 L624 946 L986 946 L986 926 L868 904 L694 842 Z" fill="url(#metal)"/>
+    <rect x="84" y="654" width="856" height="44" fill="url(#metal)"/>
   </g>
 
   <g filter="url(#shadow)">
