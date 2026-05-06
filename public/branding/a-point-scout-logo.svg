@@ -1,44 +1,52 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">APOINT SCOUT Logo</title>
-  <desc id="desc">Compass badge on top of stylized metallic A with a crossbar through both legs.</desc>
+  <desc id="desc">Compass over stylized A logo mark.</desc>
   <defs>
-    <linearGradient id="bg" x1="140" y1="120" x2="900" y2="940" gradientUnits="userSpaceOnUse">
+    <linearGradient id="bg" x1="120" y1="120" x2="900" y2="930" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#041738"/>
-      <stop offset="0.55" stop-color="#03102c"/>
-      <stop offset="1" stop-color="#020a1d"/>
+      <stop offset="0.55" stop-color="#03102d"/>
+      <stop offset="1" stop-color="#020a1e"/>
     </linearGradient>
-    <linearGradient id="metal" x1="200" y1="360" x2="720" y2="900" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#f9fcff"/>
-      <stop offset="0.46" stop-color="#e4ebf5"/>
-      <stop offset="1" stop-color="#cdd6e4"/>
+    <linearGradient id="metal" x1="210" y1="420" x2="790" y2="940" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f9fbff"/>
+      <stop offset="0.52" stop-color="#e4ebf4"/>
+      <stop offset="1" stop-color="#cad2df"/>
     </linearGradient>
-    <linearGradient id="badgeBlue" x1="430" y1="180" x2="590" y2="360" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#184784"/>
-      <stop offset="1" stop-color="#082245"/>
+    <linearGradient id="diamondBlue" x1="380" y1="150" x2="700" y2="500" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#124178"/>
+      <stop offset="1" stop-color="#072445"/>
     </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="150%" height="150%">
-      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000000" flood-opacity="0.38"/>
+    <filter id="shadow" x="-25%" y="-25%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity="0.42"/>
     </filter>
   </defs>
 
-  <rect x="88" y="88" width="848" height="848" rx="122" fill="url(#bg)" stroke="#38557d" stroke-width="8"/>
+  <rect x="86" y="86" width="852" height="852" rx="122" fill="url(#bg)" stroke="#35557d" stroke-width="8"/>
+  <rect x="170" y="170" width="684" height="684" rx="74" fill="none" stroke="#2c568d" stroke-width="6"/>
 
   <g filter="url(#shadow)">
-    <line x1="352" y1="396" x2="244" y2="792" stroke="url(#metal)" stroke-width="70" stroke-linecap="square"/>
-    <line x1="528" y1="396" x2="636" y2="792" stroke="url(#metal)" stroke-width="70" stroke-linecap="square"/>
-    <line x1="198" y1="626" x2="684" y2="626" stroke="url(#metal)" stroke-width="56" stroke-linecap="square"/>
-    <line x1="198" y1="614" x2="684" y2="614" stroke="#ffffff" stroke-opacity="0.35" stroke-width="9" stroke-linecap="square"/>
+    <path d="M366 472 L446 472 L340 862 L214 896 L398 896 L398 944 L60 944 L60 918 L190 888 Z" fill="url(#metal)"/>
+    <path d="M578 472 L658 472 L834 888 L964 918 L964 944 L626 944 L626 896 L810 896 L684 862 Z" fill="url(#metal)"/>
+    <rect x="108" y="646" width="808" height="62" fill="url(#metal)"/>
   </g>
 
   <g filter="url(#shadow)">
-    <path d="M512 192L592 254L512 316L432 254L512 192Z" fill="url(#badgeBlue)" stroke="#eef5ff" stroke-width="9" stroke-linejoin="round"/>
-    <circle cx="512" cy="254" r="46" fill="none" stroke="#eef5ff" stroke-width="8"/>
-    <line x1="512" y1="200" x2="512" y2="214" stroke="#eef5ff" stroke-width="7" stroke-linecap="round"/>
-    <line x1="512" y1="294" x2="512" y2="308" stroke="#eef5ff" stroke-width="7" stroke-linecap="round"/>
-    <line x1="458" y1="254" x2="472" y2="254" stroke="#eef5ff" stroke-width="7" stroke-linecap="round"/>
-    <line x1="552" y1="254" x2="566" y2="254" stroke="#eef5ff" stroke-width="7" stroke-linecap="round"/>
-    <polygon points="512,254 554,226 526,268" fill="#f8fbff"/>
-    <polygon points="512,254 470,282 498,240" fill="#c3132d"/>
-    <circle cx="512" cy="254" r="6" fill="#f8fbff"/>
+    <path d="M512 122 L748 324 L512 526 L276 324 Z" fill="url(#diamondBlue)" stroke="#eef4ff" stroke-width="14" stroke-linejoin="round"/>
+    <path d="M512 156 L712 324 L512 492 L312 324 Z" fill="none" stroke="#edf4ff" stroke-opacity="0.78" stroke-width="6" stroke-linejoin="round"/>
+
+    <path d="M465 167 A74 74 0 0 0 559 167" fill="none" stroke="#edf4ff" stroke-width="9" stroke-linecap="round"/>
+    <path d="M336 281 A48 48 0 0 0 336 367" fill="none" stroke="#edf4ff" stroke-width="9" stroke-linecap="round"/>
+    <path d="M688 281 A48 48 0 0 1 688 367" fill="none" stroke="#edf4ff" stroke-width="9" stroke-linecap="round"/>
+    <path d="M474 460 A44 44 0 0 0 550 460" fill="none" stroke="#edf4ff" stroke-width="9" stroke-linecap="round"/>
+
+    <circle cx="512" cy="324" r="92" fill="none" stroke="#edf4ff" stroke-width="10"/>
+    <line x1="512" y1="215" x2="512" y2="241" stroke="#edf4ff" stroke-width="9" stroke-linecap="round"/>
+    <line x1="512" y1="407" x2="512" y2="433" stroke="#edf4ff" stroke-width="9" stroke-linecap="round"/>
+    <line x1="403" y1="324" x2="429" y2="324" stroke="#edf4ff" stroke-width="9" stroke-linecap="round"/>
+    <line x1="595" y1="324" x2="621" y2="324" stroke="#edf4ff" stroke-width="9" stroke-linecap="round"/>
+
+    <polygon points="512,324 607,260 544,355" fill="#f7fbff"/>
+    <polygon points="512,324 417,388 480,293" fill="#b30f27"/>
+    <circle cx="512" cy="324" r="10" fill="#f7fbff"/>
   </g>
 </svg>
