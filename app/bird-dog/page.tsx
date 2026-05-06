@@ -3297,6 +3297,28 @@ export default function BirdDogPage() {
     setAndPersistPlanWorkflowStatus("draft");
   }
 
+  function moveTeamRosterCartPlayer(selectionKey: string, direction: -1 | 1) {
+    const currentIndex = teamRosterCartPlayers.findIndex((item) => desiredPlayerSelectionKey(item) === selectionKey);
+    if (currentIndex < 0) return;
+    const targetIndex = currentIndex + direction;
+    if (targetIndex < 0 || targetIndex >= teamRosterCartPlayers.length) return;
+
+    const nextCart = [...teamRosterCartPlayers];
+    const [moved] = nextCart.splice(currentIndex, 1);
+    nextCart.splice(targetIndex, 0, moved);
+    persistTeamRosterCart(nextCart);
+
+    setDesiredPlayersAndPersist((prev) => {
+      if (!prev.length) return prev;
+      const desiredSet = new Set(prev.map((item) => desiredPlayerSelectionKey(item)));
+      const reorderedFromCart = nextCart.filter((item) => desiredSet.has(desiredPlayerSelectionKey(item)));
+      const remaining = prev.filter((item) => !desiredPlayerSelectionKey(item).startsWith("team:"));
+      return [...reorderedFromCart, ...remaining];
+    });
+    autoPlannerRef.current.key = "";
+    setAndPersistPlanWorkflowStatus("draft");
+  }
+
   function clearTeamRosterCart() {
     persistTeamRosterCart([]);
     setDesiredPlayersAndPersist((prev) =>
@@ -4294,9 +4316,6 @@ export default function BirdDogPage() {
         <div style={{ width: "100%" }}>
           <div className="panel" style={{ marginBottom: 10 }}>
             <h3 style={{ marginTop: 0 }}>Final Player Cart (All Teams)</h3>
-            <p className="muted" style={{ marginTop: 4 }}>
-              Coaches can review all selected roster players here before tournament team list and schedule generation.
-            </p>
             <p className="muted" style={{ marginTop: 6, marginBottom: 8 }}>
               Cart players: {teamRosterCartPlayers.length}
             </p>
@@ -4312,13 +4331,33 @@ export default function BirdDogPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {teamRosterCartPlayers.map((player) => {
+                      {teamRosterCartPlayers.map((player, index) => {
                         const selectionKey = desiredPlayerSelectionKey(player);
                         return (
                           <tr key={`final-cart-${selectionKey}`}>
                             <td>{player.name}</td>
                             <td>{player.team}</td>
                             <td className="action-cell">
+                              <button
+                                type="button"
+                                className="secondary"
+                                aria-label="Move player up"
+                                title="Move up"
+                                onClick={() => moveTeamRosterCartPlayer(selectionKey, -1)}
+                                disabled={index === 0}
+                              >
+                                ↑
+                              </button>
+                              <button
+                                type="button"
+                                className="secondary"
+                                aria-label="Move player down"
+                                title="Move down"
+                                onClick={() => moveTeamRosterCartPlayer(selectionKey, 1)}
+                                disabled={index === teamRosterCartPlayers.length - 1}
+                              >
+                                ↓
+                              </button>
                               <button
                                 type="button"
                                 className="secondary"
