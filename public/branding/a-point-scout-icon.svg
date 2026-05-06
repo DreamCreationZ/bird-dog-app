@@ -15,7 +15,7 @@
   <g>
     <path d="M312 422 L430 522 L350 938 L172 938 Z" fill="url(#metal)"/>
     <path d="M594 522 L712 422 L852 938 L674 938 Z" fill="url(#metal)"/>
-    <rect x="78" y="722" width="868" height="52" fill="url(#metal)"/>
+    <rect x="170" y="722" width="684" height="52" fill="url(#metal)"/>
     <path d="M78 988 L364 988 L364 944 L250 924 L136 924 L78 956 Z" fill="url(#metal)"/>
     <path d="M660 944 L660 988 L946 988 L946 956 L888 924 L774 924 Z" fill="url(#metal)"/>
   </g>
