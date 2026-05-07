@@ -38,12 +38,13 @@ body {
 .login-brand-mark {
   width: 148px;
   height: 148px;
-  border-radius: 24px;
-  border: 1px solid rgba(181, 204, 240, 0.35);
-  background: rgba(8, 16, 30, 0.95);
-  padding: 6px;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
   margin: 0 0 8px;
   object-fit: contain;
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.35));
 }
 
 .login-card form {

@@ -1,43 +1,105 @@
-<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">APOINT SCOUT Icon</title>
-  <desc id="desc">Compass over stylized A mark.</desc>
+<svg width="1660" height="1335" viewBox="0 0 1660 1335" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Apoint Scout Compass A</title>
+  <desc id="desc">Wide metallic A with enlarged baseball-diamond compass emblem on dark navy background.</desc>
   <defs>
-    <linearGradient id="metal" x1="80" y1="560" x2="940" y2="980" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#edf2fb"/>
+    <linearGradient id="bgGrad" x1="120" y1="40" x2="1580" y2="1260" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1e2b46"/>
+      <stop offset="0.42" stop-color="#091d3f"/>
+      <stop offset="1" stop-color="#020d24"/>
+    </linearGradient>
+    <filter id="bgNoise" x="-14%" y="-14%" width="128%" height="128%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" seed="14" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer>
+        <feFuncA type="table" tableValues="0 0.13"/>
+      </feComponentTransfer>
+    </filter>
+
+    <linearGradient id="metalBase" x1="120" y1="540" x2="1540" y2="1290" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fcfdff"/>
+      <stop offset="0.2" stop-color="#edf1f6"/>
+      <stop offset="0.5" stop-color="#cfd7e3"/>
+      <stop offset="0.76" stop-color="#b9c2d0"/>
+      <stop offset="1" stop-color="#f0f3f9"/>
+    </linearGradient>
+    <linearGradient id="metalDepth" x1="200" y1="550" x2="1420" y2="1250" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.5"/>
+      <stop offset="0.43" stop-color="#9aa5b8" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#0b1320" stop-opacity="0.34"/>
+    </linearGradient>
+    <pattern id="brushed" width="14" height="14" patternUnits="userSpaceOnUse" patternTransform="rotate(-18)">
+      <line x1="0" y1="0" x2="0" y2="14" stroke="#ffffff" stroke-opacity="0.1" stroke-width="1"/>
+      <line x1="7" y1="0" x2="7" y2="14" stroke="#ffffff" stroke-opacity="0.06" stroke-width="1"/>
+    </pattern>
+    <filter id="embossShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="8" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+
+    <linearGradient id="diamondBlue" x1="550" y1="120" x2="1180" y2="860" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#12467f"/>
+      <stop offset="1" stop-color="#072a58"/>
+    </linearGradient>
+    <linearGradient id="whiteBevel" x1="420" y1="92" x2="1260" y2="930" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
       <stop offset="1" stop-color="#d7deea"/>
     </linearGradient>
-    <linearGradient id="fieldBlue" x1="266" y1="136" x2="764" y2="576" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#124582"/>
-      <stop offset="1" stop-color="#07244a"/>
+    <linearGradient id="needleWhite" x1="665" y1="622" x2="1002" y2="362" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f7fbff"/>
+      <stop offset="1" stop-color="#dce3ee"/>
     </linearGradient>
+    <linearGradient id="needleRed" x1="834" y1="506" x2="1002" y2="362" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ca1932"/>
+      <stop offset="1" stop-color="#9d1026"/>
+    </linearGradient>
+
+    <clipPath id="aClip">
+      <path d="M315 1268 L560 580 L760 580 L560 1230 L320 1275 Z"/>
+      <path d="M1345 1268 L1100 580 L900 580 L1100 1230 L1340 1275 Z"/>
+      <path d="M130 822 L1530 822 L1488 902 L172 902 Z"/>
+      <path d="M40 1326 L700 1326 L626 1286 L170 1286 Z"/>
+      <path d="M1620 1326 L960 1326 L1034 1286 L1490 1286 Z"/>
+    </clipPath>
   </defs>
 
-  <g>
-    <path d="M312 422 L430 522 L350 938 L172 938 Z" fill="url(#metal)"/>
-    <path d="M594 522 L712 422 L852 938 L674 938 Z" fill="url(#metal)"/>
-    <rect x="152" y="722" width="720" height="52" fill="url(#metal)"/>
-    <path d="M78 988 L364 988 L364 944 L250 924 L136 924 L78 956 Z" fill="url(#metal)"/>
-    <path d="M660 944 L660 988 L946 988 L946 956 L888 924 L774 924 Z" fill="url(#metal)"/>
+  <rect width="1660" height="1335" fill="url(#bgGrad)"/>
+  <rect width="1660" height="1335" filter="url(#bgNoise)"/>
+
+  <g filter="url(#embossShadow)">
+    <path d="M315 1268 L560 580 L760 580 L560 1230 L320 1275 Z" fill="url(#metalBase)"/>
+    <path d="M1345 1268 L1100 580 L900 580 L1100 1230 L1340 1275 Z" fill="url(#metalBase)"/>
+    <path d="M130 822 L1530 822 L1488 902 L172 902 Z" fill="url(#metalBase)"/>
+    <path d="M40 1326 L700 1326 L626 1286 L170 1286 Z" fill="url(#metalBase)"/>
+    <path d="M1620 1326 L960 1326 L1034 1286 L1490 1286 Z" fill="url(#metalBase)"/>
   </g>
 
-  <g>
-    <path d="M512 130 L784 360 L512 592 L240 360 Z" fill="url(#fieldBlue)" stroke="#eef4ff" stroke-width="15" stroke-linejoin="round"/>
-    <path d="M512 168 L740 360 L512 556 L284 360 Z" fill="none" stroke="#ebf2ff" stroke-width="7" stroke-linejoin="round"/>
+  <g clip-path="url(#aClip)">
+    <rect x="0" y="520" width="1660" height="820" fill="url(#metalDepth)"/>
+    <rect x="0" y="520" width="1660" height="820" fill="url(#brushed)" opacity="0.96"/>
+    <path d="M210 820 L1460 820 L1418 838 L252 838 Z" fill="#ffffff" opacity="0.26"/>
+    <path d="M230 904 L1430 904 L1400 924 L260 924 Z" fill="#263245" opacity="0.26"/>
+  </g>
 
-    <path d="M472 180 A72 72 0 0 0 552 180" fill="none" stroke="#edf3ff" stroke-width="10" stroke-linecap="round"/>
-    <path d="M336 298 A48 48 0 0 0 336 382" fill="none" stroke="#edf3ff" stroke-width="10" stroke-linecap="round"/>
-    <path d="M688 298 A48 48 0 0 1 688 382" fill="none" stroke="#edf3ff" stroke-width="10" stroke-linecap="round"/>
-    <path d="M480 474 A42 42 0 0 0 544 474" fill="none" stroke="#edf3ff" stroke-width="10" stroke-linecap="round"/>
+  <g filter="url(#embossShadow)">
+    <path d="M830 76 L1254 500 L830 924 L406 500 Z" fill="url(#diamondBlue)" stroke="url(#whiteBevel)" stroke-width="22" stroke-linejoin="round"/>
+    <path d="M830 132 L1198 500 L830 868 L462 500 Z" fill="none" stroke="#eaf0fb" stroke-width="8" stroke-linejoin="round"/>
 
-    <circle cx="512" cy="340" r="98" fill="none" stroke="#edf3ff" stroke-width="12"/>
-    <line x1="512" y1="222" x2="512" y2="264" stroke="#edf3ff" stroke-width="11" stroke-linecap="round"/>
-    <line x1="512" y1="416" x2="512" y2="458" stroke="#edf3ff" stroke-width="11" stroke-linecap="round"/>
-    <line x1="392" y1="340" x2="434" y2="340" stroke="#edf3ff" stroke-width="11" stroke-linecap="round"/>
-    <line x1="590" y1="340" x2="632" y2="340" stroke="#edf3ff" stroke-width="11" stroke-linecap="round"/>
+    <path d="M750 142 A80 80 0 0 0 910 142" fill="none" stroke="#eaf0fb" stroke-width="12" stroke-linecap="round"/>
+    <path d="M468 434 A58 58 0 0 0 468 566" fill="none" stroke="#eaf0fb" stroke-width="12" stroke-linecap="round"/>
+    <path d="M1192 434 A58 58 0 0 1 1192 566" fill="none" stroke="#eaf0fb" stroke-width="12" stroke-linecap="round"/>
+    <path d="M754 774 L906 774 L906 806 L830 862 L754 806 Z" fill="#0e305f" stroke="#eaf0fb" stroke-width="10" stroke-linejoin="round"/>
 
-    <line x1="422" y1="404" x2="628" y2="264" stroke="#f4f8ff" stroke-width="18" stroke-linecap="round"/>
-    <line x1="526" y1="336" x2="628" y2="264" stroke="#b90f29" stroke-width="14" stroke-linecap="round"/>
-    <circle cx="512" cy="340" r="13" fill="#0a2a4f" stroke="#edf3ff" stroke-width="6"/>
-    <circle cx="512" cy="340" r="4.5" fill="#edf3ff"/>
+    <circle cx="830" cy="500" r="170" fill="none" stroke="#f2f6fd" stroke-width="18"/>
+    <line x1="830" y1="275" x2="830" y2="340" stroke="#f2f6fd" stroke-width="17" stroke-linecap="round"/>
+    <line x1="830" y1="660" x2="830" y2="725" stroke="#f2f6fd" stroke-width="17" stroke-linecap="round"/>
+    <line x1="590" y1="500" x2="655" y2="500" stroke="#f2f6fd" stroke-width="17" stroke-linecap="round"/>
+    <line x1="1005" y1="500" x2="1070" y2="500" stroke="#f2f6fd" stroke-width="17" stroke-linecap="round"/>
+
+    <line x1="650" y1="620" x2="1000" y2="366" stroke="url(#needleWhite)" stroke-width="30" stroke-linecap="round"/>
+    <line x1="830" y1="500" x2="1000" y2="366" stroke="url(#needleRed)" stroke-width="24" stroke-linecap="round"/>
+    <path d="M1000 366 L948 378 L970 330 Z" fill="url(#needleRed)"/>
+    <path d="M650 620 L702 608 L680 650 Z" fill="url(#needleWhite)"/>
+
+    <circle cx="830" cy="500" r="30" fill="#07264d" stroke="#f2f6fd" stroke-width="10"/>
+    <circle cx="830" cy="500" r="10" fill="#f2f6fd"/>
   </g>
 </svg>
