@@ -1,107 +1,105 @@
-<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" shape-rendering="geometricPrecision">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-labelledby="title desc" shape-rendering="geometricPrecision">
   <title id="title">Apoint Scout Mark</title>
-  <desc id="desc">Athletic metallic A with integrated diamond compass emblem.</desc>
+  <desc id="desc">Precision vector logo with dominant athletic A and integrated compass diamond emblem.</desc>
   <defs>
-    <linearGradient id="metalBase" x1="92" y1="420" x2="928" y2="980" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#fbfdff"/>
-      <stop offset="0.26" stop-color="#eceff5"/>
-      <stop offset="0.56" stop-color="#d0d7e3"/>
-      <stop offset="0.82" stop-color="#b8c2d1"/>
-      <stop offset="1" stop-color="#eef2f8"/>
+    <linearGradient id="metalA" x1="78" y1="526" x2="918" y2="966" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fefeff"/>
+      <stop offset="0.24" stop-color="#edf1f7"/>
+      <stop offset="0.54" stop-color="#d9e0ea"/>
+      <stop offset="0.86" stop-color="#c4cedb"/>
+      <stop offset="1" stop-color="#eef3f9"/>
     </linearGradient>
-    <linearGradient id="metalDepth" x1="148" y1="482" x2="854" y2="944" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.42"/>
-      <stop offset="0.46" stop-color="#92a0b4" stop-opacity="0.12"/>
-      <stop offset="1" stop-color="#0f1827" stop-opacity="0.33"/>
+    <linearGradient id="metalAHi" x1="140" y1="640" x2="866" y2="706" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#d2dae5" stop-opacity="0.1"/>
     </linearGradient>
-    <linearGradient id="metalEdge" x1="120" y1="588" x2="902" y2="680" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.35"/>
-      <stop offset="1" stop-color="#5e6b80" stop-opacity="0.08"/>
+    <linearGradient id="metalASh" x1="174" y1="704" x2="870" y2="1010" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1a2638" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#0c1521" stop-opacity="0.28"/>
     </linearGradient>
-    <pattern id="brush" width="11" height="11" patternUnits="userSpaceOnUse" patternTransform="rotate(-19)">
-      <line x1="0" y1="0" x2="0" y2="11" stroke="#ffffff" stroke-opacity="0.1" stroke-width="1"/>
-      <line x1="5.5" y1="0" x2="5.5" y2="11" stroke="#ffffff" stroke-opacity="0.06" stroke-width="1"/>
+    <pattern id="brush" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(-18)">
+      <path d="M0 0V10" stroke="#ffffff" stroke-opacity="0.1" stroke-width="1"/>
+      <path d="M5 0V10" stroke="#ffffff" stroke-opacity="0.05" stroke-width="1"/>
     </pattern>
-    <linearGradient id="diamondBlue" x1="316" y1="148" x2="722" y2="606" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#12457f"/>
-      <stop offset="1" stop-color="#072a58"/>
+    <linearGradient id="diamondFill" x1="306" y1="166" x2="728" y2="586" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#124780"/>
+      <stop offset="1" stop-color="#072b58"/>
     </linearGradient>
-    <linearGradient id="frameMetal" x1="260" y1="126" x2="772" y2="648" gradientUnits="userSpaceOnUse">
+    <linearGradient id="diamondStroke" x1="260" y1="130" x2="764" y2="634" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#d6deec"/>
+      <stop offset="1" stop-color="#d7dfeb"/>
     </linearGradient>
-    <linearGradient id="needleWhite" x1="406" y1="460" x2="640" y2="286" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#f9fbff"/>
-      <stop offset="1" stop-color="#d8e0ec"/>
+    <linearGradient id="needleWhite" x1="424" y1="470" x2="624" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fafdff"/>
+      <stop offset="1" stop-color="#d9e2ef"/>
     </linearGradient>
-    <linearGradient id="needleRed" x1="520" y1="385" x2="640" y2="286" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#cb1933"/>
-      <stop offset="1" stop-color="#9f1126"/>
+    <linearGradient id="needleRed" x1="522" y1="388" x2="624" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c71831"/>
+      <stop offset="1" stop-color="#9f1025"/>
     </linearGradient>
-    <clipPath id="aClip">
-      <path d="M248 906 L332 468 L454 468 L342 876 Z"/>
-      <path d="M776 906 L692 468 L570 468 L682 876 Z"/>
-      <path d="M112 612 L912 612 L886 684 L138 684 Z"/>
-      <path d="M58 990 L470 990 L424 950 L140 950 Z"/>
-      <path d="M966 990 L554 990 L600 950 L884 950 Z"/>
+    <clipPath id="clipA">
+      <path d="M188 922L308 552H426L322 884L154 948Z"/>
+      <path d="M836 922L716 552H598L702 884L870 948Z"/>
+      <path d="M124 678H900L878 738H146Z"/>
+      <path d="M40 996H396L366 956H116Z"/>
+      <path d="M984 996H628L658 956H908Z"/>
     </clipPath>
   </defs>
 
-  <!-- Depth layer: emblem shadow into A apex -->
-  <g opacity="0.32">
-    <path d="M358 608 L444 540 L512 604 L434 674 Z" fill="#101c33"/>
-    <path d="M666 608 L580 540 L512 604 L590 674 Z" fill="#101c33"/>
-  </g>
-
   <!-- 1) Base capital A -->
-  <g id="base-A">
-    <path d="M248 906 L332 468 L454 468 L342 876 Z" fill="url(#metalBase)"/>
-    <path d="M776 906 L692 468 L570 468 L682 876 Z" fill="url(#metalBase)"/>
-    <path d="M112 612 L912 612 L886 684 L138 684 Z" fill="url(#metalBase)"/>
-    <path d="M58 990 L470 990 L424 950 L140 950 Z" fill="url(#metalBase)"/>
-    <path d="M966 990 L554 990 L600 950 L884 950 Z" fill="url(#metalBase)"/>
-
-    <!-- 6) Metallic gradients + directional brushed highlight -->
-    <g clip-path="url(#aClip)">
-      <rect x="0" y="452" width="1024" height="560" fill="url(#metalDepth)"/>
-      <rect x="0" y="452" width="1024" height="560" fill="url(#brush)" opacity="0.94"/>
-      <path d="M112 612 L912 612 L888 626 L136 626 Z" fill="url(#metalEdge)"/>
-      <path d="M130 682 L894 682 L874 696 L150 696 Z" fill="#253246" opacity="0.22"/>
+  <g id="base_A">
+    <path d="M188 922L308 552H426L322 884L154 948Z" fill="url(#metalA)"/>
+    <path d="M836 922L716 552H598L702 884L870 948Z" fill="url(#metalA)"/>
+    <path d="M124 678H900L878 738H146Z" fill="url(#metalA)"/>
+    <path d="M40 996H396L366 956H116Z" fill="url(#metalA)"/>
+    <path d="M984 996H628L658 956H908Z" fill="url(#metalA)"/>
+    <g clip-path="url(#clipA)">
+      <path d="M0 520H1024V1024H0Z" fill="url(#metalASh)"/>
+      <path d="M0 622H1024V734H0Z" fill="url(#metalAHi)"/>
+      <path d="M0 520H1024V1024H0Z" fill="url(#brush)" opacity="0.9"/>
+      <path d="M124 678H900L888 700H136Z" fill="#ffffff" opacity="0.24"/>
+      <path d="M146 738H878L866 752H158Z" fill="#203047" opacity="0.22"/>
+      <path d="M224 922L330 552H356L254 914Z" fill="#ffffff" opacity="0.14"/>
+      <path d="M800 922L694 552H668L770 914Z" fill="#0f1c2c" opacity="0.13"/>
     </g>
   </g>
 
-  <!-- 2) Diamond frame (reduced ~13%, lowered into apex) -->
-  <g id="diamond-frame">
-    <path d="M512 134 L747 369 L512 604 L277 369 Z" fill="url(#diamondBlue)" stroke="url(#frameMetal)" stroke-width="16" stroke-linejoin="miter"/>
-    <path d="M512 170 L711 369 L512 568 L313 369 Z" fill="none" stroke="#e8eef9" stroke-width="6" stroke-linejoin="miter"/>
+  <!-- depth where emblem nests into A -->
+  <g id="apex_nest" opacity="0.26">
+    <path d="M366 614L452 550L512 614L430 686Z" fill="#0d182c"/>
+    <path d="M658 614L572 550L512 614L594 686Z" fill="#0d182c"/>
+  </g>
 
-    <path d="M468 174 A44 44 0 0 0 556 174" fill="none" stroke="#e8eef9" stroke-width="8" stroke-linecap="square"/>
-    <path d="M314 332 A36 36 0 0 0 314 406" fill="none" stroke="#e8eef9" stroke-width="8" stroke-linecap="square"/>
-    <path d="M710 332 A36 36 0 0 1 710 406" fill="none" stroke="#e8eef9" stroke-width="8" stroke-linecap="square"/>
-    <path d="M468 526 L556 526 L556 546 L512 578 L468 546 Z" fill="none" stroke="#e8eef9" stroke-width="7" stroke-linejoin="miter"/>
+  <!-- 2) Diamond frame -->
+  <g id="diamond_frame">
+    <path d="M512 134L766 388L512 642L258 388Z" fill="url(#diamondFill)" stroke="url(#diamondStroke)" stroke-width="16" stroke-linejoin="miter"/>
+    <path d="M512 164L736 388L512 612L288 388Z" fill="none" stroke="#eaf0fb" stroke-width="6" stroke-linejoin="miter"/>
+    <path d="M468 164A44 44 0 0 0 556 164" fill="none" stroke="#eaf0fb" stroke-width="8" stroke-linecap="square"/>
+    <path d="M288 346A34 34 0 0 0 288 430" fill="none" stroke="#eaf0fb" stroke-width="8" stroke-linecap="square"/>
+    <path d="M736 346A34 34 0 0 1 736 430" fill="none" stroke="#eaf0fb" stroke-width="8" stroke-linecap="square"/>
+    <path d="M468 566H556V586L512 620L468 586Z" fill="none" stroke="#eaf0fb" stroke-width="8" stroke-linejoin="miter"/>
   </g>
 
   <!-- 3) Compass ring -->
-  <g id="compass-ring">
-    <circle cx="512" cy="369" r="100" fill="none" stroke="#f2f6fd" stroke-width="15"/>
+  <g id="compass_ring">
+    <circle cx="512" cy="388" r="94" fill="none" stroke="#f3f7fd" stroke-width="13"/>
   </g>
 
   <!-- 5) Crosshair marks -->
-  <g id="crosshair-marks" stroke="#f2f6fd" stroke-width="12" stroke-linecap="square">
-    <line x1="512" y1="238" x2="512" y2="270"/>
-    <line x1="512" y1="468" x2="512" y2="500"/>
-    <line x1="381" y1="369" x2="413" y2="369"/>
-    <line x1="611" y1="369" x2="643" y2="369"/>
+  <g id="crosshair_marks" fill="#f3f7fd">
+    <rect x="506" y="256" width="12" height="42"/>
+    <rect x="506" y="478" width="12" height="42"/>
+    <rect x="378" y="382" width="44" height="12"/>
+    <rect x="602" y="382" width="44" height="12"/>
   </g>
 
   <!-- 4) Compass needle -->
-  <g id="compass-needle">
-    <path d="M406 446 L436 418 L614 288 L640 258 L606 278 L428 408 Z" fill="url(#needleWhite)"/>
-    <path d="M512 369 L614 288 L640 258 L592 300 Z" fill="url(#needleRed)"/>
-    <!-- shorter, wider red tip -->
-    <path d="M640 258 L612 264 L622 236 Z" fill="url(#needleRed)"/>
-    <path d="M406 446 L434 440 L424 468 Z" fill="url(#needleWhite)"/>
-    <circle cx="512" cy="369" r="22" fill="#092a55" stroke="#f2f6fd" stroke-width="7"/>
-    <circle cx="512" cy="369" r="7" fill="#f2f6fd"/>
+  <g id="compass_needle">
+    <path d="M424 468L448 444L604 314L626 284L596 302L438 432Z" fill="url(#needleWhite)"/>
+    <path d="M518 384L604 314L626 284L592 312Z" fill="url(#needleRed)"/>
+    <path d="M626 284L602 290L612 264Z" fill="url(#needleRed)"/>
+    <path d="M424 468L446 462L436 486Z" fill="url(#needleWhite)"/>
+    <circle cx="512" cy="388" r="21" fill="#0a2a55" stroke="#f3f7fd" stroke-width="7"/>
+    <circle cx="512" cy="388" r="7" fill="#f3f7fd"/>
   </g>
 </svg>
