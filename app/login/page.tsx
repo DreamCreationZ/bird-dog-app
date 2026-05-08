@@ -76,6 +76,7 @@ export default function LoginPage() {
   const [mfaCode, setMfaCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [biometricLoading, setBiometricLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [stage, setStage] = useState<"credentials" | "mfa">("credentials");
@@ -362,17 +363,17 @@ export default function LoginPage() {
         ["--login-primary" as string]: org.primary,
         ["--login-accent" as string]: org.accent,
         ["--login-primary-soft" as string]: toAlpha(org.primary, 0.16),
-        ["--login-accent-soft" as string]: toAlpha(org.accent, 0.22)
+        ["--login-accent-soft" as string]: toAlpha(org.primary, 0.16)
       }}
     >
       <section className="login-card">
         <img
-          src="/branding/a-point-scout-icon.svg?v=20260508a"
+          src="/branding/a-point-scout-mark.svg?v=20260508b"
           alt="APOINT SCOUT"
           className="login-brand-mark"
         />
-        <h1>APOINT SCOUT</h1>
-        <p>Sign up or sign in with your university email.</p>
+        <h1 className="login-title">APOINT SCOUT</h1>
+        <p className="login-subtitle">Sign up or sign in with your university email.</p>
 
         {stage === "credentials" ? (
           <>
@@ -413,19 +414,55 @@ export default function LoginPage() {
                 </label>
               </>
             ) : null}
-            <label>
+            <label className="login-field">
               University Email
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@university.edu"
-                required
-              />
+              <div className="input-shell">
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@university.edu"
+                  required
+                />
+                <span className="input-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" focusable="false">
+                    <path d="M3 6h18v12H3z" fill="none" />
+                    <path d="M4.5 7.5h15a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z" />
+                    <path d="M4 8l8 6 8-6" />
+                  </svg>
+                </span>
+              </div>
             </label>
-            <label>
+            <label className="login-field">
               Password
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              <div className="input-shell">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+                <button
+                  type="button"
+                  className="input-icon-btn"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  onClick={() => setShowPassword((prev) => !prev)}
+                >
+                  {showPassword ? (
+                    <svg viewBox="0 0 24 24" focusable="false">
+                      <path d="M3 3l18 18" />
+                      <path d="M10.5 6.2A10.2 10.2 0 0 1 12 6c5.4 0 9.6 4.2 10.9 6-1 1.4-3.8 4.3-7.6 5.5" />
+                      <path d="M6.3 7.1C3.9 8.6 2.3 10.9 1 12c1.3 1.8 5.5 6 11 6 1.3 0 2.5-.2 3.7-.5" />
+                      <path d="M9.7 9.7a3.2 3.2 0 0 0 4.6 4.6" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" focusable="false">
+                      <path d="M1 12c1.3-1.8 5.5-6 11-6s9.7 4.2 11 6c-1.3 1.8-5.5 6-11 6S2.3 13.8 1 12z" />
+                      <circle cx="12" cy="12" r="3.2" />
+                    </svg>
+                  )}
+                </button>
+              </div>
             </label>
             {authIntent === "signup" && !isAdminEmail ? (
               <>
