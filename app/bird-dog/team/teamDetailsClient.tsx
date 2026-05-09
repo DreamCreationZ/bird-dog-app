@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 type Props = {
   initialParams: {
@@ -25,6 +25,10 @@ type TeamScheduleRow = {
   field: string;
   homeTeam: string;
   awayTeam: string;
+  dayLabel?: string;
+  ageDiv?: string;
+  homeScore?: string;
+  awayScore?: string;
 };
 
 type TeamRosterRow = {
@@ -183,7 +187,7 @@ function teamDetailsCacheKey(input: Props["initialParams"]) {
     input.returnTournamentId,
     input.eventId
   ].join("|");
-  return `bird_dog:team_details:v4:${identity}`;
+  return `bird_dog:team_details:v5:${identity}`;
 }
 
 function readTeamDetailsCache(key: string): TeamDetailsCachePayload | null {
@@ -419,7 +423,7 @@ function ensureRosterTeam(rows: TeamRosterRow[], fallbackTeam: string) {
 }
 
 function parseScheduleDateTime(row: TeamScheduleRow, index: number) {
-  const raw = `${row.date || ""} ${row.time || ""}`.trim();
+  const raw = `${row.date || row.dayLabel || ""} ${row.time || ""}`.trim();
   const date = raw ? new Date(raw) : new Date();
   if (!Number.isNaN(date.getTime())) return date;
   return new Date(Date.now() + index * 90 * 60 * 1000);
@@ -443,9 +447,13 @@ function scheduleRowKey(row: TeamScheduleRow) {
   return [
     row.gameNo || "",
     normalize(row.date || ""),
+    normalize(row.dayLabel || ""),
     normalize(row.time || ""),
     normalize(row.field || ""),
+    normalize(row.ageDiv || ""),
     normalize(row.homeTeam || ""),
+    normalize(row.homeScore || ""),
+    normalize(row.awayScore || ""),
     normalize(row.awayTeam || "")
   ].join("|");
 }
@@ -2178,9 +2186,34 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     const query = scheduleSearch.trim().toLowerCase();
     if (!query) return scheduleRows;
     return scheduleRows.filter((row) =>
-      `${row.date} ${row.time} ${row.field} ${row.homeTeam} ${row.awayTeam}`.toLowerCase().includes(query)
+      `${row.dayLabel || ""} ${row.date} ${row.time} ${row.gameNo || ""} ${row.field} ${row.ageDiv || ""} ${row.homeTeam} ${row.homeScore || ""} ${row.awayScore || ""} ${row.awayTeam}`
+        .toLowerCase()
+        .includes(query)
     );
   }, [scheduleRows, scheduleSearch]);
+
+  const hasDetailedScheduleColumns = useMemo(
+    () => filteredSchedule.some((row) => Boolean(row.ageDiv || row.homeScore || row.awayScore || row.dayLabel)),
+    [filteredSchedule]
+  );
+
+  const groupedSchedule = useMemo(() => {
+    const groups: Array<{ label: string; rows: TeamScheduleRow[] }> = [];
+    const byLabel = new Map<string, TeamScheduleRow[]>();
+    for (const row of filteredSchedule) {
+      const fallbackDate = row.date || "-";
+      const label = row.dayLabel || fallbackDate;
+      const existing = byLabel.get(label);
+      if (existing) {
+        existing.push(row);
+        continue;
+      }
+      const next: TeamScheduleRow[] = [row];
+      byLabel.set(label, next);
+      groups.push({ label, rows: next });
+    }
+    return groups;
+  }, [filteredSchedule]);
 
   const filteredRoster = useMemo(() => {
     const query = normalizeSearchText(rosterSearch);
@@ -2300,14 +2333,35 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
             type="button"
             onClick={() => downloadPdfLikeReport(
               `Team Schedule - ${initialParams.teamName}`,
-              ["Date", "Time", "Field / Location", "Opponent"],
-              filteredSchedule.map((row) => {
-                const location =
-                  /@\s*$/.test((row.field || "").trim()) && looksLikeLocation(row.homeTeam || "")
-                    ? `${row.field} ${row.homeTeam}`
-                    : (row.field || "");
-                return [row.date || "-", row.time || "-", location.trim() || "-", pickOpponent(initialParams.teamName, row.homeTeam, row.awayTeam)];
-              })
+              hasDetailedScheduleColumns
+                ? ["Day", "Time", "Game", "Location", "Age/Div", "Team", "Score", "Team"]
+                : ["Date", "Time", "Field / Location", "Opponent"],
+              hasDetailedScheduleColumns
+                ? filteredSchedule.map((row) => {
+                  const location =
+                    /@\s*$/.test((row.field || "").trim()) && looksLikeLocation(row.homeTeam || "")
+                      ? `${row.field} ${row.homeTeam}`
+                      : (row.field || "");
+                  const leftScore = row.homeScore || "-";
+                  const rightScore = row.awayScore || "-";
+                  return [
+                    row.dayLabel || row.date || "-",
+                    row.time || "-",
+                    row.gameNo || "-",
+                    location.trim() || "-",
+                    row.ageDiv || "-",
+                    row.homeTeam || "-",
+                    `${leftScore} - ${rightScore}`,
+                    row.awayTeam || "-"
+                  ];
+                })
+                : filteredSchedule.map((row) => {
+                  const location =
+                    /@\s*$/.test((row.field || "").trim()) && looksLikeLocation(row.homeTeam || "")
+                      ? `${row.field} ${row.homeTeam}`
+                      : (row.field || "");
+                  return [row.date || "-", row.time || "-", location.trim() || "-", pickOpponent(initialParams.teamName, row.homeTeam, row.awayTeam)];
+                })
             )}
           >
             Download Schedule PDF
@@ -2323,28 +2377,70 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
         </label>
         <div className="table-wrap" style={{ marginTop: 8 }}>
           <table className="roster-table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Time</th>
-                <th>Field / Location</th>
-                <th>Opponent</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredSchedule.length ? filteredSchedule.map((row, idx) => (
-                <tr key={`${row.gameNo}-${idx}`}>
-                  <td>{row.date || "-"}</td>
-                  <td>{row.time || "-"}</td>
-                  <td>{(/\@\s*$/.test((row.field || "").trim()) && looksLikeLocation(row.homeTeam || "") ? `${row.field} ${row.homeTeam}` : row.field || "-").trim()}</td>
-                  <td>{pickOpponent(initialParams.teamName, row.homeTeam, row.awayTeam)}</td>
-                </tr>
-              )) : (
-                <tr>
-                  <td colSpan={4}>No schedule rows found yet for this team.</td>
-                </tr>
-              )}
-            </tbody>
+            {hasDetailedScheduleColumns ? (
+              <>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Game</th>
+                    <th>Location</th>
+                    <th>Age/Div</th>
+                    <th>Team</th>
+                    <th>Score</th>
+                    <th>Team</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groupedSchedule.length ? groupedSchedule.map((group, groupIdx) => (
+                    <Fragment key={`${group.label}-${groupIdx}`}>
+                      <tr>
+                        <td colSpan={7} style={{ fontWeight: 700 }}>{group.label}</td>
+                      </tr>
+                      {group.rows.map((row, idx) => (
+                        <tr key={`${row.gameNo}-${groupIdx}-${idx}`}>
+                          <td>{row.time || "-"}</td>
+                          <td>{row.gameNo || "-"}</td>
+                          <td>{(/\@\s*$/.test((row.field || "").trim()) && looksLikeLocation(row.homeTeam || "") ? `${row.field} ${row.homeTeam}` : row.field || "-").trim()}</td>
+                          <td>{row.ageDiv || "-"}</td>
+                          <td>{row.homeTeam || "-"}</td>
+                          <td>{`${row.homeScore || "-"} - ${row.awayScore || "-"}`}</td>
+                          <td>{row.awayTeam || "-"}</td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  )) : (
+                    <tr>
+                      <td colSpan={7}>No schedule rows found yet for this team.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </>
+            ) : (
+              <>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Time</th>
+                    <th>Field / Location</th>
+                    <th>Opponent</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredSchedule.length ? filteredSchedule.map((row, idx) => (
+                    <tr key={`${row.gameNo}-${idx}`}>
+                      <td>{row.date || "-"}</td>
+                      <td>{row.time || "-"}</td>
+                      <td>{(/\@\s*$/.test((row.field || "").trim()) && looksLikeLocation(row.homeTeam || "") ? `${row.field} ${row.homeTeam}` : row.field || "-").trim()}</td>
+                      <td>{pickOpponent(initialParams.teamName, row.homeTeam, row.awayTeam)}</td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td colSpan={4}>No schedule rows found yet for this team.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </>
+            )}
           </table>
         </div>
         <div className="panel" style={{ marginTop: 12 }}>
