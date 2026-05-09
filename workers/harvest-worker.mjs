@@ -17,12 +17,33 @@ const AUTO_SYNC_FAILURE_RETRY_SECONDS = Math.max(
   Number(process.env.HARVEST_AUTO_SYNC_FAILURE_RETRY_SECONDS || 120)
 );
 const AUTO_SYNC_SCOPE = String(process.env.HARVEST_AUTO_SYNC_SCOPE || "all").trim().toLowerCase();
+const PBR_LIST_URL = "https://tournaments.prepbaseballreport.com";
 
 function parseCsv(value) {
   return String(value || "")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function normalizeSpace(value) {
+  return String(value || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function slugify(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 200);
 }
 
 const AUTO_SYNC_COMPANIES = new Set(
@@ -88,6 +109,9 @@ async function finishJob(jobId, status, errorMessage = null) {
 }
 
 function inventoryHarvestHint(inventory) {
+  if (inventory.harvestHint) {
+    return inventory.harvestHint;
+  }
   if (inventory.company === "PG") {
     if (
       inventory.slug === "2025-pg-16u-wwba-national-championship"
@@ -100,6 +124,57 @@ function inventoryHarvestHint(inventory) {
   return inventory.name;
 }
 
+async function fetchLivePbrInventory() {
+  const response = await fetch(PBR_LIST_URL, {
+    cache: "no-store",
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`PBR list returned ${response.status}`);
+  }
+
+  const html = await response.text();
+  const out = [];
+  const seen = new Set();
+  const pattern =
+    /<meta itemprop="name" content="([^"]*)">[\s\S]*?<meta itemprop="startDate" content="([^"]*)">[\s\S]*?<meta itemprop="addressLocality" content="([^"]*)">[\s\S]*?<meta itemprop="addressRegion" content="([^"]*)">[\s\S]*?<a href="([^"]*\/events\/[^"]*)"[^>]*>\s*SCHEDULES\s*<\/a>/gi;
+
+  let match = pattern.exec(html);
+  while (match) {
+    const name = normalizeSpace(match[1]);
+    const startRaw = normalizeSpace(match[2]);
+    const city = normalizeSpace(match[3]);
+    const state = normalizeSpace(match[4]);
+    const eventUrl = normalizeSpace(match[5]);
+    const absoluteUrl = /^https?:\/\//i.test(eventUrl)
+      ? eventUrl
+      : `${PBR_LIST_URL}${eventUrl.startsWith("/") ? "" : "/"}${eventUrl}`;
+
+    if (name && absoluteUrl) {
+      const location = [city, state].filter(Boolean).join(", ");
+      const slug = `pbr-live-${slugify(name)}-${slugify(location || "city-tbd")}-${slugify(startRaw || "undated")}`;
+      const key = `${name.toLowerCase()}::${absoluteUrl.toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push({
+          slug,
+          name,
+          company: "PBR",
+          harvestHint: absoluteUrl
+        });
+      }
+    }
+    match = pattern.exec(html);
+  }
+
+  return out;
+}
+
 async function listInventoryForAutoSync() {
   const rows = await supabaseRequest("circuit_inventory", {
     query: {
@@ -109,15 +184,38 @@ async function listInventoryForAutoSync() {
     }
   }).catch(() => []);
 
-  return Array.isArray(rows)
+  const baseInventory = Array.isArray(rows)
     ? rows
         .map((row) => ({
           slug: String(row.slug || "").trim(),
           name: String(row.name || "").trim(),
-          company: String(row.company || "").trim().toUpperCase()
+          company: String(row.company || "").trim().toUpperCase(),
+          harvestHint: ""
         }))
         .filter((row) => row.slug && row.name && (row.company === "PG" || row.company === "PBR"))
     : [];
+
+  let livePbr = [];
+  try {
+    livePbr = await fetchLivePbrInventory();
+  } catch (error) {
+    console.error("[auto-sync] unable to load live PBR inventory:", error instanceof Error ? error.message : String(error));
+  }
+
+  const byKey = new Map();
+  for (const item of baseInventory) {
+    if (item.company === "PBR") {
+      byKey.set(`PBR:${item.name.toLowerCase()}`, item);
+      continue;
+    }
+    byKey.set(`${item.company}:${item.slug}`, item);
+  }
+
+  for (const item of livePbr) {
+    byKey.set(`PBR:${item.name.toLowerCase()}`, item);
+  }
+
+  return Array.from(byKey.values());
 }
 
 async function listOrgIdsForAutoSync() {

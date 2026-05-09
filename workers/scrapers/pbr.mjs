@@ -1,7 +1,10 @@
 import { fetchTournamentHtml } from "../lib/http-client.mjs";
 
+const PBR_TOURNAMENTS_BASE_URL = "https://tournaments.prepbaseballreport.com";
+
 function cleanText(input) {
-  return input
+  const value = String(input ?? "");
+  return value
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<[^>]+>/g, " ")
@@ -14,6 +17,88 @@ function cleanText(input) {
 function safeIso(value, fallbackIso) {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? fallbackIso : parsed.toISOString();
+}
+
+function parseDateParts(value) {
+  const raw = cleanText(value || "");
+  if (!raw) return null;
+
+  const numeric = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (numeric) {
+    const month = Number(numeric[1]);
+    const day = Number(numeric[2]);
+    let year = Number(numeric[3]);
+    if (year < 100) year += 2000;
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year >= 1900) {
+      return { year, month, day };
+    }
+  }
+
+  const monthName = raw.match(/^([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})$/);
+  if (monthName) {
+    const names = {
+      january: 1,
+      february: 2,
+      march: 3,
+      april: 4,
+      may: 5,
+      june: 6,
+      july: 7,
+      august: 8,
+      september: 9,
+      october: 10,
+      november: 11,
+      december: 12
+    };
+    const month = names[monthName[1].toLowerCase()];
+    const day = Number(monthName[2]);
+    const year = Number(monthName[3]);
+    if (month && day >= 1 && day <= 31) {
+      return { year, month, day };
+    }
+  }
+
+  return null;
+}
+
+function datePartsToIso(parts) {
+  if (!parts) return "";
+  const year = String(parts.year).padStart(4, "0");
+  const month = String(parts.month).padStart(2, "0");
+  const day = String(parts.day).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isoFromDateAndTime(dateIso, timeText, fallbackIso) {
+  const dateMatch = String(dateIso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!dateMatch) return fallbackIso;
+
+  const year = Number(dateMatch[1]);
+  const month = Number(dateMatch[2]);
+  const day = Number(dateMatch[3]);
+  const raw = cleanText(timeText || "");
+
+  let hour = 9;
+  let minute = 0;
+
+  const ampm = raw.match(/^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$/);
+  if (ampm) {
+    hour = Number(ampm[1]) % 12;
+    if (ampm[3].toUpperCase() === "PM") hour += 12;
+    minute = Number(ampm[2]);
+  } else {
+    const twentyFour = raw.match(/^(\d{1,2}):(\d{2})$/);
+    if (twentyFour) {
+      hour = Number(twentyFour[1]);
+      minute = Number(twentyFour[2]);
+    } else {
+      return fallbackIso;
+    }
+  }
+
+  const parsed = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+  if (Number.isNaN(parsed.getTime())) return fallbackIso;
+  return parsed.toISOString();
 }
 
 function readTitle(html) {
@@ -30,15 +115,21 @@ function readId(url, hint) {
 }
 
 function parseDate(html) {
+  const schemaStart = html.match(/<meta[^>]+itemprop=["']startDate["'][^>]+content=["']([^"']+)["']/i);
+  if (schemaStart) {
+    const iso = datePartsToIso(parseDateParts(schemaStart[1]));
+    if (iso) return iso;
+  }
+
   const monthDate = html.match(/(\b\w+\s+\d{1,2},\s+\d{4}\b)/);
   if (monthDate) {
-    const d = new Date(monthDate[1]);
-    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    const iso = datePartsToIso(parseDateParts(monthDate[1]));
+    if (iso) return iso;
   }
   const numericDate = html.match(/\b(\d{1,2}\/\d{1,2}\/\d{2,4})\b/);
   if (numericDate) {
-    const d = new Date(numericDate[1]);
-    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    const iso = datePartsToIso(parseDateParts(numericDate[1]));
+    if (iso) return iso;
   }
   return new Date().toISOString().slice(0, 10);
 }
@@ -62,7 +153,7 @@ function toAbsolutePbrUrl(href) {
   const value = String(href || "").trim();
   if (!value) return "";
   if (/^https?:\/\//i.test(value)) return value;
-  return `https://www.prepbaseballreport.com${value.startsWith("/") ? "" : "/"}${value}`;
+  return `${PBR_TOURNAMENTS_BASE_URL}${value.startsWith("/") ? "" : "/"}${value}`;
 }
 
 function findFirstEventUrl(html) {
@@ -82,6 +173,217 @@ function normalizeTeamName(name) {
     .replace(/\s+/g, " ")
     .replace(/\((\d+-\d+(-\d+)?)\)/g, "")
     .trim();
+}
+
+function slugify(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function parseScheduleDateLabel(label, fallbackDate) {
+  const raw = cleanText(label || "");
+  if (!raw) return fallbackDate;
+  const normalized = raw.replace(/^[A-Za-z]+\s*-\s*/, "").trim();
+  const iso = datePartsToIso(parseDateParts(normalized));
+  return iso || fallbackDate;
+}
+
+function parseScheduleContext(html, targetUrl) {
+  const eventId = html.match(/window\.EVENT_ID\s*=\s*"(\d+)"/i)?.[1] || "";
+  const defaultEventPriceId = html.match(/window\.EVENT_PRICE_ID\s*=\s*"([^"]+)"/i)?.[1] || "0";
+  const scheduleAjaxUrl = html.match(/window\.SCHEDULE_AJAX_URL\s*=\s*"([^"]+)"/i)?.[1]
+    || `${PBR_TOURNAMENTS_BASE_URL}/schedule_ajax`;
+  const csrfToken = html.match(/<meta[^>]+name=["']csrf-token["'][^>]+content=["']([^"']+)["']/i)?.[1] || "";
+  const divisionsRaw = html.match(/window\.DIVISIONS\s*=\s*(\{[\s\S]*?\});/i)?.[1] || "";
+
+  let divisions = {};
+  if (divisionsRaw) {
+    try {
+      divisions = JSON.parse(divisionsRaw);
+    } catch {
+      divisions = {};
+    }
+  }
+
+  const divisionKeys = Object.keys(divisions || {})
+    .map((key) => Number(key))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+
+  const eventBase = targetUrl.match(/^(https?:\/\/[^/]+\/events\/[^/?#]+)/i)?.[1] || "";
+
+  return {
+    eventId,
+    defaultEventPriceId: String(defaultEventPriceId || "0"),
+    scheduleAjaxUrl,
+    csrfToken,
+    divisions,
+    divisionKeys,
+    eventBase
+  };
+}
+
+function scheduleAllUrl(targetUrl) {
+  const eventBase = targetUrl.match(/^(https?:\/\/[^/]+\/events\/[^/?#]+)/i)?.[1];
+  if (!eventBase) return targetUrl;
+  return `${eventBase}/schedule/all`;
+}
+
+async function fetchSchedulePayload(context, eventPriceId, scheduleId, scheduleDate = []) {
+  if (!context.eventId || !context.scheduleAjaxUrl) return null;
+
+  const body = new URLSearchParams();
+  body.set("event_id", String(context.eventId));
+  body.set("event_price_id", String(eventPriceId));
+  body.set("event_registration_item_id", "0");
+  body.set("schedule_id", String(scheduleId));
+  body.set("data_type", "schedules");
+  if (Array.isArray(scheduleDate) && scheduleDate.length) {
+    scheduleDate.forEach((value) => body.append("schedule_date[]", value));
+  }
+  if (context.csrfToken) {
+    body.set("_token", context.csrfToken);
+  }
+
+  const response = await fetch(context.scheduleAjaxUrl, {
+    method: "POST",
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      Accept: "application/json,text/plain,*/*",
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "X-Requested-With": "XMLHttpRequest",
+      Referer: context.eventBase ? `${context.eventBase}/schedule/all` : PBR_TOURNAMENTS_BASE_URL,
+      Origin: PBR_TOURNAMENTS_BASE_URL,
+      ...(context.csrfToken ? { "X-CSRF-TOKEN": context.csrfToken } : {})
+    },
+    body: body.toString()
+  });
+
+  if (!response.ok) {
+    throw new Error(`schedule_ajax ${response.status}`);
+  }
+
+  const payload = await response.json().catch(() => null);
+  return payload && typeof payload === "object" ? payload : null;
+}
+
+function parseGamesFromSchedulePayload(payload, fallbackDate, divisionLabel = "") {
+  const schedules = payload?.schedules;
+  if (!schedules || typeof schedules !== "object") return [];
+
+  const output = [];
+  const seen = new Set();
+
+  const scheduleEntries = Object.values(schedules);
+  for (const schedule of scheduleEntries) {
+    if (!schedule || typeof schedule !== "object") continue;
+    const dateLabel = cleanText(schedule.date || "");
+    const gameDate = parseScheduleDateLabel(dateLabel, fallbackDate);
+    const fallbackIso = `${gameDate}T09:00:00.000Z`;
+    const teams = Array.isArray(schedule.teams)
+      ? schedule.teams
+      : Object.values(schedule.teams || {});
+
+    for (const row of teams) {
+      if (!row || typeof row !== "object") continue;
+      const gameType = Number(row.game_type || 0);
+      // game_type=3 is practice session in PBR and is hidden on the default board view.
+      if (gameType === 3) continue;
+
+      const homeTeam = normalizeTeamName(row.team_name_1 || "");
+      const awayTeam = normalizeTeamName(row.team_name_2 || "");
+      if (!homeTeam && !awayTeam) continue;
+
+      const location = cleanText(row.location || row.field_name || "Field TBD");
+      const timeRaw = cleanText(row.time || "");
+      const gameNumber = cleanText(row.game_number || "");
+      const division = cleanText(row.division || divisionLabel || "");
+      const startTime = timeRaw
+        ? isoFromDateAndTime(gameDate, timeRaw, fallbackIso)
+        : fallbackIso;
+
+      const dedupeKey = [
+        gameDate,
+        timeRaw.toLowerCase(),
+        gameNumber.toLowerCase(),
+        location.toLowerCase(),
+        homeTeam.toLowerCase(),
+        awayTeam.toLowerCase(),
+        division.toLowerCase()
+      ].join("::");
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+
+      const idParts = [
+        "pbr",
+        slugify(gameDate || fallbackDate || "date"),
+        slugify(gameNumber || `${output.length + 1}`),
+        slugify(homeTeam || "team-a"),
+        slugify(awayTeam || "team-b")
+      ].filter(Boolean);
+      if (division) idParts.push(slugify(division));
+
+      output.push({
+        id: idParts.join("-"),
+        field: location,
+        fieldLocation: {
+          x: Number(row.field_id || row.location_id || output.length + 1) || output.length + 1,
+          y: Number(row.location_id || row.field_id || output.length + 2) || output.length + 2
+        },
+        startTime,
+        homeTeam: homeTeam || "TBD",
+        awayTeam: awayTeam || "TBD",
+        players: []
+      });
+    }
+  }
+
+  return output;
+}
+
+async function parseScheduleGames(scheduleHtml, fallbackDate, targetUrl) {
+  const context = parseScheduleContext(scheduleHtml, targetUrl);
+  if (!context.eventId) return [];
+
+  const games = [];
+  const seenIds = new Set();
+  const addGames = (rows) => {
+    for (const game of rows || []) {
+      const key = `${game.id}:${game.startTime}:${game.homeTeam}:${game.awayTeam}:${game.field}`;
+      if (seenIds.has(key)) continue;
+      seenIds.add(key);
+      games.push(game);
+    }
+  };
+
+  const primaryScheduleId = Number(context.divisions?.[context.defaultEventPriceId]?.schedule_id || 0) || 0;
+  try {
+    const allPayload = await fetchSchedulePayload(context, context.defaultEventPriceId, primaryScheduleId, []);
+    addGames(parseGamesFromSchedulePayload(allPayload, fallbackDate, ""));
+  } catch {
+    // Fallback to per-division calls below.
+  }
+
+  if (!games.length) {
+    for (const divisionKey of context.divisionKeys) {
+      if (!divisionKey) continue;
+      const division = context.divisions?.[divisionKey];
+      const scheduleId = Number(division?.schedule_id || 0);
+      if (!scheduleId) continue;
+      try {
+        const payload = await fetchSchedulePayload(context, divisionKey, scheduleId, []);
+        addGames(parseGamesFromSchedulePayload(payload, fallbackDate, cleanText(division?.label || "")));
+      } catch {
+        // Ignore single division failures and continue collecting others.
+      }
+    }
+  }
+
+  return games
+    .sort((a, b) => String(a.startTime).localeCompare(String(b.startTime)))
+    .slice(0, 600);
 }
 
 function parseGames(html, date) {
@@ -235,9 +537,28 @@ export async function scrapePbrTournament(hint) {
   const name = readTitle(html);
   const id = readId(target, hint);
   const date = parseDate(html);
-  const parsedGames = parseGames(html, date);
+  let parsedGames = [];
+  try {
+    const scheduleFetch = await fetchTournamentHtml("PBR", scheduleAllUrl(target));
+    parsedGames = await parseScheduleGames(scheduleFetch.html, date, scheduleFetch.target);
+  } catch {
+    parsedGames = [];
+  }
+  if (!parsedGames.length) {
+    parsedGames = parseGames(html, date);
+  }
   const players = parsePlayers(html);
-  const teams = parseParticipatingTeams(html, parsedGames);
+  let teamsHtml = html;
+  try {
+    const eventBase = target.match(/^(https?:\/\/[^/]+\/events\/[^/?#]+)/i)?.[1];
+    if (eventBase) {
+      const teamsFetch = await fetchTournamentHtml("PBR", `${eventBase}/teams`);
+      teamsHtml = teamsFetch.html;
+    }
+  } catch {
+    teamsHtml = html;
+  }
+  const teams = parseParticipatingTeams(teamsHtml, parsedGames);
   const games = parsedGames.length ? parsedGames : gamesFromTeams(teams, date);
 
   return {

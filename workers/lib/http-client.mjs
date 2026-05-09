@@ -42,7 +42,14 @@ function targetFromHint(company, hint) {
 function maybeBlocked(status, body) {
   if (status === 403 || status === 429 || status === 503) return true;
   const low = body.toLowerCase();
-  return low.includes("captcha") || low.includes("access denied") || low.includes("temporarily unavailable");
+  if (low.includes("access denied") || low.includes("temporarily unavailable")) return true;
+
+  // Avoid false positives from normal pages that include reCAPTCHA scripts.
+  if (low.includes("cf-turnstile")) return true;
+  if (low.includes("security check to access")) return true;
+  if (low.includes("just a moment")) return true;
+  if (low.includes("verify you are human") && low.includes("captcha")) return true;
+  return false;
 }
 
 export async function fetchTournamentHtml(company, hint) {
