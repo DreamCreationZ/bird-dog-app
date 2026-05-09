@@ -3971,20 +3971,21 @@ export default function BirdDogPage() {
               >
                 {companyLabel(company)} Dashboard
               </button>
-              <button
-                type="button"
-                className={company === "PBR" ? "active" : ""}
-                onClick={() => switchDashboardCompany("PBR")}
-              >
-                Login to PBR
-              </button>
-              <button
-                type="button"
-                className={company === "PG" ? "active" : ""}
-                onClick={() => switchDashboardCompany("PG")}
-              >
-                Login to PG
-              </button>
+              {company === "PG" ? (
+                <button
+                  type="button"
+                  onClick={() => switchDashboardCompany("PBR")}
+                >
+                  Login to PBR
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => switchDashboardCompany("PG")}
+                >
+                  Login to PG
+                </button>
+              )}
               <button
                 type="button"
                 className={activeTab === "schedule" ? "active" : ""}
@@ -4333,20 +4334,23 @@ export default function BirdDogPage() {
         <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", gap: 10 }}>
           <h2 style={{ margin: 0 }}>{company === "PBR" ? "PBR Dashboard" : "Tournament Dashboard"}</h2>
           <div className="row wrap" style={{ gap: 8 }}>
-            <button
-              type="button"
-              className={company === "PG" ? "" : "secondary"}
-              onClick={() => switchDashboardCompany("PG")}
-            >
-              Login to PG
-            </button>
-            <button
-              type="button"
-              className={company === "PBR" ? "" : "secondary"}
-              onClick={() => switchDashboardCompany("PBR")}
-            >
-              Login to PBR
-            </button>
+            {company === "PG" ? (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => switchDashboardCompany("PBR")}
+              >
+                Login to PBR
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => switchDashboardCompany("PG")}
+              >
+                Login to PG
+              </button>
+            )}
           </div>
         </div>
         {inventoryRefreshing ? <p className="muted small">Syncing latest data from {sourceLabel(company)}...</p> : null}
