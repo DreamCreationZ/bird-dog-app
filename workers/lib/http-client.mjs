@@ -36,7 +36,7 @@ function targetFromHint(company, hint) {
   if (company === "PG") {
     return `https://www.perfectgame.org/search.aspx?search=${encoded}`;
   }
-  return `https://www.prepbaseballreport.com/search?query=${encoded}`;
+  return `https://www.prepbaseballreport.com/search?q=${encoded}`;
 }
 
 function maybeBlocked(status, body) {

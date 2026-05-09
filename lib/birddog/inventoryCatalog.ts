@@ -35,6 +35,14 @@ const fall = [
   "2026 PG WWBA 13U & 14U World Championship"
 ];
 
+const pbr = [
+  "2025 PBR National Championship",
+  "2025 PBR Future Games",
+  "2025 PBR Junior Future Games",
+  "2025 PBR Senior Future Games",
+  "2025 PBR World Invite"
+];
+
 const presetMeta: Record<string, { date?: string; city?: string; teams?: string }> = {
   "2026-pg-wwba-national-championship": { date: "Jun 16-21", city: "Marietta, GA", teams: "34 TEAMS" },
   "2026-pg-14u-wwba-national-championship": { date: "Jun 20-25", city: "Hoover, AL", teams: "171 TEAMS" },
@@ -47,7 +55,12 @@ const presetMeta: Record<string, { date?: string; city?: string; teams?: string 
   "2026-pg-wwba-underclass-world-championship": { date: "Oct 1-5", city: "Fort Myers, FL", teams: "15 TEAMS" },
   "2026-pg-wwba-freshman-world-championship": { date: "Oct 8-12", city: "West Palm Beach, FL", teams: "6 TEAMS" },
   "2026-pg-wwba-world-championship": { date: "Oct 8-12", city: "Jupiter, FL" },
-  "2026-pg-wwba-13u-14u-world-championship": { date: "Oct 16-19", city: "West Palm Beach, FL", teams: "9 TEAMS" }
+  "2026-pg-wwba-13u-14u-world-championship": { date: "Oct 16-19", city: "West Palm Beach, FL", teams: "9 TEAMS" },
+  "2025-pbr-national-championship": { date: "Jul-Aug 2025", city: "United States" },
+  "2025-pbr-future-games": { date: "Jul-Aug 2025", city: "United States" },
+  "2025-pbr-junior-future-games": { date: "Jul-Aug 2025", city: "United States" },
+  "2025-pbr-senior-future-games": { date: "Jul-Aug 2025", city: "United States" },
+  "2025-pbr-world-invite": { date: "2025", city: "United States" }
 };
 
 export const INVENTORY_SEED: InventorySeed[] = [
@@ -76,6 +89,19 @@ export const INVENTORY_SEED: InventorySeed[] = [
       displayCity: meta.city,
       displayTeams: meta.teams
     };
+  }),
+  ...pbr.map((name) => {
+    const slug = slugify(name);
+    const meta = presetMeta[slug] || {};
+    return {
+      slug,
+      name,
+      season: "summer" as const,
+      company: "PBR" as const,
+      displayDate: meta.date,
+      displayCity: meta.city,
+      displayTeams: meta.teams
+    };
   })
 ];
 
@@ -86,5 +112,6 @@ export function inventoryHarvestHint(input: { slug: string; name: string; compan
     }
     return `https://www.perfectgame.org/search.aspx?search=${encodeURIComponent(input.name)}`;
   }
-  return input.name;
+  if (/^https?:\/\//i.test(input.name)) return input.name;
+  return `https://www.prepbaseballreport.com/search?q=${encodeURIComponent(input.name)}`;
 }

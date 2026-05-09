@@ -241,13 +241,17 @@ export async function POST(req: NextRequest) {
 
       return NextResponse.json({
         error: "Tournament not available in imported dataset yet.",
-        detail: "Live PG scraping is disabled. Import this tournament into Supabase first.",
+        detail: "Live scrape is disabled for this source right now. Queue an ingest job and retry after sync completes.",
         source: "imported_only_mode"
       }, { status: 409 });
     }
 
     if (company !== "PG") {
-      return NextResponse.json({ error: "Live open is currently enabled for PG tournaments only." }, { status: 400 });
+      return NextResponse.json({
+        error: "Tournament requires ingest before opening.",
+        detail: "Queue a harvest job for this source and retry after sync.",
+        source: "queue_required_mode"
+      }, { status: 409 });
     }
 
     const scrapedTournament = await scrapePgTournamentLive(tournamentHint);

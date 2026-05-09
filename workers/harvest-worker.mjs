@@ -26,7 +26,7 @@ function parseCsv(value) {
 }
 
 const AUTO_SYNC_COMPANIES = new Set(
-  parseCsv(process.env.HARVEST_AUTO_SYNC_COMPANIES || "PG")
+  parseCsv(process.env.HARVEST_AUTO_SYNC_COMPANIES || "PG,PBR")
     .map((value) => value.toUpperCase())
     .filter((value) => value === "PG" || value === "PBR")
 );

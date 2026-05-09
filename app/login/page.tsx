@@ -36,6 +36,8 @@ type LoginResult = {
   message?: string;
 };
 
+type DashboardProvider = "PG" | "PBR";
+
 type CountryCodeOption = {
   country: string;
   dialCode: string;
@@ -80,6 +82,7 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [stage, setStage] = useState<"credentials" | "mfa">("credentials");
+  const [dashboardProvider, setDashboardProvider] = useState<DashboardProvider>("PG");
 
   const org = useMemo(() => getOrgByEmail(email), [email]);
   const isAdminEmail = isPrivilegedAdminEmail(email);
@@ -151,6 +154,12 @@ export default function LoginPage() {
     return /^[^@\s]+@[^@\s]+\.edu$/i.test(String(value || "").trim());
   }
 
+  function dashboardTarget(provider: DashboardProvider) {
+    return provider === "PBR"
+      ? "/bird-dog?company=PBR&provider=PBR"
+      : "/bird-dog?company=PG&provider=PG";
+  }
+
   async function startLogin(event: FormEvent) {
     event.preventDefault();
     setLoading(true);
@@ -194,7 +203,7 @@ export default function LoginPage() {
         return;
       }
 
-      router.replace("/bird-dog");
+      router.replace(dashboardTarget(dashboardProvider));
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         setError("Login timed out. Please check connection and try again.");
@@ -232,7 +241,7 @@ export default function LoginPage() {
         setError(data?.error || "MFA verification failed.");
         return;
       }
-      router.replace("/bird-dog");
+      router.replace(dashboardTarget(dashboardProvider));
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         setError("Verification timed out. Please check connection and try again.");
@@ -348,7 +357,7 @@ export default function LoginPage() {
         return;
       }
       setInfo("Biometric sign-in successful.");
-      router.replace("/bird-dog");
+      router.replace(dashboardTarget(dashboardProvider));
     } catch {
       setError("Biometric verification failed or was cancelled.");
     } finally {
@@ -374,6 +383,22 @@ export default function LoginPage() {
         />
         <h1 className="login-title">APOINT SCOUT</h1>
         <p className="login-subtitle">Sign up or sign in with your university email.</p>
+        <div className="auth-toggle" role="tablist" aria-label="Circuit dashboard">
+          <button
+            type="button"
+            className={dashboardProvider === "PG" ? "active" : ""}
+            onClick={() => setDashboardProvider("PG")}
+          >
+            Login to PG
+          </button>
+          <button
+            type="button"
+            className={dashboardProvider === "PBR" ? "active" : ""}
+            onClick={() => setDashboardProvider("PBR")}
+          >
+            Login to PBR
+          </button>
+        </div>
 
         {stage === "credentials" ? (
           <>

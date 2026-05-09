@@ -248,6 +248,21 @@ const BOOKING_SUMMARY_KEY = "bird_dog:booking_summary:v1";
 const PROFILE_FORM_STORAGE_KEY_PREFIX = "bird_dog:profile_form:v1";
 const DEMO_FREE_TOURNAMENT_SLUGS = new Set(["2025-pg-16u-wwba-national-championship"]);
 
+function parseCompanyParam(value: string | null | undefined): "PG" | "PBR" | null {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (normalized === "PBR") return "PBR";
+  if (normalized === "PG") return "PG";
+  return null;
+}
+
+function companyLabel(value: "PG" | "PBR") {
+  return value === "PBR" ? "PBR" : "PG";
+}
+
+function sourceLabel(value: "PG" | "PBR") {
+  return value === "PBR" ? "Prep Baseball Report" : "Perfect Game";
+}
+
 function isTournamentLocked(item: InventoryTournament | null | undefined, options?: { forceUnlocked?: boolean }) {
   if (!item) return true;
   if (options?.forceUnlocked) return false;
@@ -1177,7 +1192,11 @@ export default function BirdDogPage() {
           : ["PG", "PBR"];
         setCompanies(nextCompanies);
 
-        const defaultCompany: "PG" | "PBR" = nextCompanies[0] || "PG";
+        const params = new URLSearchParams(window.location.search);
+        const requestedCompany = parseCompanyParam(params.get("company") || params.get("provider"));
+        const defaultCompany: "PG" | "PBR" = requestedCompany && nextCompanies.includes(requestedCompany)
+          ? requestedCompany
+          : (nextCompanies[0] || "PG");
         await Promise.allSettled([
           loadCompanyData(defaultCompany),
           fetchJobs(),
@@ -1237,6 +1256,7 @@ export default function BirdDogPage() {
     if (!user) return;
     const params = new URLSearchParams(window.location.search);
     const tab = params.get("tab");
+    const requestedCompany = parseCompanyParam(params.get("company") || params.get("provider"));
     const inventorySlug = params.get("inventorySlug");
     const tournamentId = params.get("tournamentId");
     if (tab === "coaches") {
@@ -1246,6 +1266,10 @@ export default function BirdDogPage() {
     }
     if (inventorySlug) {
       setSelectedInventorySlug(inventorySlug);
+    }
+    if (requestedCompany) {
+      setCompany(requestedCompany);
+      setJobHint(requestedCompany === "PBR" ? "Prep Baseball Tournament" : "PG Spring Showdown");
     }
     if (tournamentId) {
       setSelectedTournamentId(tournamentId);
@@ -3176,9 +3200,9 @@ export default function BirdDogPage() {
             return;
           }
         }
-        if (liveOpen.status === 409 && item.company === "PG") {
+        if (liveOpen.status === 409) {
           await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
-          setOpenError("Details are not yet available for this tournament. They will appear here once the upload is complete. Please tap Refresh in a few seconds.");
+          setOpenError(`${companyLabel(item.company)} data is syncing for this tournament. Please tap Refresh in a few seconds.`);
           return;
         }
         const detail = typeof data?.detail === "string" && data.detail ? ` (${data.detail})` : "";
@@ -3194,7 +3218,7 @@ export default function BirdDogPage() {
       }
       applyOpenedTournament(openedTournament);
       const teamCount = Array.isArray(openedTournament.teams) ? openedTournament.teams.length : 0;
-      if (teamCount === 0 && item.company === "PG") {
+      if (teamCount === 0) {
         setOpenError("Tournament details are syncing. Rechecking shortly...");
         await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
         window.setTimeout(() => {
@@ -3688,11 +3712,15 @@ export default function BirdDogPage() {
     if (!query) return teams;
     return teams.filter((team) => team.name.toLowerCase().includes(query));
   }, [selectedTournament?.teams, teamsSearchQuery]);
+  const companyTournamentInventory = useMemo(
+    () => displayInventory.filter((item) => item.company === company),
+    [company, displayInventory]
+  );
   const filteredTournamentInventory = useMemo(() => {
     const query = tournamentSearchQuery.trim().toLowerCase();
-    if (!query) return displayInventory;
-    return displayInventory.filter((item) => item.name.toLowerCase().includes(query));
-  }, [displayInventory, tournamentSearchQuery]);
+    if (!query) return companyTournamentInventory;
+    return companyTournamentInventory.filter((item) => item.name.toLowerCase().includes(query));
+  }, [companyTournamentInventory, tournamentSearchQuery]);
   const desiredPlayerIdSet = useMemo(
     () => new Set(desiredPlayers.map((item) => desiredPlayerSelectionKey(item))),
     [desiredPlayers]
@@ -3844,6 +3872,27 @@ export default function BirdDogPage() {
     setMenuOpen(false);
     void fetchInventory();
   }
+  function switchDashboardCompany(nextCompany: "PG" | "PBR") {
+    if (company === nextCompany && showTournaments) {
+      setMenuOpen(false);
+      return;
+    }
+    setMenuOpen(false);
+    setActiveTab("tournaments");
+    setCompany(nextCompany);
+    setSelectedInventorySlug("");
+    setSelectedTournamentId("");
+    setTournamentSearchQuery("");
+    setOpenError("");
+    setJobHint(nextCompany === "PBR" ? "Prep Baseball Tournament" : "PG Spring Showdown");
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      params.set("company", nextCompany);
+      params.set("provider", nextCompany);
+      window.history.replaceState({}, "", `/bird-dog?${params.toString()}`);
+    }
+    void Promise.allSettled([loadCompanyData(nextCompany, true), fetchInventory(), fetchJobs()]);
+  }
   function goBackInApp() {
     if (viewingSchedule) {
       setViewingSchedule(null);
@@ -3920,7 +3969,21 @@ export default function BirdDogPage() {
                   setMenuOpen(false);
                 }}
               >
-                Tournament Dashboard
+                {companyLabel(company)} Dashboard
+              </button>
+              <button
+                type="button"
+                className={company === "PBR" ? "active" : ""}
+                onClick={() => switchDashboardCompany("PBR")}
+              >
+                Login to PBR
+              </button>
+              <button
+                type="button"
+                className={company === "PG" ? "active" : ""}
+                onClick={() => switchDashboardCompany("PG")}
+              >
+                Login to PG
               </button>
               <button
                 type="button"
@@ -4267,11 +4330,29 @@ export default function BirdDogPage() {
 
       {showTournaments ? (
       <section className="panel">
-        <h2>Tournament Dashboard</h2>
-        {inventoryRefreshing ? <p className="muted small">Syncing latest data from Perfect Game...</p> : null}
+        <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <h2 style={{ margin: 0 }}>{company === "PBR" ? "PBR Dashboard" : "Tournament Dashboard"}</h2>
+          <div className="row wrap" style={{ gap: 8 }}>
+            <button
+              type="button"
+              className={company === "PG" ? "" : "secondary"}
+              onClick={() => switchDashboardCompany("PG")}
+            >
+              Login to PG
+            </button>
+            <button
+              type="button"
+              className={company === "PBR" ? "" : "secondary"}
+              onClick={() => switchDashboardCompany("PBR")}
+            >
+              Login to PBR
+            </button>
+          </div>
+        </div>
+        {inventoryRefreshing ? <p className="muted small">Syncing latest data from {sourceLabel(company)}...</p> : null}
         {openError ? <p className="muted">{openError}</p> : null}
         <label style={{ display: "block", maxWidth: 420, marginTop: 8 }}>
-          Search Tournament
+          Search {companyLabel(company)} Tournament
           <input
             value={tournamentSearchQuery}
             onChange={(e) => setTournamentSearchQuery(e.target.value)}
@@ -4306,7 +4387,7 @@ export default function BirdDogPage() {
                 {unlockingSlug === item.slug ? <p className="small">Opening Checkout...</p> : null}
               </article>
             );
-          }) : <p className="muted">No tournaments matched your search.</p>}
+          }) : <p className="muted">No {companyLabel(company)} tournaments matched your search.</p>}
         </div>
       </section>
       ) : null}
