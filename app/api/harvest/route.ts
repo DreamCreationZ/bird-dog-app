@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
   }
 
   if (tournamentId) {
-    const tournament = await getHarvestedTournament(session.orgId, tournamentId, company);
+    const tournament = await getHarvestedTournament(session.orgId, tournamentId);
     if (!tournament) {
       return NextResponse.json({ error: "Tournament not found" }, { status: 404 });
     }

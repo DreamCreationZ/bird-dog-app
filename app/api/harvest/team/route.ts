@@ -347,35 +347,67 @@ function parsePbrScheduleRowsFromPayload(input: {
 }
 
 function parsePbrRosterRows(html: string) {
-  const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((match) => match[1]);
-  const output: TeamRosterRow[] = [];
   const seen = new Set<string>();
+  const rosterTable =
+    html.match(/<div[^>]*id=["']block_roster["'][\s\S]*?<table[^>]*class=["'][^"']*\broster\b[^"']*["'][\s\S]*?<\/table>/i)?.[0]
+    || html.match(/<table[^>]*class=["'][^"']*\broster\b[^"']*["'][\s\S]*?<\/table>/i)?.[0]
+    || "";
+  const scopeHtml = rosterTable || html;
 
-  for (const row of rows) {
-    const cols = [...row.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((match) => cleanText(match[1]));
-    if (cols.length < 2) continue;
-    const lower = cols.map((col) => col.toLowerCase());
-    if (lower.some((col) => col === "player" || col === "name")) continue;
+  const headerRow =
+    scopeHtml.match(/<thead[\s\S]*?<tr[^>]*>([\s\S]*?)<\/tr>[\s\S]*?<\/thead>/i)?.[1]
+    || "";
+  const headers = [...headerRow.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/gi)].map((match) => cleanText(match[1]).toLowerCase());
 
-    const no = cols[0] || "";
-    const name = cols[1] || "";
-    if (!name || name.length < 3) continue;
+  const bodyHtml = scopeHtml.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i)?.[1] || scopeHtml;
+  const rowHtml = [...bodyHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((match) => match[1]);
+
+  const output: TeamRosterRow[] = [];
+
+  const readByHeader = (cells: string[], patterns: RegExp[]) => {
+    for (let i = 0; i < headers.length; i += 1) {
+      const header = headers[i] || "";
+      if (patterns.some((pattern) => pattern.test(header))) {
+        return cells[i] || "";
+      }
+    }
+    return "";
+  };
+
+  for (const row of rowHtml) {
+    const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((match) => cleanText(match[1]));
+    if (cells.length < 2) continue;
+
+    const no = readByHeader(cells, [/^#$/, /jersey/, /^no\.?$/]) || cells[0] || "";
+    const name = readByHeader(cells, [/^name$/, /player/]) || cells[1] || "";
+
+    if (!name || name.length < 2) continue;
     if (/visit team page|roster|schedule|teams/i.test(name)) continue;
+    if (/^w-l-t$/i.test(no) || /^w-l-t$/i.test(name)) continue;
 
-    const key = rosterMergeKey({ no, name });
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const grad = readByHeader(cells, [/grad/]);
+    const school = readByHeader(cells, [/high school/, /^school$/]) || cells[3] || "";
+    const city = readByHeader(cells, [/^city$/]);
+    const state = readByHeader(cells, [/^state$/]);
+    const hometown = readByHeader(cells, [/hometown/]) || [city, state].filter(Boolean).join(", ");
 
-    const hometown = cols.find((col) => /,\s*[A-Z]{2}\b/.test(col)) || "";
-    const commitment = cols.find((col) => /university|college|state|tech|institute/i.test(col)) || "";
-    output.push({
+    const parsed: TeamRosterRow = {
       no,
       name,
-      position: cols[2] || "",
-      school: cols[3] || "",
+      position: readByHeader(cells, [/primary pos/, /^position$/]) || "",
+      school,
       hometown,
-      commitment
-    });
+      commitment: readByHeader(cells, [/commitment/]) || "",
+      grad,
+      height: readByHeader(cells, [/height/]) || "",
+      weight: readByHeader(cells, [/weight/]) || "",
+      batsThrows: readByHeader(cells, [/b\/t/, /bats/, /throws/]) || ""
+    };
+
+    const key = rosterMergeKey({ no: parsed.no, name: parsed.name });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(parsed);
   }
 
   if (output.length) return output;
@@ -384,7 +416,7 @@ function parsePbrRosterRows(html: string) {
   const fallback: TeamRosterRow[] = [];
   for (const anchor of anchors) {
     const name = cleanText(anchor[2] || "");
-    if (!name || name.length < 3) continue;
+    if (!name || name.length < 2) continue;
     const key = rosterMergeKey({ no: "", name });
     if (seen.has(key)) continue;
     seen.add(key);
@@ -398,35 +430,25 @@ function parsePbrRosterRows(html: string) {
   return fallback;
 }
 
-function normalizePbrTeamIdentifier(value: string) {
-  const raw = cleanText(String(value || "")).toLowerCase();
-  if (!raw) return "";
-  const fromPrefixed = raw.match(/^pbr-team-([a-z0-9-]+)$/i)?.[1];
-  return fromPrefixed || raw;
-}
+function parsePbrTeamPageUrl(teamsHtml: string, targetTeamName: string) {
+  const links = [...teamsHtml.matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)];
 
-function parsePbrTeamPageUrl(teamsHtml: string, targetTeamName: string, targetTeamId?: string) {
-  const rows = [...teamsHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((match) => match[1]);
-  const wantedId = normalizePbrTeamIdentifier(targetTeamId || "");
-  for (const row of rows) {
-    const link = row.match(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
-    if (!link) continue;
-    const href = String(link[1] || "");
-    const hrefId = normalizePbrTeamIdentifier(href.match(/\/team\/details\/\d+\/([a-z0-9-]+)/i)?.[1] || "");
-    if (wantedId && hrefId && (hrefId === wantedId || hrefId.includes(wantedId) || wantedId.includes(hrefId))) {
+  for (const link of links) {
+    const href = cleanText(link[1] || "");
+    if (!/\/team\/details\//i.test(href)) continue;
+
+    const anchorText = normalizeTeam(link[2] || "");
+    if (teamMatches(anchorText, targetTeamName)) {
       return toAbsolutePbrUrl(href);
     }
-    const name = normalizeTeam(link[2] || "");
-    if (!teamMatches(name, targetTeamName)) continue;
-    return toAbsolutePbrUrl(href);
   }
+
   return "";
 }
 
 async function tryFetchPbrLiveTeamData(input: {
   eventHint: string;
   targetTeamName: string;
-  targetTeamId?: string;
   fallbackIsoDate: string;
 }) {
   const eventBase = toPbrEventBase(input.eventHint) || toPbrEventBase(toAbsolutePbrUrl(input.eventHint));
@@ -508,7 +530,7 @@ async function tryFetchPbrLiveTeamData(input: {
   }).catch(() => null);
   const teamsHtml = teamsRes && teamsRes.ok ? await teamsRes.text() : "";
   if (teamsHtml) {
-    teamUrl = parsePbrTeamPageUrl(teamsHtml, input.targetTeamName, input.targetTeamId);
+    teamUrl = parsePbrTeamPageUrl(teamsHtml, input.targetTeamName);
   }
   if (teamUrl) {
     const teamRes = await fetch(teamUrl, {
@@ -608,7 +630,6 @@ export async function POST(req: NextRequest) {
   const teamName = String(body?.teamName || "").trim();
   const eventId = String(body?.eventId || "").trim();
   const tournamentId = String(body?.tournamentId || "").trim();
-  const bodyCompany = String(body?.company || "").trim().toUpperCase();
   const searchOnly = body?.searchOnly === true || String(body?.searchOnly || "") === "true";
 
   if (!inventorySlug) {
@@ -620,11 +641,6 @@ export async function POST(req: NextRequest) {
   const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   const unlocked: string[] = await listOrgUnlocks(session.orgId).catch(() => []);
   const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
-  const requestCompany: "PG" | "PBR" = bodyCompany === "PBR"
-    ? "PBR"
-    : (bodyCompany === "PG"
-      ? "PG"
-      : (seedMeta?.company === "PBR" || inventorySlug.startsWith("pbr-") ? "PBR" : "PG"));
   const displayDate = seedMeta?.displayDate || "";
   const archiveCandidates = [seedMeta?.name, inventorySlug, tournamentId, teamName].filter(Boolean) as string[];
   const isArchive = archiveCandidates.some((name) =>
@@ -644,7 +660,7 @@ export async function POST(req: NextRequest) {
 
     if (dataMode !== "live" || !allowLiveScrape) {
       const tournament = tournamentId
-        ? (hasSupabaseConfig ? await getHarvestedTournament(session.orgId, tournamentId, requestCompany).catch(() => null) : null)
+        ? (hasSupabaseConfig ? await getHarvestedTournament(session.orgId, tournamentId).catch(() => null) : null)
         : null;
 
       const targetTeamName = teamName
@@ -682,8 +698,7 @@ export async function POST(req: NextRequest) {
         const importedRoster = Array.from(rosterMap.values());
         const importedReady = schedule.length && importedRoster.length;
         const importedDetailed = hasDetailedRosterColumns(importedRoster);
-        const isPbrTournament = requestCompany === "PBR"
-          || seedMeta?.company === "PBR"
+        const isPbrTournament = seedMeta?.company === "PBR"
           || inventorySlug.startsWith("pbr-live-")
           || /^pbr-team-/i.test(teamId)
           || /prep baseball|pbr/i.test(`${tournament.name} ${teamName}`);
@@ -708,7 +723,6 @@ export async function POST(req: NextRequest) {
             const livePbr = await tryFetchPbrLiveTeamData({
               eventHint,
               targetTeamName: targetTeamName || teamName,
-              targetTeamId: teamId,
               fallbackIsoDate: asIsoDate(tournament.date)
             }).catch(() => ({ schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[], teamUrl: "" }));
 

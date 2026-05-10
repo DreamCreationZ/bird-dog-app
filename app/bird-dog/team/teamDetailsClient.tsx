@@ -699,10 +699,6 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   const coachLocationTriedRef = useRef(false);
 
   const teamRequestPayload = useMemo(() => ({
-    company: normalizeCompany(
-      initialParams.returnCompany
-      || (initialParams.inventorySlug.startsWith("pbr-") ? "PBR" : "PG")
-    ),
     inventorySlug: initialParams.inventorySlug,
     teamId: initialParams.teamId,
     teamUrl: initialParams.teamUrl,
@@ -712,7 +708,6 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   }), [
     initialParams.eventId,
     initialParams.inventorySlug,
-    initialParams.returnCompany,
     initialParams.returnTournamentId,
     initialParams.teamId,
     initialParams.teamName,
@@ -726,8 +721,6 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   const cartCompany = useMemo(() => {
     const fromParams = normalizeCompany(initialParams.returnCompany || "");
     if (fromParams) return fromParams;
-    const fromInventory = normalizeCompany(initialParams.inventorySlug.startsWith("pbr-") ? "PBR" : "");
-    if (fromInventory) return fromInventory;
     if (typeof window !== "undefined") {
       const search = new URLSearchParams(window.location.search);
       const fromQuery = normalizeCompany(
@@ -1141,7 +1134,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     window.location.assign(`/bird-dog?${nextParams.toString()}`);
   }
 
-  function openAppTab(tab: "tournaments" | "schedule" | "profile") {
+  function openAppTab(tab: "tournaments" | "schedule" | "bestPlayers" | "profile") {
     const nextParams = new URLSearchParams();
     nextParams.set("tab", tab);
     if (initialParams.returnInventorySlug || initialParams.inventorySlug) {
@@ -2375,6 +2368,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
             </div>
             <button type="button" onClick={() => openAppTab("tournaments")}>Tournament Dashboard</button>
             <button type="button" className="active" onClick={() => openAppTab("schedule")}>Schedules</button>
+            <button type="button" onClick={() => openAppTab("bestPlayers")}>My Players</button>
             <button type="button" onClick={() => openAppTab("profile")}>My Profile</button>
             <button
               type="button"

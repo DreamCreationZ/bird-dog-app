@@ -20,17 +20,17 @@ function teamMatches(candidate: string, target: string) {
   return a === b || a.includes(b) || b.includes(a);
 }
 
-function cacheKey(orgId: string, company: "PG" | "PBR", tournamentId: string) {
-  return `${orgId}:${company}:${tournamentId}`;
+function cacheKey(orgId: string, tournamentId: string) {
+  return `${orgId}:${tournamentId}`;
 }
 
-async function loadTournamentCached(orgId: string, company: "PG" | "PBR", tournamentId: string) {
-  const key = cacheKey(orgId, company, tournamentId);
+async function loadTournamentCached(orgId: string, tournamentId: string) {
+  const key = cacheKey(orgId, tournamentId);
   const cached = tournamentSnapshotCache.get(key);
   if (cached && Date.now() - cached.savedAt < SNAPSHOT_TTL_MS) {
     return cached.tournament;
   }
-  const tournament = await getHarvestedTournament(orgId, tournamentId, company).catch(() => null);
+  const tournament = await getHarvestedTournament(orgId, tournamentId).catch(() => null);
   tournamentSnapshotCache.set(key, { savedAt: Date.now(), tournament });
   return tournament;
 }
@@ -44,7 +44,6 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const inventorySlug = String(body?.inventorySlug || "").trim();
   const tournamentId = String(body?.tournamentId || "").trim();
-  const bodyCompany = String(body?.company || "").trim().toUpperCase();
 
   if (!inventorySlug) {
     return NextResponse.json({ error: "inventorySlug is required" }, { status: 400 });
@@ -57,11 +56,6 @@ export async function POST(req: NextRequest) {
   const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
   const unlocked: string[] = await listOrgUnlocks(session.orgId).catch(() => []);
   const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
-  const requestCompany: "PG" | "PBR" = bodyCompany === "PBR"
-    ? "PBR"
-    : (bodyCompany === "PG"
-      ? "PG"
-      : (seedMeta?.company === "PBR" || inventorySlug.startsWith("pbr-") ? "PBR" : "PG"));
   const displayDate = seedMeta?.displayDate || "";
   const archiveCandidates = [seedMeta?.name, inventorySlug, tournamentId].filter(Boolean) as string[];
   const isArchive = archiveCandidates.some((name) =>
@@ -80,7 +74,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, source: "no_db", rows: [] });
   }
 
-  const tournament = await loadTournamentCached(session.orgId, requestCompany, tournamentId);
+  const tournament = await loadTournamentCached(session.orgId, tournamentId);
   if (!tournament) {
     return NextResponse.json({ ok: true, rows: [] });
   }

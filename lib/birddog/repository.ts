@@ -491,22 +491,14 @@ export async function listHarvestedTournaments(orgId: string, company: DataProvi
   }));
 }
 
-export async function getHarvestedTournament(
-  orgId: string,
-  tournamentId: string,
-  company?: DataProvider
-): Promise<Tournament | null> {
-  const tournamentQuery: Record<string, string> = {
-    org_id: `eq.${orgId}`,
-    id: `eq.${tournamentId}`,
-    select: "id,name,city,event_date",
-    limit: "1"
-  };
-  if (company) {
-    tournamentQuery.company = `eq.${company}`;
-  }
+export async function getHarvestedTournament(orgId: string, tournamentId: string): Promise<Tournament | null> {
   const tournamentRows = (await supabaseRequest("harvested_tournaments", {
-    query: tournamentQuery
+    query: {
+      org_id: `eq.${orgId}`,
+      id: `eq.${tournamentId}`,
+      select: "id,name,city,event_date",
+      limit: "1"
+    }
   })) as Array<{ id: string; name: string; city: string | null; event_date: string }>;
 
   const tournament = tournamentRows[0];
