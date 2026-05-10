@@ -1844,7 +1844,7 @@ export default function BirdDogPage() {
     }
   }
 
-  function applyOpenedTournament(openedTournament: Tournament) {
+  function applyOpenedTournament(openedTournament: Tournament, openedCompany: "PG" | "PBR" = company) {
     setTournaments((prev) => {
       const filtered = prev.filter((t) => t.id !== openedTournament.id);
       return [openedTournament, ...filtered];
@@ -1853,6 +1853,15 @@ export default function BirdDogPage() {
     setSelectedGameId(openedTournament.games?.[0]?.id || "");
     setTournamentViewTitle(openedTournament.name);
     setActiveTab("notes");
+    if (typeof window !== "undefined") {
+      const nextParams = new URLSearchParams(window.location.search);
+      nextParams.set("tab", "notes");
+      nextParams.set("company", openedCompany);
+      nextParams.set("provider", openedCompany);
+      if (selectedInventorySlug) nextParams.set("inventorySlug", selectedInventorySlug);
+      nextParams.set("tournamentId", openedTournament.id);
+      window.history.replaceState({}, "", `/bird-dog?${nextParams.toString()}`);
+    }
   }
 
   async function openTournamentFromExistingData(item: InventoryTournament, targetTournamentId?: string) {
@@ -1862,14 +1871,14 @@ export default function BirdDogPage() {
       return normalized === wanted || normalized.includes(wanted) || wanted.includes(normalized);
     });
     if (inMemoryMatch) {
-      applyOpenedTournament(inMemoryMatch);
+      applyOpenedTournament(inMemoryMatch, item.company);
       return true;
     }
 
     const tryOpenById = async (candidateId: string) => {
       const details = await loadHarvestTournament(item.company, candidateId).catch(() => null);
       if (details) {
-        applyOpenedTournament(details);
+        applyOpenedTournament(details, item.company);
         return true;
       }
       return false;
@@ -1890,7 +1899,7 @@ export default function BirdDogPage() {
 
     const opened = await tryOpenById(match.id);
     if (opened) return true;
-    applyOpenedTournament(match);
+    applyOpenedTournament(match, item.company);
     return true;
   }
 
@@ -2514,6 +2523,7 @@ export default function BirdDogPage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        company,
         inventorySlug: selectedInventorySlug,
         teamId: team.id,
         teamUrl: team.href || "",
@@ -2551,6 +2561,7 @@ export default function BirdDogPage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        company,
         inventorySlug: selectedInventorySlug,
         tournamentId: selectedTournamentId
       })
@@ -3417,7 +3428,7 @@ export default function BirdDogPage() {
       if (!openedTournament) {
         throw new Error("Tournament data was empty.");
       }
-      applyOpenedTournament(openedTournament);
+      applyOpenedTournament(openedTournament, item.company);
       const gameCount = Array.isArray(openedTournament.games) ? openedTournament.games.length : 0;
       const teamCount = Array.isArray(openedTournament.teams) ? openedTournament.teams.length : 0;
       if (gameCount === 0) {
@@ -4078,6 +4089,15 @@ export default function BirdDogPage() {
   function goToTournamentDashboard() {
     setActiveTab("tournaments");
     setMenuOpen(false);
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      params.set("tab", "tournaments");
+      params.set("company", company);
+      params.set("provider", company);
+      params.delete("tournamentId");
+      params.delete("tournamentName");
+      window.history.replaceState({}, "", `/bird-dog?${params.toString()}`);
+    }
     void fetchInventory();
   }
   function switchDashboardCompany(nextCompany: "PG" | "PBR") {
@@ -4097,6 +4117,14 @@ export default function BirdDogPage() {
       const params = new URLSearchParams(window.location.search);
       params.set("company", nextCompany);
       params.set("provider", nextCompany);
+      params.set("tab", "tournaments");
+      params.delete("inventorySlug");
+      params.delete("tournamentId");
+      params.delete("tournamentName");
+      params.delete("returnTournamentId");
+      params.delete("returnInventorySlug");
+      params.delete("returnTab");
+      params.delete("returnCompany");
       window.history.replaceState({}, "", `/bird-dog?${params.toString()}`);
     }
     void Promise.allSettled([loadCompanyData(nextCompany, true), fetchInventory(), fetchJobs()]);

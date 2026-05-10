@@ -110,7 +110,49 @@ function parseDate(html: string) {
   return Number.isNaN(date.getTime()) ? new Date().toISOString().slice(0, 10) : date.toISOString().slice(0, 10);
 }
 
-function parseGames(html: string) {
+function parseIsoDateFromText(value: string) {
+  const direct = value.match(/\b(\d{1,2}\/\d{1,2}\/\d{4})\b/);
+  if (direct?.[1]) {
+    const parsed = new Date(direct[1]);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  }
+  const long = value.match(/\b([A-Za-z]+\s+\d{1,2},\s+\d{4})\b/);
+  if (long?.[1]) {
+    const parsed = new Date(long[1]);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  }
+  return "";
+}
+
+function looksLikeLocationCell(value: string) {
+  const text = value.trim();
+  if (!text) return false;
+  return Boolean(
+    /\bfield\b|\bturf\b|\bcomplex\b|\bstadium\b|\bpark\b|\bballpark\b|lakepoint|,\s*[A-Z]{2}\b|@\s*\S+/i.test(text)
+    || /\([Tt]urf\)/.test(text)
+  );
+}
+
+function isPlaceholderTeam(value: string) {
+  const text = value.trim().toLowerCase();
+  return text === "team a" || text === "team b" || text === "home team" || text === "away team";
+}
+
+function looksLikeTeamCell(value: string) {
+  const text = value.trim();
+  if (!text || !/[A-Za-z]/.test(text)) return false;
+  if (isPlaceholderTeam(text)) return false;
+  if (/^\#?\d+$/.test(text)) return false;
+  if (/^\d{1,2}\s*[-:]\s*\d{1,2}$/.test(text)) return false;
+  if (/^\d{1,2}\s+\d{1,2}$/.test(text)) return false;
+  if (/^\d{1,2}U$/i.test(text)) return false;
+  if (/^\d{1,2}:\d{2}\s*(?:AM|PM)$/i.test(text)) return false;
+  if (/^(time|game|location|age\/div|team|score)$/i.test(text)) return false;
+  if (looksLikeLocationCell(text)) return false;
+  return true;
+}
+
+function parseGames(html: string, fallbackIsoDate?: string) {
   const blockedTokens = [
     "sign in",
     "create account",
@@ -123,6 +165,9 @@ function parseGames(html: string) {
   ];
   const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => m[1]);
   const games: Tournament["games"] = [];
+  const defaultIsoDate = /^\d{4}-\d{2}-\d{2}$/.test(String(fallbackIsoDate || ""))
+    ? String(fallbackIsoDate)
+    : new Date().toISOString().slice(0, 10);
 
   for (const row of rows) {
     const cols = [...row.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((m) => cleanText(m[1]));
@@ -130,23 +175,48 @@ function parseGames(html: string) {
 
     const text = cols.join(" | ").toLowerCase();
     if (blockedTokens.some((token) => text.includes(token))) continue;
-    if (!text.includes("vs") && !text.includes("field") && !text.includes(":") && !text.includes("am") && !text.includes("pm")) continue;
+    const timeCol = cols.find((c) => /\b\d{1,2}:\d{2}\s?(am|pm)\b/i.test(c));
+    if (!timeCol) continue;
 
-    const timeCol = cols.find((c) => /\d{1,2}:\d{2}\s?(am|pm)/i.test(c)) || cols[0];
-    const fieldCol = cols.find((c) => /field/i.test(c)) || cols[1] || "Field TBD";
-    const matchup = cols.find((c) => /vs/i.test(c)) || cols[2] || "Team A vs Team B";
+    const allLinks = [...row.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/gi)].map((m) => cleanText(m[1])).filter(Boolean);
+    const matchup = cols.find((c) => /\svs\.?\s/i.test(c));
+    let homeTeam = "";
+    let awayTeam = "";
+    if (matchup) {
+      const split = matchup.split(/\s+v(?:s|\.)?\.?\s+/i).map((v) => v.trim()).filter(Boolean);
+      homeTeam = split[0] || "";
+      awayTeam = split[1] || "";
+    }
 
-    const [homeTeam, awayTeam] = matchup.split(/\s+vs\s+/i).map((v) => v.trim());
-    const baseDate = new Date().toISOString().slice(0, 10);
-    const parsedStart = new Date(`${baseDate} ${timeCol}`);
+    if (!homeTeam || !awayTeam) {
+      const teamCandidates = allLinks.filter(looksLikeTeamCell);
+      if (teamCandidates.length >= 2) {
+        homeTeam = teamCandidates[0];
+        awayTeam = teamCandidates[1];
+      }
+    }
+    if (!homeTeam || !awayTeam) {
+      const teamCandidates = cols.filter(looksLikeTeamCell);
+      if (teamCandidates.length >= 2) {
+        homeTeam = teamCandidates[0];
+        awayTeam = teamCandidates[1];
+      }
+    }
+    if (!homeTeam || !awayTeam || isPlaceholderTeam(homeTeam) || isPlaceholderTeam(awayTeam)) continue;
+
+    const fieldCol = cols.find((c) => looksLikeLocationCell(c))
+      || allLinks.find((c) => looksLikeLocationCell(c))
+      || "Field TBD";
+    const rowIsoDate = parseIsoDateFromText(cols.join(" | ")) || defaultIsoDate;
+    const parsedStart = new Date(`${rowIsoDate} ${timeCol}`);
 
     games.push({
       id: `pg-game-${games.length + 1}`,
       field: fieldCol,
       fieldLocation: { x: games.length + 1, y: games.length + 1 },
-      startTime: Number.isNaN(parsedStart.getTime()) ? new Date().toISOString() : parsedStart.toISOString(),
-      homeTeam: homeTeam || "Team A",
-      awayTeam: awayTeam || "Team B",
+      startTime: Number.isNaN(parsedStart.getTime()) ? `${rowIsoDate}T00:00:00.000Z` : parsedStart.toISOString(),
+      homeTeam,
+      awayTeam,
       players: []
     });
   }
@@ -243,26 +313,6 @@ function parseParticipatingTeams(html: string) {
     });
   }
   return teams;
-}
-
-function gamesFromTeams(teams: ParsedTeam[], date: string): Tournament["games"] {
-  const out: Tournament["games"] = [];
-  for (let i = 0; i < teams.length; i += 2) {
-    const home = teams[i];
-    const away = teams[i + 1];
-    if (!home || !away) continue;
-    const hour = 9 + (out.length % 8);
-    out.push({
-      id: `pg-team-game-${out.length + 1}`,
-      field: `Field ${out.length + 1}`,
-      fieldLocation: { x: out.length + 1, y: out.length + 1 },
-      startTime: new Date(`${date}T${String(hour).padStart(2, "0")}:00:00Z`).toISOString(),
-      homeTeam: home.name,
-      awayTeam: away.name,
-      players: []
-    });
-  }
-  return out;
 }
 
 async function fetchHtml(target: string) {
@@ -365,24 +415,29 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
   const name = readTitle(html);
   const id = readEventId(target, hint);
   const date = parseDate(html);
-  let games = parseGames(html);
-  const teams = parseParticipatingTeams(html);
+  const eventNum = numericEventId(target);
+  let games = parseGames(html, date);
+  let teams = parseParticipatingTeams(html);
+
+  if (!teams.length && eventNum) {
+    const teamsUrl = `https://www.perfectgame.org/events/TournamentTeams.aspx?event=${eventNum}`;
+    const teamsPage = await fetchHtml(teamsUrl).catch(() => null);
+    if (teamsPage) {
+      teams = parseParticipatingTeams(teamsPage.html);
+    }
+  }
   const teamPlayers = await enrichPlayersFromTeamPages(teams);
 
   if (!games.length) {
-    const eventNum = numericEventId(target);
     if (eventNum) {
       const scheduleUrl = `https://www.perfectgame.org/events/TournamentSchedule.aspx?event=${eventNum}`;
       const schedule = await fetchHtml(scheduleUrl).catch(() => null);
       if (schedule) {
-        games = parseGames(schedule.html);
+        games = parseGames(schedule.html, date);
       }
     }
   }
 
-  if (!games.length && teams.length) {
-    games = gamesFromTeams(teams, date);
-  }
   games = attachPlayersToGamesByTeam(games, teamPlayers);
 
   return {

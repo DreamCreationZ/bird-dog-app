@@ -699,6 +699,10 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   const coachLocationTriedRef = useRef(false);
 
   const teamRequestPayload = useMemo(() => ({
+    company: normalizeCompany(
+      initialParams.returnCompany
+      || (initialParams.inventorySlug.startsWith("pbr-") ? "PBR" : "PG")
+    ),
     inventorySlug: initialParams.inventorySlug,
     teamId: initialParams.teamId,
     teamUrl: initialParams.teamUrl,
@@ -708,6 +712,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   }), [
     initialParams.eventId,
     initialParams.inventorySlug,
+    initialParams.returnCompany,
     initialParams.returnTournamentId,
     initialParams.teamId,
     initialParams.teamName,
@@ -1092,15 +1097,6 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     if (inlineMode) {
       onClose?.();
       return;
-    }
-
-    if (typeof window !== "undefined") {
-      const referrer = String(window.document.referrer || "");
-      const fromBirdDog = /\/bird-dog(?:[/?#]|$)/i.test(referrer);
-      if (fromBirdDog && window.history.length > 1) {
-        window.history.back();
-        return;
-      }
     }
 
     const qs = new URLSearchParams(window.location.search);

@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
 
     if (dataMode !== "live" || !allowLiveScrape) {
       if (hasSupabaseConfig && tournamentId) {
-        const tournamentById = await getHarvestedTournament(session.orgId, tournamentId);
+        const tournamentById = await getHarvestedTournament(session.orgId, tournamentId, company);
         if (tournamentById) {
           const existingTeamCount = teamCount(tournamentById.teams);
           const looksIncompleteDataset = company === "PG" && existingTeamCount === 0;
@@ -108,7 +108,7 @@ export async function POST(req: NextRequest) {
                 company,
                 tournament: refreshedTournament
               });
-              const refreshedHydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
+              const refreshedHydrated = await getHarvestedTournament(session.orgId, dbId, company).catch(() => null);
               return NextResponse.json({
                 ok: true,
                 tournament: refreshedHydrated || refreshedTournament,
@@ -145,7 +145,7 @@ export async function POST(req: NextRequest) {
           .find((item) => Boolean(item));
 
         if (found) {
-          const hydrated = await getHarvestedTournament(session.orgId, found.id).catch(() => null);
+          const hydrated = await getHarvestedTournament(session.orgId, found.id, company).catch(() => null);
           const existingTournament = hydrated || found;
           const existingTeamCount = teamCount(existingTournament?.teams);
           const looksIncompleteDataset = company === "PG" && existingTeamCount === 0;
@@ -163,7 +163,7 @@ export async function POST(req: NextRequest) {
                 company,
                 tournament: refreshedTournament
               });
-              const refreshedHydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
+              const refreshedHydrated = await getHarvestedTournament(session.orgId, dbId, company).catch(() => null);
               return NextResponse.json({
                 ok: true,
                 tournament: refreshedHydrated || refreshedTournament,
@@ -196,7 +196,7 @@ export async function POST(req: NextRequest) {
               company,
               tournament: scrapedTournament
             });
-            const hydrated = await getHarvestedTournament(session.orgId, dbId);
+            const hydrated = await getHarvestedTournament(session.orgId, dbId, company);
             return NextResponse.json({
               ok: true,
               tournament: hydrated || scrapedTournament,
@@ -267,7 +267,7 @@ export async function POST(req: NextRequest) {
       company,
       tournament: scrapedTournament
     });
-    const hydrated = await getHarvestedTournament(session.orgId, dbId);
+    const hydrated = await getHarvestedTournament(session.orgId, dbId, company);
 
     return NextResponse.json({
       ok: true,

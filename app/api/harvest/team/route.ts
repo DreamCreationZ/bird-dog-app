@@ -608,6 +608,7 @@ export async function POST(req: NextRequest) {
   const teamName = String(body?.teamName || "").trim();
   const eventId = String(body?.eventId || "").trim();
   const tournamentId = String(body?.tournamentId || "").trim();
+  const bodyCompany = String(body?.company || "").trim().toUpperCase();
   const searchOnly = body?.searchOnly === true || String(body?.searchOnly || "") === "true";
 
   if (!inventorySlug) {
@@ -619,6 +620,11 @@ export async function POST(req: NextRequest) {
   const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   const unlocked: string[] = await listOrgUnlocks(session.orgId).catch(() => []);
   const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
+  const requestCompany: "PG" | "PBR" = bodyCompany === "PBR"
+    ? "PBR"
+    : (bodyCompany === "PG"
+      ? "PG"
+      : (seedMeta?.company === "PBR" || inventorySlug.startsWith("pbr-") ? "PBR" : "PG"));
   const displayDate = seedMeta?.displayDate || "";
   const archiveCandidates = [seedMeta?.name, inventorySlug, tournamentId, teamName].filter(Boolean) as string[];
   const isArchive = archiveCandidates.some((name) =>
@@ -638,7 +644,7 @@ export async function POST(req: NextRequest) {
 
     if (dataMode !== "live" || !allowLiveScrape) {
       const tournament = tournamentId
-        ? (hasSupabaseConfig ? await getHarvestedTournament(session.orgId, tournamentId).catch(() => null) : null)
+        ? (hasSupabaseConfig ? await getHarvestedTournament(session.orgId, tournamentId, requestCompany).catch(() => null) : null)
         : null;
 
       const targetTeamName = teamName
@@ -676,7 +682,8 @@ export async function POST(req: NextRequest) {
         const importedRoster = Array.from(rosterMap.values());
         const importedReady = schedule.length && importedRoster.length;
         const importedDetailed = hasDetailedRosterColumns(importedRoster);
-        const isPbrTournament = seedMeta?.company === "PBR"
+        const isPbrTournament = requestCompany === "PBR"
+          || seedMeta?.company === "PBR"
           || inventorySlug.startsWith("pbr-live-")
           || /^pbr-team-/i.test(teamId)
           || /prep baseball|pbr/i.test(`${tournament.name} ${teamName}`);
