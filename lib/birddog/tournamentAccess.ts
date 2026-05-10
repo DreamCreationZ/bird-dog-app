@@ -91,6 +91,8 @@ export function isFreeTournamentAccess(input: {
   displayDate?: string;
   now?: Date;
 }) {
+  const slug = String(input.slug || "").trim().toLowerCase();
+  if (slug.startsWith("pg-live-") || slug.startsWith("pbr-live-")) return true;
   if (isDemoFreeTournament(input.slug)) return true;
   return isPastTournament({ name: input.name, displayDate: input.displayDate, now: input.now });
 }

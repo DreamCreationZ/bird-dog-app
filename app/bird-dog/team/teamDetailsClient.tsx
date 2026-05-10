@@ -13,6 +13,8 @@ type Props = {
     returnTab: string;
     returnInventorySlug: string;
     returnTournamentId: string;
+    returnCompany?: string;
+    teamView?: string;
   };
   inlineMode?: boolean;
   onClose?: () => void;
@@ -168,7 +170,7 @@ type PlannerCacheState = {
 };
 
 const COACH_BOOKING_PROFILE_KEY = "bd-coach-booking-profile:v1";
-const GLOBAL_ROSTER_CART_STORAGE_KEY = "bird_dog:roster_cart:v2:global";
+const ROSTER_CART_STORAGE_KEY_PREFIX = "bird_dog:roster_cart:v3";
 const COACH_START_LOCATION_PROMPTED_KEY = "bird_dog:coach_start_location_prompted:v1";
 
 type TeamDetailsCachePayload = {
@@ -334,8 +336,23 @@ function desiredSelectionKey(player: CrossTeamCartPlayer) {
   return player.selectionKey || player.playerId;
 }
 
-function rosterCartStorageKey() {
-  return GLOBAL_ROSTER_CART_STORAGE_KEY;
+function normalizeStorageScope(value: string) {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "na";
+}
+
+function normalizeCompany(value: string | null | undefined): "PG" | "PBR" | "" {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (normalized === "PG" || normalized === "PBR") return normalized;
+  return "";
+}
+
+function rosterCartStorageKey(company: string) {
+  const companyScope = normalizeStorageScope(company || "pg");
+  return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}`;
 }
 
 function readRosterCartStorage(key: string): CrossTeamCartPlayer[] {
@@ -611,6 +628,8 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   const [rosterRows, setRosterRows] = useState<TeamRosterRow[]>([]);
   const [scheduleSearch, setScheduleSearch] = useState("");
   const [rosterSearch, setRosterSearch] = useState("");
+  const teamViewTab: "schedule" | "roster" = "roster";
+  const showScheduleTab = false;
   const [recorderState, setRecorderState] = useState<RecorderState>("idle");
   const [recordingTarget, setRecordingTarget] = useState<RecorderTarget>(null);
   const [transcript, setTranscript] = useState("");
@@ -699,17 +718,29 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     () => `bd-team-planner-v2:${initialParams.inventorySlug}:${initialParams.teamId}`,
     [initialParams.inventorySlug, initialParams.teamId]
   );
-  const cartStorageKey = useMemo(() => rosterCartStorageKey(), []);
+  const cartCompany = useMemo(() => {
+    const fromParams = normalizeCompany(initialParams.returnCompany || "");
+    if (fromParams) return fromParams;
+    const fromInventory = normalizeCompany(initialParams.inventorySlug.startsWith("pbr-") ? "PBR" : "");
+    if (fromInventory) return fromInventory;
+    if (typeof window !== "undefined") {
+      const search = new URLSearchParams(window.location.search);
+      const fromQuery = normalizeCompany(
+        search.get("returnCompany")
+        || search.get("company")
+        || search.get("provider")
+      );
+      if (fromQuery) return fromQuery;
+    }
+    return "PG";
+  }, [initialParams.returnCompany]);
+  const cartStorageKey = useMemo(() => rosterCartStorageKey(cartCompany), [cartCompany]);
 
   useEffect(() => {
     const raw = typeof window === "undefined" ? null : window.localStorage.getItem(cartStorageKey);
     if (raw == null) {
-      const legacy = readLegacyRosterCartStorage();
-      if (legacy.length) {
-        writeRosterCartStorage(cartStorageKey, legacy);
-        setCrossTeamCartPlayers(legacy);
-        return;
-      }
+      setCrossTeamCartPlayers([]);
+      return;
     }
     setCrossTeamCartPlayers(readRosterCartStorage(cartStorageKey));
   }, [cartStorageKey]);
@@ -1046,11 +1077,32 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     teamRequestPayload
   ]);
 
+  function resolveReturnCompany(qs?: URLSearchParams) {
+    const search = qs || new URLSearchParams(window.location.search);
+    return normalizeCompany(
+      initialParams.returnCompany
+      || search.get("returnCompany")
+      || search.get("company")
+      || search.get("provider")
+      || ""
+    );
+  }
+
   function goBackOneStep() {
     if (inlineMode) {
       onClose?.();
       return;
     }
+
+    if (typeof window !== "undefined") {
+      const referrer = String(window.document.referrer || "");
+      const fromBirdDog = /\/bird-dog(?:[/?#]|$)/i.test(referrer);
+      if (fromBirdDog && window.history.length > 1) {
+        window.history.back();
+        return;
+      }
+    }
+
     const qs = new URLSearchParams(window.location.search);
     const requestedTab = (
       initialParams.returnTab
@@ -1062,10 +1114,16 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     const nextTab = allowedTabs.has(requestedTab) ? requestedTab : "notes";
     const nextInventory = initialParams.returnInventorySlug || qs.get("returnInventorySlug") || initialParams.inventorySlug || qs.get("inventorySlug") || "";
     const nextTournament = initialParams.returnTournamentId || qs.get("returnTournamentId") || qs.get("tournamentId") || "";
+    const nextCompany = resolveReturnCompany(qs);
+
     const nextParams = new URLSearchParams();
     nextParams.set("tab", nextTab);
     if (nextInventory) nextParams.set("inventorySlug", nextInventory);
     if (nextTournament) nextParams.set("tournamentId", nextTournament);
+    if (nextCompany) {
+      nextParams.set("company", nextCompany);
+      nextParams.set("provider", nextCompany);
+    }
     const target = `/bird-dog?${nextParams.toString()}`;
     window.location.assign(target);
   }
@@ -1079,10 +1137,15 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     if (initialParams.returnTournamentId) {
       nextParams.set("tournamentId", initialParams.returnTournamentId);
     }
+    const nextCompany = resolveReturnCompany();
+    if (nextCompany) {
+      nextParams.set("company", nextCompany);
+      nextParams.set("provider", nextCompany);
+    }
     window.location.assign(`/bird-dog?${nextParams.toString()}`);
   }
 
-  function openAppTab(tab: "tournaments" | "schedule" | "bestPlayers" | "profile") {
+  function openAppTab(tab: "tournaments" | "schedule" | "profile") {
     const nextParams = new URLSearchParams();
     nextParams.set("tab", tab);
     if (initialParams.returnInventorySlug || initialParams.inventorySlug) {
@@ -1090,6 +1153,11 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     }
     if (initialParams.returnTournamentId) {
       nextParams.set("tournamentId", initialParams.returnTournamentId);
+    }
+    const nextCompany = resolveReturnCompany();
+    if (nextCompany) {
+      nextParams.set("company", nextCompany);
+      nextParams.set("provider", nextCompany);
     }
     window.location.assign(`/bird-dog?${nextParams.toString()}`);
   }
@@ -1634,6 +1702,11 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     }
     if (initialParams.returnTournamentId) {
       nextParams.set("tournamentId", initialParams.returnTournamentId);
+    }
+    const nextCompany = resolveReturnCompany();
+    if (nextCompany) {
+      nextParams.set("company", nextCompany);
+      nextParams.set("provider", nextCompany);
     }
     window.location.assign(`/bird-dog?${nextParams.toString()}`);
   }
@@ -2306,7 +2379,6 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
             </div>
             <button type="button" onClick={() => openAppTab("tournaments")}>Tournament Dashboard</button>
             <button type="button" className="active" onClick={() => openAppTab("schedule")}>Schedules</button>
-            <button type="button" onClick={() => openAppTab("bestPlayers")}>My Players</button>
             <button type="button" onClick={() => openAppTab("profile")}>My Profile</button>
             <button
               type="button"
@@ -2322,127 +2394,137 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
       </section>
 
       <section className="panel" id="team-schedule-section">
-        <h2>Team Schedule & Roster</h2>
+        <h2>Team Roster</h2>
         <p className="muted">Tournament: {initialParams.tournamentName || "Tournament"}</p>
         <p className="muted">Team: {initialParams.teamName || "-"}</p>
         {loading ? <p className="muted">Loading tournament details...</p> : null}
         {error ? <p className="muted">Load error: {error}</p> : null}
-        <div className="row wrap" style={{ marginBottom: 8 }}>
-          <button
-            className="secondary"
-            type="button"
-            onClick={() => downloadPdfLikeReport(
-              `Team Schedule - ${initialParams.teamName}`,
-              hasDetailedScheduleColumns
-                ? ["Day", "Time", "Game", "Location", "Age/Div", "Team", "Score", "Team"]
-                : ["Date", "Time", "Field / Location", "Opponent"],
-              hasDetailedScheduleColumns
-                ? filteredSchedule.map((row) => {
-                  const location =
-                    /@\s*$/.test((row.field || "").trim()) && looksLikeLocation(row.homeTeam || "")
-                      ? `${row.field} ${row.homeTeam}`
-                      : (row.field || "");
-                  const leftScore = row.homeScore || "-";
-                  const rightScore = row.awayScore || "-";
-                  return [
-                    row.dayLabel || row.date || "-",
-                    row.time || "-",
-                    row.gameNo || "-",
-                    location.trim() || "-",
-                    row.ageDiv || "-",
-                    row.homeTeam || "-",
-                    `${leftScore} - ${rightScore}`,
-                    row.awayTeam || "-"
-                  ];
-                })
-                : filteredSchedule.map((row) => {
-                  const location =
-                    /@\s*$/.test((row.field || "").trim()) && looksLikeLocation(row.homeTeam || "")
-                      ? `${row.field} ${row.homeTeam}`
-                      : (row.field || "");
-                  return [row.date || "-", row.time || "-", location.trim() || "-", pickOpponent(initialParams.teamName, row.homeTeam, row.awayTeam)];
-                })
-            )}
-          >
-            Download Schedule PDF
+        <div className="row wrap" style={{ marginBottom: 8, marginTop: 8 }}>
+          <button type="button" className="secondary" disabled>
+            Team Roster
           </button>
         </div>
-        <label>
-          Search Schedule
-          <input
-            value={scheduleSearch}
-            onChange={(e) => setScheduleSearch(e.target.value)}
-            placeholder="Search date, time, field, opponent"
-          />
-        </label>
-        <div className="table-wrap" style={{ marginTop: 8 }}>
-          <table className="roster-table">
-            {hasDetailedScheduleColumns ? (
-              <>
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Game</th>
-                    <th>Location</th>
-                    <th>Age/Div</th>
-                    <th>Team</th>
-                    <th>Score</th>
-                    <th>Team</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {groupedSchedule.length ? groupedSchedule.map((group, groupIdx) => (
-                    <Fragment key={`${group.label}-${groupIdx}`}>
+        {showScheduleTab ? (
+          <>
+            <div className="row wrap" style={{ marginBottom: 8 }}>
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => downloadPdfLikeReport(
+                  `Team Schedule - ${initialParams.teamName}`,
+                  hasDetailedScheduleColumns
+                    ? ["Day", "Time", "Game", "Location", "Age/Div", "Team", "Score", "Team"]
+                    : ["Date", "Time", "Field / Location", "Opponent"],
+                  hasDetailedScheduleColumns
+                    ? filteredSchedule.map((row) => {
+                      const location =
+                        /@\s*$/.test((row.field || "").trim()) && looksLikeLocation(row.homeTeam || "")
+                          ? `${row.field} ${row.homeTeam}`
+                          : (row.field || "");
+                      const leftScore = row.homeScore || "-";
+                      const rightScore = row.awayScore || "-";
+                      return [
+                        row.dayLabel || row.date || "-",
+                        row.time || "-",
+                        row.gameNo || "-",
+                        location.trim() || "-",
+                        row.ageDiv || "-",
+                        row.homeTeam || "-",
+                        `${leftScore} - ${rightScore}`,
+                        row.awayTeam || "-"
+                      ];
+                    })
+                    : filteredSchedule.map((row) => {
+                      const location =
+                        /@\s*$/.test((row.field || "").trim()) && looksLikeLocation(row.homeTeam || "")
+                          ? `${row.field} ${row.homeTeam}`
+                          : (row.field || "");
+                      return [row.date || "-", row.time || "-", location.trim() || "-", pickOpponent(initialParams.teamName, row.homeTeam, row.awayTeam)];
+                    })
+                )}
+              >
+                Download Schedule PDF
+              </button>
+            </div>
+            <label>
+              Search Schedule
+              <input
+                value={scheduleSearch}
+                onChange={(e) => setScheduleSearch(e.target.value)}
+                placeholder="Search date, time, field, opponent"
+              />
+            </label>
+            <div className="table-wrap" style={{ marginTop: 8 }}>
+              <table className="roster-table">
+                {hasDetailedScheduleColumns ? (
+                  <>
+                    <thead>
                       <tr>
-                        <td colSpan={7} style={{ fontWeight: 700 }}>{group.label}</td>
+                        <th>Time</th>
+                        <th>Game</th>
+                        <th>Location</th>
+                        <th>Age/Div</th>
+                        <th>Team</th>
+                        <th>Score</th>
+                        <th>Team</th>
                       </tr>
-                      {group.rows.map((row, idx) => (
-                        <tr key={`${row.gameNo}-${groupIdx}-${idx}`}>
-                          <td>{row.time || "-"}</td>
-                          <td>{row.gameNo || "-"}</td>
-                          <td>{(/\@\s*$/.test((row.field || "").trim()) && looksLikeLocation(row.homeTeam || "") ? `${row.field} ${row.homeTeam}` : row.field || "-").trim()}</td>
-                          <td>{row.ageDiv || "-"}</td>
-                          <td>{row.homeTeam || "-"}</td>
-                          <td>{`${row.homeScore || "-"} - ${row.awayScore || "-"}`}</td>
-                          <td>{row.awayTeam || "-"}</td>
+                    </thead>
+                    <tbody>
+                      {groupedSchedule.length ? groupedSchedule.map((group, groupIdx) => (
+                        <Fragment key={`${group.label}-${groupIdx}`}>
+                          <tr>
+                            <td colSpan={7} style={{ fontWeight: 700 }}>{group.label}</td>
+                          </tr>
+                          {group.rows.map((row, idx) => (
+                            <tr key={`${row.gameNo}-${groupIdx}-${idx}`}>
+                              <td>{row.time || "-"}</td>
+                              <td>{row.gameNo || "-"}</td>
+                              <td>{(/\@\s*$/.test((row.field || "").trim()) && looksLikeLocation(row.homeTeam || "") ? `${row.field} ${row.homeTeam}` : row.field || "-").trim()}</td>
+                              <td>{row.ageDiv || "-"}</td>
+                              <td>{row.homeTeam || "-"}</td>
+                              <td>{`${row.homeScore || "-"} - ${row.awayScore || "-"}`}</td>
+                              <td>{row.awayTeam || "-"}</td>
+                            </tr>
+                          ))}
+                        </Fragment>
+                      )) : (
+                        <tr>
+                          <td colSpan={7}>No schedule rows found yet for this team.</td>
                         </tr>
-                      ))}
-                    </Fragment>
-                  )) : (
-                    <tr>
-                      <td colSpan={7}>No schedule rows found yet for this team.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </>
-            ) : (
-              <>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Time</th>
-                    <th>Field / Location</th>
-                    <th>Opponent</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredSchedule.length ? filteredSchedule.map((row, idx) => (
-                    <tr key={`${row.gameNo}-${idx}`}>
-                      <td>{row.date || "-"}</td>
-                      <td>{row.time || "-"}</td>
-                      <td>{(/\@\s*$/.test((row.field || "").trim()) && looksLikeLocation(row.homeTeam || "") ? `${row.field} ${row.homeTeam}` : row.field || "-").trim()}</td>
-                      <td>{pickOpponent(initialParams.teamName, row.homeTeam, row.awayTeam)}</td>
-                    </tr>
-                  )) : (
-                    <tr>
-                      <td colSpan={4}>No schedule rows found yet for this team.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </>
-            )}
-          </table>
-        </div>
+                      )}
+                    </tbody>
+                  </>
+                ) : (
+                  <>
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Time</th>
+                        <th>Field / Location</th>
+                        <th>Opponent</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredSchedule.length ? filteredSchedule.map((row, idx) => (
+                        <tr key={`${row.gameNo}-${idx}`}>
+                          <td>{row.date || "-"}</td>
+                          <td>{row.time || "-"}</td>
+                          <td>{(/\@\s*$/.test((row.field || "").trim()) && looksLikeLocation(row.homeTeam || "") ? `${row.field} ${row.homeTeam}` : row.field || "-").trim()}</td>
+                          <td>{pickOpponent(initialParams.teamName, row.homeTeam, row.awayTeam)}</td>
+                        </tr>
+                      )) : (
+                        <tr>
+                          <td colSpan={4}>No schedule rows found yet for this team.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </>
+                )}
+              </table>
+            </div>
+          </>
+        ) : null}
+        {!showScheduleTab ? (
         <div className="panel" style={{ marginTop: 12 }}>
           <div className="row wrap" style={{ marginBottom: 8 }}>
             <button
@@ -2474,7 +2556,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
           </label>
           <div className="row wrap" style={{ marginTop: 6 }}>
             <p className="muted" style={{ margin: 0 }}>
-              Team selections: {selectedBestPlayerRows.length} | Final cart (all teams): {crossTeamCartPlayers.length}
+              Team selections: {selectedBestPlayerRows.length}
             </p>
             <button type="button" className="secondary" onClick={clearTeamSelection} disabled={!selectedPlayers.length}>
               Clear Team Selection
@@ -2521,54 +2603,8 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
               </tbody>
             </table>
           </div>
-          <div className="panel" style={{ marginTop: 12 }}>
-            <h3 style={{ marginTop: 0 }}>Final Player Cart (All Teams)</h3>
-            <p className="muted">Add players from any team roster, then go back to tournament view for final schedule generation.</p>
-            {crossTeamCartPlayers.length ? (
-              <>
-                <div className="table-wrap" style={{ marginTop: 8 }}>
-                  <table className="roster-table">
-                    <thead>
-                      <tr>
-                        <th>Player</th>
-                        <th>Team</th>
-                        <th>From Team</th>
-                        <th>Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {crossTeamCartPlayers.map((player) => {
-                        const selectionKey = desiredSelectionKey(player);
-                        return (
-                          <tr key={selectionKey}>
-                            <td>{player.name}</td>
-                            <td>{player.team}</td>
-                            <td>{player.sourceTeamName || "-"}</td>
-                            <td className="action-cell">
-                              <button type="button" className="secondary" onClick={() => removeCartPlayer(selectionKey)}>
-                                Remove
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="row wrap" style={{ marginTop: 8 }}>
-                  <button type="button" className="secondary" onClick={clearCrossTeamCart}>
-                    Clear Final Cart
-                  </button>
-                  <button type="button" onClick={goToTournamentRosterSelection}>
-                    Finalize In Tournament View
-                  </button>
-                </div>
-              </>
-            ) : (
-              <p className="muted">No players in final cart yet.</p>
-            )}
-          </div>
         </div>
+        ) : null}
       </section>
 
     </main>

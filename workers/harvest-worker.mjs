@@ -6,7 +6,7 @@ const POLL_SECONDS = Number(process.env.HARVEST_WORKER_POLL_SECONDS || 15);
 const AUTO_SYNC_ENABLED = String(process.env.HARVEST_AUTO_SYNC_ENABLED || "true").toLowerCase() !== "false";
 const AUTO_SYNC_INTERVAL_SECONDS = Math.max(
   60,
-  Number(process.env.HARVEST_AUTO_SYNC_INTERVAL_SECONDS || 300)
+  Number(process.env.HARVEST_AUTO_SYNC_INTERVAL_SECONDS || 60)
 );
 const AUTO_SYNC_MAX_JOBS_PER_CYCLE = Math.max(
   1,
@@ -17,6 +17,8 @@ const AUTO_SYNC_FAILURE_RETRY_SECONDS = Math.max(
   Number(process.env.HARVEST_AUTO_SYNC_FAILURE_RETRY_SECONDS || 120)
 );
 const AUTO_SYNC_SCOPE = String(process.env.HARVEST_AUTO_SYNC_SCOPE || "all").trim().toLowerCase();
+const PG_BASE_URL = "https://www.perfectgame.org";
+const PG_SCHEDULE_URL = `${PG_BASE_URL}/Schedule/Default.aspx`;
 const PBR_LIST_URL = "https://tournaments.prepbaseballreport.com";
 
 function parseCsv(value) {
@@ -44,6 +46,10 @@ function slugify(value) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 200);
+}
+
+function isTrue(value) {
+  return /^(true|1|yes)$/i.test(normalizeSpace(value));
 }
 
 const AUTO_SYNC_COMPANIES = new Set(
@@ -175,6 +181,147 @@ async function fetchLivePbrInventory() {
   return out;
 }
 
+async function mapWithConcurrency(items, limit, run) {
+  if (!items.length) return [];
+  const size = Math.max(1, Math.min(limit, items.length));
+  const results = new Array(items.length);
+  let next = 0;
+
+  async function worker() {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await run(items[index]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: size }, () => worker()));
+  return results;
+}
+
+function parsePgFeaturedRows(html) {
+  const rows = new Map();
+  const inputPattern =
+    /<input[^>]*id="[^"]*repSchedule_(hl[A-Za-z]+|hf[A-Za-z]+)_([0-9]+)"[^>]*value="([^"]*)"[^>]*>/gi;
+
+  let match = inputPattern.exec(html);
+  while (match) {
+    const field = match[1];
+    const idx = match[2];
+    const value = normalizeSpace(match[3] || "");
+    const row = rows.get(idx) || {};
+    row[field] = value;
+    rows.set(idx, row);
+    match = inputPattern.exec(html);
+  }
+
+  return Array.from(rows.values());
+}
+
+function parsePgInventoryFromFeaturedEventsHtml(html) {
+  const rows = parsePgFeaturedRows(html);
+  if (!rows.length) return [];
+
+  const out = [];
+  const seen = new Set();
+
+  for (const row of rows) {
+    const grouped = isTrue(row.hlGrouped || "");
+    const ended = grouped
+      ? isTrue(row.hlGroupEnded || row.hlEventEnded || "")
+      : isTrue(row.hlEventEnded || "");
+    if (ended) continue;
+
+    const groupId = normalizeSpace(row.hlGroupID || "");
+    const eventId = normalizeSpace(row.hlEventID || "");
+    const name = normalizeSpace(
+      grouped
+        ? row.hlGroupName || row.hlEventName || ""
+        : row.hlEventName || row.hlGroupName || ""
+    );
+    if (!name) continue;
+
+    const harvestHint = grouped && groupId
+      ? `${PG_BASE_URL}/Schedule/GroupedEvents.aspx?gid=${groupId}`
+      : eventId
+        ? `${PG_BASE_URL}/Events/Default.aspx?event=${eventId}`
+        : `${PG_BASE_URL}/search.aspx?search=${encodeURIComponent(name)}`;
+
+    const location = normalizeSpace(
+      grouped
+        ? row.hlGroupLocation || row.hlEventLocation || ""
+        : row.hlEventLocation || row.hlGroupLocation || ""
+    );
+    const dateRaw = normalizeSpace(
+      grouped
+        ? row.hlGroupDate || row.hlEventDate || ""
+        : row.hlEventDate || row.hlGroupDate || ""
+    );
+
+    const slug = grouped && groupId
+      ? `pg-live-${groupId}-${slugify(name)}`
+      : eventId
+        ? `pg-live-event-${eventId}-${slugify(name)}`
+        : `pg-live-${slugify(name)}-${slugify(location || "city-tbd")}-${slugify(dateRaw || "undated")}`;
+
+    const key = `${name.toLowerCase()}::${harvestHint.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      slug: slug.slice(0, 220),
+      name,
+      company: "PG",
+      harvestHint
+    });
+  }
+
+  return out;
+}
+
+async function fetchLivePgInventory() {
+  const rootRes = await fetch(PG_SCHEDULE_URL, {
+    cache: "no-store",
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    }
+  });
+
+  if (!rootRes.ok) {
+    throw new Error(`PG schedule returned ${rootRes.status}`);
+  }
+
+  const rootHtml = await rootRes.text();
+  const fidMatches = [...rootHtml.matchAll(/FeaturedEvents\.aspx\?fid=(\d+)/gi)].map((match) => Number(match[1]));
+  const fidSet = Array.from(new Set(fidMatches.filter((value) => Number.isFinite(value) && value > 0))).slice(0, 120);
+  if (!fidSet.length) return [];
+
+  const pages = await mapWithConcurrency(fidSet, 8, async (fid) => {
+    const url = `${PG_BASE_URL}/Schedule/FeaturedEvents.aspx?fid=${fid}`;
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      }
+    }).catch(() => null);
+    if (!res || !res.ok) return [];
+    const html = await res.text();
+    return parsePgInventoryFromFeaturedEventsHtml(html);
+  });
+
+  const merged = new Map();
+  pages.flat().forEach((item) => {
+    const key = item.harvestHint.toLowerCase();
+    if (!merged.has(key)) {
+      merged.set(key, item);
+    }
+  });
+  return Array.from(merged.values());
+}
+
 async function listInventoryForAutoSync() {
   const rows = await supabaseRequest("circuit_inventory", {
     query: {
@@ -195,7 +342,13 @@ async function listInventoryForAutoSync() {
         .filter((row) => row.slug && row.name && (row.company === "PG" || row.company === "PBR"))
     : [];
 
+  let livePg = [];
   let livePbr = [];
+  try {
+    livePg = await fetchLivePgInventory();
+  } catch (error) {
+    console.error("[auto-sync] unable to load live PG inventory:", error instanceof Error ? error.message : String(error));
+  }
   try {
     livePbr = await fetchLivePbrInventory();
   } catch (error) {
@@ -204,11 +357,11 @@ async function listInventoryForAutoSync() {
 
   const byKey = new Map();
   for (const item of baseInventory) {
-    if (item.company === "PBR") {
-      byKey.set(`PBR:${item.name.toLowerCase()}`, item);
-      continue;
-    }
-    byKey.set(`${item.company}:${item.slug}`, item);
+    byKey.set(`${item.company}:${item.name.toLowerCase()}`, item);
+  }
+
+  for (const item of livePg) {
+    byKey.set(`PG:${item.name.toLowerCase()}`, item);
   }
 
   for (const item of livePbr) {

@@ -398,14 +398,27 @@ function parsePbrRosterRows(html: string) {
   return fallback;
 }
 
-function parsePbrTeamPageUrl(teamsHtml: string, targetTeamName: string) {
+function normalizePbrTeamIdentifier(value: string) {
+  const raw = cleanText(String(value || "")).toLowerCase();
+  if (!raw) return "";
+  const fromPrefixed = raw.match(/^pbr-team-([a-z0-9-]+)$/i)?.[1];
+  return fromPrefixed || raw;
+}
+
+function parsePbrTeamPageUrl(teamsHtml: string, targetTeamName: string, targetTeamId?: string) {
   const rows = [...teamsHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((match) => match[1]);
+  const wantedId = normalizePbrTeamIdentifier(targetTeamId || "");
   for (const row of rows) {
     const link = row.match(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
     if (!link) continue;
+    const href = String(link[1] || "");
+    const hrefId = normalizePbrTeamIdentifier(href.match(/\/team\/details\/\d+\/([a-z0-9-]+)/i)?.[1] || "");
+    if (wantedId && hrefId && (hrefId === wantedId || hrefId.includes(wantedId) || wantedId.includes(hrefId))) {
+      return toAbsolutePbrUrl(href);
+    }
     const name = normalizeTeam(link[2] || "");
     if (!teamMatches(name, targetTeamName)) continue;
-    return toAbsolutePbrUrl(link[1] || "");
+    return toAbsolutePbrUrl(href);
   }
   return "";
 }
@@ -413,6 +426,7 @@ function parsePbrTeamPageUrl(teamsHtml: string, targetTeamName: string) {
 async function tryFetchPbrLiveTeamData(input: {
   eventHint: string;
   targetTeamName: string;
+  targetTeamId?: string;
   fallbackIsoDate: string;
 }) {
   const eventBase = toPbrEventBase(input.eventHint) || toPbrEventBase(toAbsolutePbrUrl(input.eventHint));
@@ -494,7 +508,7 @@ async function tryFetchPbrLiveTeamData(input: {
   }).catch(() => null);
   const teamsHtml = teamsRes && teamsRes.ok ? await teamsRes.text() : "";
   if (teamsHtml) {
-    teamUrl = parsePbrTeamPageUrl(teamsHtml, input.targetTeamName);
+    teamUrl = parsePbrTeamPageUrl(teamsHtml, input.targetTeamName, input.targetTeamId);
   }
   if (teamUrl) {
     const teamRes = await fetch(teamUrl, {
@@ -687,6 +701,7 @@ export async function POST(req: NextRequest) {
             const livePbr = await tryFetchPbrLiveTeamData({
               eventHint,
               targetTeamName: targetTeamName || teamName,
+              targetTeamId: teamId,
               fallbackIsoDate: asIsoDate(tournament.date)
             }).catch(() => ({ schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[], teamUrl: "" }));
 

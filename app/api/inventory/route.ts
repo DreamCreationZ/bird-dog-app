@@ -6,6 +6,7 @@ import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 import { fetchPbrTournamentCatalog } from "@/lib/birddog/pbrTournamentCatalog";
+import { fetchPgTournamentCatalog } from "@/lib/birddog/pgTournamentCatalog";
 
 const FALLBACK_UNLOCK_COOKIE = "bird_dog_fallback_unlocks";
 
@@ -36,6 +37,42 @@ function applyLivePbrInventory(baseInventory: InventoryItem[], livePbr: Inventor
   return [...withoutPbr, ...livePbr];
 }
 
+function normalizeInventoryName(value: string) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function inventoryNamesMatch(left: string, right: string) {
+  const a = normalizeInventoryName(left);
+  const b = normalizeInventoryName(right);
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+}
+
+function applyLiveInventory(
+  baseInventory: InventoryItem[],
+  livePg: InventoryItem[],
+  livePbr: InventoryItem[]
+) {
+  const basePg = baseInventory.filter((item) => item.company === "PG");
+  const basePbr = baseInventory.filter((item) => item.company === "PBR");
+
+  const mapLiveItem = (item: InventoryItem, baseRows: InventoryItem[]) => {
+    const match = baseRows.find((row) => inventoryNamesMatch(row.name, item.name));
+    if (!match) return item;
+    return {
+      ...item,
+      slug: match.slug,
+      season: match.season || item.season
+    };
+  };
+
+  const nextPg = livePg.length ? livePg.map((item) => mapLiveItem(item, basePg)) : basePg;
+  const nextPbr = livePbr.length ? livePbr.map((item) => mapLiveItem(item, basePbr)) : basePbr;
+
+  const staticOther = baseInventory.filter((item) => item.company !== "PG" && item.company !== "PBR");
+  return [...staticOther, ...nextPg, ...nextPbr];
+}
+
 async function buildFallbackInventory() {
   const base = INVENTORY_SEED.map((item) => ({
     slug: item.slug,
@@ -48,8 +85,9 @@ async function buildFallbackInventory() {
   })) as InventoryItem[];
 
   try {
+    const livePg = await fetchPgTournamentCatalog().then((result) => result.items as InventoryItem[]);
     const livePbr = await fetchPbrTournamentCatalog().then((result) => result.items);
-    return applyLivePbrInventory(base, livePbr);
+    return applyLiveInventory(base, livePg, livePbr);
   } catch {
     return base;
   }
@@ -66,6 +104,7 @@ function mapInventoryForResponse(
       name: item.name,
       displayDate: item.displayDate || ""
     });
+    const isLivePg = item.company === "PG" && item.slug.startsWith("pg-live-");
     const isLivePbr = item.company === "PBR" && item.slug.startsWith("pbr-live-");
     return {
       id: item.slug,
@@ -73,7 +112,7 @@ function mapInventoryForResponse(
       name: item.name,
       season: item.season,
       company: item.company,
-      locked: previewUnlockAll ? false : (isArchive ? false : (isLivePbr ? false : !unlockedSet.has(item.slug))),
+      locked: previewUnlockAll ? false : (isArchive ? false : (isLivePg || isLivePbr ? false : !unlockedSet.has(item.slug))),
       isArchive,
       harvestHint: item.harvestHint || inventoryHarvestHint(item),
       displayDate: item.displayDate || "",
@@ -122,10 +161,11 @@ export async function GET(req: NextRequest) {
         inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, cookieUnlockedSet)
       });
     }
-    const livePbr = await fetchPbrTournamentCatalog()
-      .then((result) => result.items)
-      .catch(() => []);
-    const mergedInventory = applyLivePbrInventory(inventory as InventoryItem[], livePbr);
+    const [livePg, livePbr] = await Promise.all([
+      fetchPgTournamentCatalog().then((result) => result.items as InventoryItem[]).catch(() => []),
+      fetchPbrTournamentCatalog().then((result) => result.items).catch(() => [])
+    ]);
+    const mergedInventory = applyLiveInventory(inventory as InventoryItem[], livePg, livePbr);
     const unlockedSet = new Set([...unlockedSlugs, ...cookieUnlockedSet]);
 
     return NextResponse.json({
@@ -135,10 +175,11 @@ export async function GET(req: NextRequest) {
         const seedMeta = seedMetaBySlug.get(item.slug);
         const displayDate = item.displayDate || match?.dateLabel || seedMeta?.displayDate || "";
         const isArchive = isFreeTournamentAccess({ slug: item.slug, name: item.name, displayDate });
+        const isLivePg = item.company === "PG" && item.slug.startsWith("pg-live-");
         const isLivePbr = item.company === "PBR" && item.slug.startsWith("pbr-live-");
         return {
           ...item,
-          locked: forceUnlocked ? false : (isArchive ? false : (isLivePbr ? false : !unlockedSet.has(item.slug))),
+          locked: forceUnlocked ? false : (isArchive ? false : (isLivePg || isLivePbr ? false : !unlockedSet.has(item.slug))),
           isArchive,
           harvestHint: item.harvestHint || inventoryHarvestHint(item),
           displayDate,

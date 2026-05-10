@@ -23,7 +23,9 @@ export default async function TeamDetailsPage({
         tournamentName: first(params.tournamentName),
         returnTab: first(params.returnTab),
         returnInventorySlug: first(params.returnInventorySlug),
-        returnTournamentId: first(params.returnTournamentId)
+        returnTournamentId: first(params.returnTournamentId),
+        returnCompany: first(params.returnCompany),
+        teamView: first(params.teamView)
       }}
     />
   );
