@@ -1335,7 +1335,9 @@ export default function BirdDogPage() {
     if (!user) return;
     let mounted = true;
     async function boot() {
-      loadCachedTournament();
+      const params = new URLSearchParams(window.location.search);
+      const requestedCompany = parseCompanyParam(params.get("company") || params.get("provider"));
+      const requestedTournamentId = String(params.get("tournamentId") || "").trim();
       try {
         const overview = await loadHarvestOverview();
         if (!mounted) return;
@@ -1344,11 +1346,17 @@ export default function BirdDogPage() {
           : ["PG", "PBR"];
         setCompanies(nextCompanies);
 
-        const params = new URLSearchParams(window.location.search);
-        const requestedCompany = parseCompanyParam(params.get("company") || params.get("provider"));
         const defaultCompany: "PG" | "PBR" = requestedCompany && nextCompanies.includes(requestedCompany)
           ? requestedCompany
           : (nextCompanies[0] || "PG");
+        // Avoid stale tournament flash on login.
+        // Only restore cache when URL explicitly targets that same tournament.
+        if (requestedTournamentId) {
+          loadCachedTournament({
+            requiredCompany: defaultCompany,
+            requiredTournamentId: requestedTournamentId
+          });
+        }
         await Promise.allSettled([
           loadCompanyData(defaultCompany),
           fetchJobs(),
@@ -1360,6 +1368,12 @@ export default function BirdDogPage() {
         if (!mounted) return;
         setCompanies(["PG", "PBR"]);
         setOpenError("");
+        if (requestedTournamentId) {
+          loadCachedTournament({
+            requiredCompany: requestedCompany || undefined,
+            requiredTournamentId: requestedTournamentId
+          });
+        }
         await Promise.allSettled([
           fetchInventory(),
           fetchJobs(),
@@ -3443,12 +3457,32 @@ export default function BirdDogPage() {
     );
   }
 
-  function loadCachedTournament() {
+  function loadCachedTournament(options?: {
+    requiredCompany?: "PG" | "PBR";
+    requiredTournamentId?: string;
+    maxAgeMs?: number;
+  }) {
     if (!user) return;
     const raw = safeLocalGet(`${CACHE_KEY}:${user.orgId}`);
     if (!raw) return;
     try {
-      const parsed = JSON.parse(raw) as { company: "PG" | "PBR"; tournament: Tournament };
+      const parsed = JSON.parse(raw) as {
+        cachedAt?: string;
+        company: "PG" | "PBR";
+        tournament: Tournament;
+      };
+      const requiredCompany = options?.requiredCompany;
+      const requiredTournamentId = String(options?.requiredTournamentId || "").trim();
+      if (requiredCompany && parsed.company !== requiredCompany) return;
+      if (requiredTournamentId && parsed.tournament?.id !== requiredTournamentId) return;
+
+      const maxAgeMs = options?.maxAgeMs ?? 12 * 60 * 60 * 1000;
+      const cachedAtMs = Date.parse(String(parsed.cachedAt || ""));
+      if (Number.isFinite(cachedAtMs) && Date.now() - cachedAtMs > maxAgeMs) {
+        return;
+      }
+      if (!parsed.tournament?.id) return;
+
       setCompany(parsed.company);
       setTournaments([parsed.tournament]);
       setSelectedTournamentId(parsed.tournament.id);
