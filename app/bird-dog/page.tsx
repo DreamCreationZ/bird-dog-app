@@ -1049,7 +1049,7 @@ export default function BirdDogPage() {
   const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
   const [openError, setOpenError] = useState("");
   const [selectedInventorySlug, setSelectedInventorySlug] = useState("");
-  const [activeTab, setActiveTab] = useState<"tournaments" | "schedule" | "notes" | "bestPlayers" | "profile">("tournaments");
+  const [activeTab, setActiveTab] = useState<"tournaments" | "notes" | "profile">("tournaments");
   const [inlineTeamNoteDrafts, setInlineTeamNoteDrafts] = useState<Record<string, InlineTeamNoteDraft>>({});
   const [inlineTeamNoteStatuses, setInlineTeamNoteStatuses] = useState<Record<string, string>>({});
   const [inlineTeamNoteRecorderState, setInlineTeamNoteRecorderState] = useState<RecorderState>("idle");
@@ -1060,8 +1060,6 @@ export default function BirdDogPage() {
   const [queryStateApplied, setQueryStateApplied] = useState(false);
 
   const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
-  const [viewingSchedule, setViewingSchedule] = useState<CoachSchedule | null>(null);
-  const [viewingPanelMode, setViewingPanelMode] = useState<"schedule" | "notes">("schedule");
   const [coachSharedNotesByUser, setCoachSharedNotesByUser] = useState<Map<string, CoachSharedNote[]>>(new Map());
   const [coachSharedNotesLoading, setCoachSharedNotesLoading] = useState(false);
   const [liveLocations, setLiveLocations] = useState<CoachLiveLocation[]>([]);
@@ -1110,10 +1108,7 @@ export default function BirdDogPage() {
     () => tournaments.find((t) => t.id === selectedTournamentId) || null,
     [tournaments, selectedTournamentId]
   );
-  const displayInventory = useMemo(
-    () => (inventory.length ? inventory : fallbackInventoryClient()),
-    [inventory]
-  );
+  const displayInventory = useMemo(() => inventory, [inventory]);
   const selectedInventory = useMemo(
     () => displayInventory.find((item) => item.slug === selectedInventorySlug) || null,
     [displayInventory, selectedInventorySlug]
@@ -1337,7 +1332,6 @@ export default function BirdDogPage() {
     async function boot() {
       const params = new URLSearchParams(window.location.search);
       const requestedCompany = parseCompanyParam(params.get("company") || params.get("provider"));
-      const requestedTournamentId = String(params.get("tournamentId") || "").trim();
       try {
         const overview = await loadHarvestOverview();
         if (!mounted) return;
@@ -1349,14 +1343,6 @@ export default function BirdDogPage() {
         const defaultCompany: "PG" | "PBR" = requestedCompany && nextCompanies.includes(requestedCompany)
           ? requestedCompany
           : (nextCompanies[0] || "PG");
-        // Avoid stale tournament flash on login.
-        // Only restore cache when URL explicitly targets that same tournament.
-        if (requestedTournamentId) {
-          loadCachedTournament({
-            requiredCompany: defaultCompany,
-            requiredTournamentId: requestedTournamentId
-          });
-        }
         await Promise.allSettled([
           loadCompanyData(defaultCompany),
           fetchJobs(),
@@ -1368,12 +1354,6 @@ export default function BirdDogPage() {
         if (!mounted) return;
         setCompanies(["PG", "PBR"]);
         setOpenError("");
-        if (requestedTournamentId) {
-          loadCachedTournament({
-            requiredCompany: requestedCompany || undefined,
-            requiredTournamentId: requestedTournamentId
-          });
-        }
         await Promise.allSettled([
           fetchInventory(),
           fetchJobs(),
@@ -1425,9 +1405,9 @@ export default function BirdDogPage() {
     const requestedCompany = parseCompanyParam(params.get("company") || params.get("provider"));
     const inventorySlug = params.get("inventorySlug");
     const tournamentId = params.get("tournamentId");
-    if (tab === "coaches") {
-      setActiveTab("schedule");
-    } else if (tab === "tournaments" || tab === "schedule" || tab === "notes" || tab === "bestPlayers" || tab === "profile") {
+    if (tab === "coaches" || tab === "schedule" || tab === "bestPlayers") {
+      setActiveTab("notes");
+    } else if (tab === "tournaments" || tab === "notes" || tab === "profile") {
       setActiveTab(tab);
     }
     if (inventorySlug) {
@@ -1582,26 +1562,6 @@ export default function BirdDogPage() {
   }, [company, isAdminUser, loadingHarvest, selectedInventory, selectedTournamentId, tournaments, user]);
 
   useEffect(() => {
-    if (activeTab !== "schedule") return;
-    if (!desiredPlayers.length) {
-      autoPlannerRef.current.key = "";
-      return;
-    }
-    const planKey = desiredPlayers
-      .map((item) => desiredPlayerSelectionKey(item))
-      .sort()
-      .join("|");
-    if (!planKey) return;
-    if (autoPlannerRef.current.busy) return;
-    if (autoPlannerRef.current.key === planKey && myGeneratedPlan.length) return;
-    autoPlannerRef.current.busy = true;
-    autoPlannerRef.current.key = planKey;
-    void generateScheduleFromSmartPlayers({ keepActiveTab: true, autoRun: true }).finally(() => {
-      autoPlannerRef.current.busy = false;
-    });
-  }, [activeTab, desiredPlayers, myGeneratedPlan.length]);
-
-  useEffect(() => {
     if (!canAccessLockedPages) {
       setSourceSuggestions([]);
       setDestinationSuggestions([]);
@@ -1730,10 +1690,13 @@ export default function BirdDogPage() {
 
   async function loadCompanyData(nextCompany: "PG" | "PBR", forceRefresh = false) {
     setLoadingHarvest(true);
+    setCompany(nextCompany);
+    setTournaments([]);
+    setSelectedTournamentId("");
+    setSelectedGameId("");
     try {
       const dataset = await loadHarvestDataset(nextCompany, forceRefresh);
       const nextTournaments: Tournament[] = dataset.tournaments || [];
-      setCompany(nextCompany);
       setTournaments(nextTournaments);
       setSelectedTournamentId(nextTournaments[0]?.id || "");
       if (nextTournaments[0]?.id) {
@@ -1742,7 +1705,7 @@ export default function BirdDogPage() {
         setSelectedGameId("");
       }
     } catch {
-      // Keep existing tournament state when data is temporarily unavailable.
+      setOpenError(`Unable to load ${companyLabel(nextCompany)} tournaments right now. Please refresh in a moment.`);
     } finally {
       setLoadingHarvest(false);
     }
@@ -1777,18 +1740,16 @@ export default function BirdDogPage() {
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       setOpenError(`Unable to load tournaments (${res.status}). ${text.slice(0, 180)}`);
-      const fallback = fallbackInventoryClient();
-      setInventory(fallback);
-      return fallback;
+      setInventory([]);
+      return [];
     }
     const data = await res.json();
     const nextInventory: InventoryTournament[] = data.inventory || [];
     setSubscribed(Boolean(data.subscribed));
     if (!nextInventory.length) {
-      const fallback = fallbackInventoryClient();
-      setInventory(fallback);
+      setInventory([]);
       setOpenError("");
-      return fallback;
+      return [];
     }
     setInventory(nextInventory);
     if (data?.warning && !data?.fallback) {
@@ -1840,10 +1801,10 @@ export default function BirdDogPage() {
 
   async function resolveTournamentIdForItem(item: InventoryTournament) {
     const wanted = normalizeTournamentName(item.name);
-    const byCurrentState = tournaments.find((t) => {
+    const byCurrentState = company === item.company ? tournaments.find((t) => {
       const name = normalizeTournamentName(t.name);
       return name === wanted || name.includes(wanted) || wanted.includes(name);
-    })?.id;
+    })?.id : "";
     if (byCurrentState) return byCurrentState;
 
     try {
@@ -1871,10 +1832,10 @@ export default function BirdDogPage() {
 
   async function openTournamentFromExistingData(item: InventoryTournament, targetTournamentId?: string) {
     const wanted = normalizeTournamentName(item.name);
-    const inMemoryMatch = tournaments.find((t) => {
+    const inMemoryMatch = company === item.company ? tournaments.find((t) => {
       const normalized = normalizeTournamentName(t.name);
       return normalized === wanted || normalized.includes(wanted) || wanted.includes(normalized);
-    });
+    }) : undefined;
     if (inMemoryMatch) {
       applyOpenedTournament(inMemoryMatch);
       return true;
@@ -2315,81 +2276,6 @@ export default function BirdDogPage() {
     }
   }
 
-  function editSchedule(item: CoachSchedule) {
-    setActiveTab("schedule");
-    setViewingSchedule(null);
-    setScheduleForm({
-      flightSource: item.flight_source || "Current location",
-      flightDestination: item.flight_destination || "",
-      flightArrivalTime: toInputDateTime(item.flight_arrival_time),
-      hotelName: item.hotel_name || "",
-      notes: item.notes || ""
-    });
-    setDesiredPlayersAndPersist(item.desired_players || []);
-    setMyGeneratedPlan(item.generated_plan || []);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
-  async function startMapForSchedule(schedule: CoachSchedule) {
-    if (!schedule.hotel_name?.trim()) return;
-
-    const openWithDestinationOnly = () => {
-      const destination = encodeURIComponent(schedule.hotel_name as string);
-      const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`;
-      window.open(mapsUrl, "_blank", "noopener,noreferrer");
-    };
-
-    if (!navigator.geolocation) {
-      openWithDestinationOnly();
-      return;
-    }
-
-    const current = await new Promise<{ lat: number; lng: number } | null>((resolve) => {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          resolve({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude
-          });
-        },
-        () => resolve(null),
-        { enableHighAccuracy: true, timeout: 8000 }
-      );
-    });
-
-    if (!current) {
-      openWithDestinationOnly();
-      return;
-    }
-
-    const geo = await fetch(`/api/maps/geocode?address=${encodeURIComponent(schedule.hotel_name)}`)
-      .then((res) => (res.ok ? res.json() : { location: null }))
-      .catch(() => ({ location: null }));
-
-    const destination = geo?.location as { lat: number; lng: number; label?: string } | null;
-    if (!destination) {
-      openWithDestinationOnly();
-      return;
-    }
-
-    const km = distanceKm(current.lat, current.lng, destination.lat, destination.lng);
-    if (km <= 0.2) {
-      window.alert("Coach is already at destination (within ~200 meters).");
-      const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${destination.lat},${destination.lng}`;
-      window.open(mapsUrl, "_blank", "noopener,noreferrer");
-      return;
-    }
-
-    const mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${current.lat},${current.lng}&destination=${destination.lat},${destination.lng}&travelmode=driving`;
-    window.open(mapsUrl, "_blank", "noopener,noreferrer");
-  }
-
-  function openScheduleView(schedule: CoachSchedule, mode: "schedule" | "notes" = "schedule") {
-    setActiveTab("schedule");
-    setViewingPanelMode(mode);
-    setViewingSchedule(schedule);
-  }
-
   function currentEventNumber() {
     const fromTournament = selectedTournament?.id?.match(/(\d+)/)?.[1] || "";
     if (fromTournament && Number(fromTournament) > 10000) return fromTournament;
@@ -2686,7 +2572,7 @@ export default function BirdDogPage() {
       setPlayerSearchResults(result);
       setPlayerSearchStatus(
         result.length
-          ? `Found ${result.length} players. Select players and click Generate My Schedule.`
+          ? `Found ${result.length} players. Select players to build your final list.`
           : "No player match found. Try another player name."
       );
     } finally {
@@ -3008,7 +2894,7 @@ export default function BirdDogPage() {
       return;
     }
     if (options?.keepActiveTab !== false) {
-      setActiveTab("schedule");
+      setActiveTab("notes");
     }
     const instantFlightDestination = scheduleForm.flightDestination || destinationForPlayer(desiredPlayers[0]) || "";
     const instantForm = {
@@ -3245,7 +3131,7 @@ export default function BirdDogPage() {
       safeLocalRemove(BOOKING_SUMMARY_KEY);
       setAndPersistPlanWorkflowStatus("pending_approval");
       setPlanWorkflowNote("Opening booking review in a new tab...");
-      const url = `/bookings/review?returnTo=${encodeURIComponent("/bird-dog?tab=schedule")}`;
+      const url = `/bookings/review?returnTo=${encodeURIComponent("/bird-dog?tab=notes")}`;
       const popup = window.open(url, "_blank", "noopener,noreferrer");
       if (!popup) {
         router.push(url);
@@ -3365,6 +3251,9 @@ export default function BirdDogPage() {
     setOpeningSlug(item.slug);
     setSelectedInventorySlug(item.slug);
     setCompany(item.company);
+    setTournaments([]);
+    setSelectedTournamentId("");
+    setSelectedGameId("");
     setJobHint(item.name);
     try {
       const targetTournamentId = await resolveTournamentIdForItem(item);
@@ -4003,30 +3892,8 @@ export default function BirdDogPage() {
     () => Array.from(new Set(shareableSchedules.map((item) => item.user_id).filter(Boolean))),
     [shareableSchedules]
   );
-  const mySharedNotes = useMemo(
-    () => user ? (coachSharedNotesByUser.get(user.userId) || []) : [],
-    [coachSharedNotesByUser, user]
-  );
-  const myBestPlayers = useMemo(() => {
-    const source = desiredPlayers.length ? desiredPlayers : (myCoachSchedule?.desired_players || []);
-    const deduped = new Map<string, DesiredPlayer>();
-    source.forEach((item) => {
-      deduped.set(desiredPlayerSelectionKey(item), item);
-    });
-    return Array.from(deduped.values());
-  }, [desiredPlayers, myCoachSchedule?.desired_players]);
-  const viewingScheduleSharedNotes = useMemo(
-    () => viewingSchedule ? (coachSharedNotesByUser.get(viewingSchedule.user_id) || []) : [],
-    [coachSharedNotesByUser, viewingSchedule]
-  );
-  const viewingScheduleMeetSuggestion = useMemo(() => {
-    if (!viewingSchedule || viewingSchedule.user_id === user?.userId) return null;
-    return coachMeetSuggestionById.get(viewingSchedule.id) || null;
-  }, [coachMeetSuggestionById, user?.userId, viewingSchedule]);
   const showTournaments = activeTab === "tournaments";
-  const showSchedule = activeTab === "schedule";
   const showNotes = activeTab === "notes";
-  const showBestPlayers = activeTab === "bestPlayers";
   const showProfile = activeTab === "profile";
 
   useEffect(() => {
@@ -4071,12 +3938,6 @@ export default function BirdDogPage() {
     };
   }, [shareableUserIds, user]);
   useEffect(() => {
-    if (!viewingSchedule) return;
-    if (!shareableSchedules.some((item) => item.id === viewingSchedule.id)) {
-      setViewingSchedule(null);
-    }
-  }, [shareableSchedules, viewingSchedule]);
-  useEffect(() => {
     if (!menuOpen) return;
     function handlePointerDown(event: PointerEvent) {
       const target = event.target as Node | null;
@@ -4095,7 +3956,7 @@ export default function BirdDogPage() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [menuOpen]);
-  const canGoBackInApp = Boolean(viewingSchedule) || !showTournaments;
+  const canGoBackInApp = !showTournaments;
   function goToTournamentDashboard() {
     setActiveTab("tournaments");
     setMenuOpen(false);
@@ -4123,11 +3984,7 @@ export default function BirdDogPage() {
     void Promise.allSettled([loadCompanyData(nextCompany, true), fetchInventory(), fetchJobs()]);
   }
   function goBackInApp() {
-    if (viewingSchedule) {
-      setViewingSchedule(null);
-      return;
-    }
-    if (showNotes || showSchedule || showBestPlayers || showProfile) {
+    if (showNotes || showProfile) {
       goToTournamentDashboard();
       return;
     }
@@ -4217,24 +4074,13 @@ export default function BirdDogPage() {
               )}
               <button
                 type="button"
-                className={activeTab === "schedule" ? "active" : ""}
+                className={activeTab === "notes" ? "active" : ""}
                 onClick={() => {
-                  setActiveTab("schedule");
-                  setMenuOpen(false);
-                  void fetchSchedules();
-                }}
-              >
-                Schedules
-              </button>
-              <button
-                type="button"
-                className={activeTab === "bestPlayers" ? "active" : ""}
-                onClick={() => {
-                  setActiveTab("bestPlayers");
+                  setActiveTab("notes");
                   setMenuOpen(false);
                 }}
               >
-                My Players
+                Player Selection
               </button>
               <button
                 type="button"
@@ -4259,135 +4105,6 @@ export default function BirdDogPage() {
           ) : null}
         </div>
       </section>
-
-      {showSchedule ? (
-      <section className="panel">
-        <div>
-          <h2>Schedules Dashboard</h2>
-          <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
-          {shareableSchedules.length ? (
-            <>
-              <div className="table-wrap">
-                <table className="roster-table">
-                  <thead>
-                    <tr>
-                      <th>Coach Name</th>
-                      <th>Email</th>
-                      <th>Schedule</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {shareableSchedules.map((item) => (
-                      <tr key={item.id}>
-                        <td>
-                          {item.coach_name}
-                          {item.user_id === user?.userId ? " (You)" : ""}
-                        </td>
-                        <td>{item.coach_email || "-"}</td>
-                        <td>
-                          {item.generated_plan?.length
-                            ? `${item.generated_plan.length} recommendation step(s)`
-                            : "No schedule generated yet"}
-                        </td>
-                        <td>
-                          <div className="row wrap">
-                            <button className="secondary" onClick={() => openScheduleView(item, "schedule")}>View Schedule</button>
-                            <button className="secondary" onClick={() => openScheduleView(item, "notes")}>View Notes</button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          ) : (
-            <p className="muted">No schedules available right now.</p>
-          )}
-        </div>
-      </section>
-      ) : null}
-
-      {viewingSchedule ? (
-        <section className="panel">
-          <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
-            <h2>
-              {viewingSchedule.coach_name} - {viewingPanelMode === "notes" ? "Favorite Player Notes" : "Schedule"}
-            </h2>
-            <button className="secondary" onClick={() => setViewingSchedule(null)}>Close</button>
-          </div>
-          <p>{viewingSchedule.flight_source || "-"} {"->"} {viewingSchedule.flight_destination || "-"}</p>
-          <p>{viewingSchedule.flight_arrival_time ? new Date(viewingSchedule.flight_arrival_time).toLocaleString() : "No arrival time"}</p>
-          <p>Hotel: {viewingSchedule.hotel_name || "-"}</p>
-          {viewingScheduleMeetSuggestion ? (
-            <p className="muted">
-              Meet point: {viewingScheduleMeetSuggestion.label} · {viewingScheduleMeetSuggestion.detail}
-            </p>
-          ) : null}
-          {viewingPanelMode === "schedule" ? (
-            <>
-              {viewingSchedule.notes && !/^auto-generated/i.test(viewingSchedule.notes.trim()) ? (
-                <p>{viewingSchedule.notes}</p>
-              ) : null}
-              {viewingSchedule.desired_players?.length ? (
-                <p>
-                  <strong>Targets:</strong> {viewingSchedule.desired_players.map((p) => `${p.name} (${p.team})`).join(", ")}
-                </p>
-              ) : null}
-              {viewingSchedule.generated_plan?.length ? (
-                <div className="log-list" style={{ maxHeight: 220 }}>
-                  {viewingSchedule.generated_plan.map((plan, idx) => (
-                    <article key={`${plan.at}-${idx}`} className="log-card">
-                      <p><strong>{dateLabel(plan.at)} {timeLabel(plan.at)} - {plan.title}</strong></p>
-                      <p>{plan.detail}</p>
-                    </article>
-                  ))}
-                </div>
-              ) : null}
-              <div className="row wrap">
-                <button className="secondary" onClick={() => void startMapForSchedule(viewingSchedule)}>Start Map</button>
-                <button className="secondary" onClick={() => setViewingPanelMode("notes")}>View Notes</button>
-                {viewingSchedule.user_id === user?.userId ? (
-                  <button className="secondary" onClick={() => editSchedule(viewingSchedule)}>Edit</button>
-                ) : null}
-              </div>
-            </>
-          ) : (
-            <>
-              {viewingSchedule.desired_players?.length ? (
-                <p>
-                  <strong>Favorite players:</strong> {viewingSchedule.desired_players.map((p) => `${p.name} (${p.team})`).join(", ")}
-                </p>
-              ) : (
-                <p className="muted">No favorite players selected for this coach yet.</p>
-              )}
-              {viewingSchedule.notes && !/^auto-generated/i.test(viewingSchedule.notes.trim()) ? (
-                <p><strong>Coach note:</strong> {viewingSchedule.notes}</p>
-              ) : null}
-              {coachSharedNotesLoading ? <p className="muted">Loading coach notes...</p> : null}
-              {viewingScheduleSharedNotes.length ? (
-                <div className="log-list" style={{ maxHeight: 260 }}>
-                  {viewingScheduleSharedNotes.map((note) => (
-                    <article key={note.id} className="log-card">
-                      <p>
-                        <strong>{note.observed_at ? new Date(note.observed_at).toLocaleString() : "Observed note"}</strong>
-                      </p>
-                      <p>{note.transcript || "No text transcript."}</p>
-                      {note.audio_url ? <audio controls preload="none" src={note.audio_url} style={{ width: "100%" }} /> : null}
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <p className="muted">No notes for favorite players yet.</p>
-              )}
-              <div className="row wrap">
-                <button className="secondary" onClick={() => setViewingPanelMode("schedule")}>View Schedule</button>
-              </div>
-            </>
-          )}
-        </section>
-      ) : null}
 
       {showProfile ? (
         <section className="panel" style={{ maxWidth: 760 }}>
@@ -4461,101 +4178,6 @@ export default function BirdDogPage() {
           </div>
           {profileStatus ? <p className="muted" style={{ marginTop: 8 }}>{profileStatus}</p> : null}
         </section>
-      ) : null}
-
-      {showBestPlayers ? (
-      <section className="panel">
-        <h2>My Players</h2>
-        <p className="muted">Tournament: {selectedTournament?.name || tournamentViewTitle || "Select tournament from dashboard"}</p>
-        {myBestPlayers.length ? (
-          <div className="log-list" style={{ maxHeight: 520 }}>
-            {myBestPlayers.map((player) => {
-              const notesForPlayer = mySharedNotes.filter((note) => coachNoteMatchesPlayer(note, player));
-              const audioCount = notesForPlayer.filter((note) => Boolean(note.audio_url)).length;
-              const team = (selectedTournament?.teams || []).find((item) => {
-                const left = normalizeSmartSearch(item.name);
-                const right = normalizeSmartSearch(player.team);
-                return left === right || left.includes(right) || right.includes(left);
-              }) || null;
-              const selectionKey = desiredPlayerSelectionKey(player);
-              const noteTarget: InlineTeamNoteTarget = team
-                ? inlineTeamNoteTargetFromInput({ team, player })
-                : {
-                  teamId: `player:${selectionKey}`,
-                  teamName: player.team || "Unknown Team",
-                  playerId: player.playerId,
-                  playerName: player.name,
-                  selectionKey
-                };
-              const noteKey = inlineTeamNoteKey(noteTarget);
-              const noteDraft = inlineTeamNoteDrafts[noteKey] || readInlineTeamNoteDraft(noteTarget);
-              const noteStatus = inlineTeamNoteStatuses[noteKey] || "";
-              const recordingOnThisCard = inlineTeamNoteRecorderState === "recording" && inlineTeamNoteRecordingKey === noteKey;
-              const recordingOtherCard = inlineTeamNoteRecorderState === "recording" && inlineTeamNoteRecordingKey !== noteKey;
-              return (
-                <article key={selectionKey} className="log-card">
-                  <p><strong>{player.name}</strong></p>
-                  <p>Location: {player.hometown || "Unknown"}</p>
-                  <p>Team: {player.team}</p>
-                  <p>Tournament: {selectedTournament?.name || tournamentViewTitle || "Not selected"}</p>
-                  <p>Notes: {notesForPlayer.length} · Audio clips: {audioCount}</p>
-                  <label style={{ display: "block", marginTop: 8 }}>
-                    Note for {player.name}
-                    <textarea
-                      rows={3}
-                      value={noteDraft.text}
-                      onFocus={() => openInlineTeamNote(noteTarget)}
-                      onChange={(event) => {
-                        updateInlineTeamNoteDraft(noteTarget, { text: event.target.value, updatedAt: new Date().toISOString() });
-                        updateInlineTeamNoteStatus(noteTarget, "");
-                      }}
-                      placeholder="Tap Speak and talk, or type your player note here."
-                    />
-                  </label>
-                  <div className="row wrap">
-                    <button
-                      className="secondary"
-                      type="button"
-                      onClick={() => {
-                        if (recordingOnThisCard) {
-                          void stopInlineTeamNoteRecording();
-                        } else {
-                          void startInlineTeamNoteRecording(noteTarget);
-                        }
-                      }}
-                      disabled={recordingOtherCard}
-                    >
-                      {recordingOnThisCard ? "Stop" : "Speak"}
-                    </button>
-                    <button type="button" onClick={() => saveInlineTeamNote(noteTarget)}>
-                      Save
-                    </button>
-                    {myCoachSchedule ? (
-                      <button className="secondary" type="button" onClick={() => openScheduleView(myCoachSchedule, "notes")}>
-                        View My Coach Notes
-                      </button>
-                    ) : null}
-                  </div>
-                  {noteDraft.audioUrl ? (
-                    <audio controls preload="none" src={noteDraft.audioUrl} style={{ width: "100%", marginTop: 8 }} />
-                  ) : null}
-                  {noteStatus ? <p className="muted" style={{ marginTop: 8 }}>{noteStatus}</p> : null}
-                </article>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="muted">No players selected yet.</p>
-        )}
-        <div className="row wrap">
-          <button className="secondary" type="button" onClick={() => setActiveTab("notes")}>
-            Go To Tournament Roster
-          </button>
-          <button className="secondary" type="button" onClick={() => setActiveTab("schedule")}>
-            Go To My Schedule
-          </button>
-        </div>
-      </section>
       ) : null}
 
       {showTournaments ? (
@@ -4702,13 +4324,6 @@ export default function BirdDogPage() {
           <div className="panel" style={{ marginBottom: 10 }}>
             <div className="row wrap" style={{ alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <h3 style={{ marginTop: 0, marginBottom: 0 }}>Selected Players</h3>
-              <button
-                type="button"
-                onClick={() => void generateScheduleFromSmartPlayers()}
-                disabled={!desiredPlayers.length}
-              >
-                Generate My Schedule
-              </button>
             </div>
             {desiredPlayers.length ? (
               <div style={{ marginTop: 8 }}>

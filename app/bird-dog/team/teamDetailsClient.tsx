@@ -1099,7 +1099,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
       || qs.get("tab")
       || "notes"
     ).toLowerCase();
-    const allowedTabs = new Set(["tournaments", "notes", "schedule", "coaches"]);
+    const allowedTabs = new Set(["tournaments", "notes", "profile"]);
     const nextTab = allowedTabs.has(requestedTab) ? requestedTab : "notes";
     const nextInventory = initialParams.returnInventorySlug || qs.get("returnInventorySlug") || initialParams.inventorySlug || qs.get("inventorySlug") || "";
     const nextTournament = initialParams.returnTournamentId || qs.get("returnTournamentId") || qs.get("tournamentId") || "";
@@ -1119,7 +1119,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
 
   function goToCoachScheduleTab() {
     const nextParams = new URLSearchParams();
-    nextParams.set("tab", "schedule");
+    nextParams.set("tab", "notes");
     if (initialParams.returnInventorySlug || initialParams.inventorySlug) {
       nextParams.set("inventorySlug", initialParams.returnInventorySlug || initialParams.inventorySlug);
     }
@@ -1134,7 +1134,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     window.location.assign(`/bird-dog?${nextParams.toString()}`);
   }
 
-  function openAppTab(tab: "tournaments" | "schedule" | "bestPlayers" | "profile") {
+  function openAppTab(tab: "tournaments" | "notes" | "profile") {
     const nextParams = new URLSearchParams();
     nextParams.set("tab", tab);
     if (initialParams.returnInventorySlug || initialParams.inventorySlug) {
@@ -2367,8 +2367,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
               </div>
             </div>
             <button type="button" onClick={() => openAppTab("tournaments")}>Tournament Dashboard</button>
-            <button type="button" className="active" onClick={() => openAppTab("schedule")}>Schedules</button>
-            <button type="button" onClick={() => openAppTab("bestPlayers")}>My Players</button>
+            <button type="button" className="active" onClick={() => openAppTab("notes")}>Player Selection</button>
             <button type="button" onClick={() => openAppTab("profile")}>My Profile</button>
             <button
               type="button"
