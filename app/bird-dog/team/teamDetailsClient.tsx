@@ -1114,7 +1114,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
       nextParams.set("provider", nextCompany);
     }
     const target = `/bird-dog?${nextParams.toString()}`;
-    window.location.assign(target);
+    window.location.replace(target);
   }
 
   function goToCoachScheduleTab() {
@@ -1131,7 +1131,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
       nextParams.set("company", nextCompany);
       nextParams.set("provider", nextCompany);
     }
-    window.location.assign(`/bird-dog?${nextParams.toString()}`);
+    window.location.replace(`/bird-dog?${nextParams.toString()}`);
   }
 
   function openAppTab(tab: "tournaments" | "notes" | "profile") {
@@ -1148,7 +1148,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
       nextParams.set("company", nextCompany);
       nextParams.set("provider", nextCompany);
     }
-    window.location.assign(`/bird-dog?${nextParams.toString()}`);
+    window.location.replace(`/bird-dog?${nextParams.toString()}`);
   }
 
   async function logout() {

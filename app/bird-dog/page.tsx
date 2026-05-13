@@ -1422,6 +1422,24 @@ export default function BirdDogPage() {
     if (tournamentId) {
       setSelectedTournamentId(tournamentId);
     }
+    const cleanParams = new URLSearchParams(params);
+    [
+      "teamId",
+      "teamName",
+      "teamUrl",
+      "teamView",
+      "eventId",
+      "returnTab",
+      "returnInventorySlug",
+      "returnTournamentId",
+      "returnCompany"
+    ].forEach((key) => cleanParams.delete(key));
+    const nextQuery = cleanParams.toString();
+    const currentQuery = params.toString();
+    if (nextQuery !== currentQuery) {
+      const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
+      window.history.replaceState({}, "", nextUrl);
+    }
     setQueryStateApplied(true);
   }, [queryStateApplied, user]);
 
