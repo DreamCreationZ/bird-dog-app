@@ -1,6 +1,7 @@
 import TeamDetailsClient from "./teamDetailsClient";
 
 type SearchParams = Record<string, string | string[] | undefined>;
+export const dynamic = "force-dynamic";
 
 function first(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] || "" : value || "";
@@ -12,8 +13,18 @@ export default async function TeamDetailsPage({
   searchParams: Promise<SearchParams>;
 }) {
   const params = await searchParams;
+  const teamIdentity = [
+    first(params.inventorySlug),
+    first(params.returnTournamentId),
+    first(params.teamId),
+    first(params.teamName),
+    first(params.eventId),
+    first(params.teamUrl),
+    first(params.teamView)
+  ].join("|");
   return (
     <TeamDetailsClient
+      key={teamIdentity}
       initialParams={{
         inventorySlug: first(params.inventorySlug),
         teamId: first(params.teamId),

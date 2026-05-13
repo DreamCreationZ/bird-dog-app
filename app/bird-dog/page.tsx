@@ -747,6 +747,33 @@ function normalizeSmartSearch(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function teamNameTokens(value: string) {
+  const generic = new Set([
+    "team",
+    "baseball",
+    "club",
+    "academy",
+    "elite",
+    "prime",
+    "national",
+    "select",
+    "sports",
+    "varsity",
+    "junior",
+    "jr",
+    "the"
+  ]);
+  return normalizeSmartSearch(value)
+    .split(" ")
+    .filter((token) => {
+      if (!token || token.length < 2) return false;
+      if (/^\d+u$/.test(token)) return false;
+      if (/^\d+$/.test(token)) return false;
+      if (generic.has(token)) return false;
+      return true;
+    });
+}
+
 function isRosterPlaceholderTeamName(value: string) {
   const normalized = normalizeSmartSearch(value);
   if (!normalized) return true;
@@ -2389,16 +2416,26 @@ export default function BirdDogPage() {
     if (exact) return exact;
 
     const compactWanted = normalized.replace(/\s+/g, "");
+    const wantedTokens = teamNameTokens(normalized);
+    let best: { team: TeamRef; score: number } | null = null;
     for (const team of selectedTournamentTeams) {
       const candidate = normalizeSmartSearch(team.name || "");
       if (!candidate) continue;
-      if (candidate.includes(normalized) || normalized.includes(candidate)) return team;
       const compactCandidate = candidate.replace(/\s+/g, "");
-      if (compactCandidate && (compactCandidate.includes(compactWanted) || compactWanted.includes(compactCandidate))) {
+      if (compactCandidate && compactWanted && compactCandidate === compactWanted) {
         return team;
       }
+
+      const candidateTokens = teamNameTokens(candidate);
+      if (!wantedTokens.length || !candidateTokens.length) continue;
+      const candidateSet = new Set(candidateTokens);
+      const overlap = wantedTokens.filter((token) => candidateSet.has(token)).length;
+      if (!overlap) continue;
+      const score = overlap / Math.max(wantedTokens.length, candidateTokens.length);
+      if (!best || score > best.score) best = { team, score };
     }
 
+    if (best && best.score >= 0.5) return best.team;
     return null;
   }
 
