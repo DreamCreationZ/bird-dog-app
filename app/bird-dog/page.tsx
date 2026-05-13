@@ -1089,6 +1089,8 @@ export default function BirdDogPage() {
   const [teamRosterCartPlayers, setTeamRosterCartPlayers] = useState<DesiredPlayer[]>([]);
   const [desiredPlayerId, setDesiredPlayerId] = useState("");
   const [myGeneratedPlan, setMyGeneratedPlan] = useState<PlanItem[]>([]);
+  const [smartRouteHint, setSmartRouteHint] = useState("");
+  const [recommendedHotelHub, setRecommendedHotelHub] = useState("");
   const [planWorkflowStatus, setPlanWorkflowStatus] = useState<PlanWorkflowStatus>("draft");
   const [planWorkflowNote, setPlanWorkflowNote] = useState("");
   const [latestBookingSummary, setLatestBookingSummary] = useState<BookingSummarySnapshot | null>(null);
@@ -2580,6 +2582,15 @@ export default function BirdDogPage() {
     }
   }
 
+  function clearSmartScheduleInsights() {
+    setSmartRouteHint("");
+    setRecommendedHotelHub("");
+    setScheduleForm((prev) => {
+      if (!prev.hotelName) return prev;
+      return { ...prev, hotelName: "" };
+    });
+  }
+
   function toggleSmartPlayerSelection(item: SmartPlayerResult) {
     const selectionKey = smartPlayerSelectionKey(item.teamId, item.playerId);
     setDesiredPlayersAndPersist((prev) => {
@@ -2595,6 +2606,7 @@ export default function BirdDogPage() {
       }];
     });
     autoPlannerRef.current.key = "";
+    clearSmartScheduleInsights();
     setAndPersistPlanWorkflowStatus("draft");
     setPlanWorkflowNote("Player selection updated. Recommendation is regenerating.");
   }
@@ -2700,8 +2712,79 @@ export default function BirdDogPage() {
       (manualSource ? await geocodeForRoute(manualSource) : null)
       || await detectCoachStartPoint();
 
-    // Keep the coach-selected player priority order.
-    const ordered = geocoded;
+    const firstStop = geocoded[0] || null;
+    const remaining = geocoded.slice(firstStop ? 1 : 0);
+    const ordered: typeof geocoded = firstStop ? [firstStop] : [];
+    let current = firstStop?.point || startPoint || null;
+
+    // Smart routing: keep Player #1 as fixed start, then pick nearest next stop.
+    while (remaining.length) {
+      if (current?.lat != null && current?.lng != null) {
+        let bestIndex = -1;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        remaining.forEach((stop, index) => {
+          if (!stop.point) return;
+          const km = distanceKm(current!.lat, current!.lng, stop.point.lat, stop.point.lng);
+          if (km < bestDistance) {
+            bestDistance = km;
+            bestIndex = index;
+          }
+        });
+        const picked = bestIndex >= 0
+          ? remaining.splice(bestIndex, 1)[0]
+          : remaining.shift();
+        if (!picked) break;
+        ordered.push(picked);
+        if (picked.point) current = picked.point;
+      } else {
+        const picked = remaining.shift();
+        if (!picked) break;
+        ordered.push(picked);
+        if (picked.point) current = picked.point;
+      }
+    }
+
+    let smartReorderHint = "";
+    if (firstStop && geocoded.length > 2 && geocoded[1] && ordered[1]) {
+      const originalSecond = geocoded[1];
+      const suggestedSecond = ordered[1];
+      const originalKey = normalizeLocationText(originalSecond.destination);
+      const suggestedKey = normalizeLocationText(suggestedSecond.destination);
+      if (originalKey && suggestedKey && originalKey !== suggestedKey) {
+        const firstPoint = firstStop.point || startPoint || null;
+        const originalName = originalSecond.players[0]?.name || originalSecond.destination;
+        const suggestedName = suggestedSecond.players[0]?.name || suggestedSecond.destination;
+        if (firstPoint?.lat != null && firstPoint?.lng != null && originalSecond.point && suggestedSecond.point) {
+          const distToOriginal = distanceKm(firstPoint.lat, firstPoint.lng, originalSecond.point.lat, originalSecond.point.lng);
+          const distToSuggested = distanceKm(firstPoint.lat, firstPoint.lng, suggestedSecond.point.lat, suggestedSecond.point.lng);
+          if (distToSuggested + 0.1 < distToOriginal) {
+            smartReorderHint = `Smart suggestion: see ${suggestedName} before ${originalName} because it is closer to your first selected player location (${distToSuggested.toFixed(1)} km vs ${distToOriginal.toFixed(1)} km).`;
+          }
+        } else {
+          smartReorderHint = `Smart suggestion: see ${suggestedName} before ${originalName} because it is closer to your first selected player location.`;
+        }
+      }
+    }
+
+    const stopsWithPoints = ordered.filter((stop) => Boolean(stop.point));
+    let hotelHubDestination = ordered[0]?.point?.label || ordered[0]?.destination || "";
+    if (stopsWithPoints.length >= 2) {
+      let best = stopsWithPoints[0];
+      let bestScore = Number.POSITIVE_INFINITY;
+      for (const candidate of stopsWithPoints) {
+        const candidatePoint = candidate.point!;
+        let score = 0;
+        for (const other of stopsWithPoints) {
+          if (!other.point) continue;
+          score += distanceKm(candidatePoint.lat, candidatePoint.lng, other.point.lat, other.point.lng);
+        }
+        if (score < bestScore) {
+          bestScore = score;
+          best = candidate;
+        }
+      }
+      hotelHubDestination = best.point?.label || best.destination || hotelHubDestination;
+    }
 
     const fallbackStartLabel = manualSource || "Current location";
     let cursorMs = Date.now() + 15 * 60 * 1000;
@@ -2813,7 +2896,9 @@ export default function BirdDogPage() {
       usedLiveLocation: Boolean(startPoint),
       unresolvedStops,
       blockedReason,
-      completedStops
+      completedStops,
+      smartReorderHint,
+      hotelHubDestination
     };
   }
 
@@ -2885,11 +2970,13 @@ export default function BirdDogPage() {
       setActiveTab("notes");
     }
     const firstPlayerStart = destinationForPlayer(desiredPlayers[0]) || "";
+    clearSmartScheduleInsights();
     const instantFlightDestination = scheduleForm.flightDestination || firstPlayerStart;
     const instantForm = {
       ...scheduleForm,
       flightSource: firstPlayerStart || scheduleForm.flightSource || "Current location",
-      flightDestination: instantFlightDestination
+      flightDestination: instantFlightDestination,
+      hotelName: ""
     };
     const instantPlan = buildInstantRecommendation(desiredPlayers);
     setScheduleForm(instantForm);
@@ -2903,6 +2990,13 @@ export default function BirdDogPage() {
         || (rawSource && !/^current location$/i.test(rawSource) ? rawSource : "");
 
       const optimized = await buildOptimizedCoachPlan(desiredPlayers, preferredSource);
+      const hotelHubDestination = optimized.hotelHubDestination || optimized.firstDestination || firstPlayerStart || "";
+      setRecommendedHotelHub(hotelHubDestination);
+      if (optimized.smartReorderHint) {
+        setSmartRouteHint(optimized.smartReorderHint);
+      } else if (desiredPlayers.length > 1) {
+        setSmartRouteHint("Selected order is already efficient from your first selected player location.");
+      }
       if (!optimized.plan.length) {
         const msg = "Live route data is limited right now. Showing instant recommendation preview.";
         setScheduleForm(instantForm);
@@ -2917,7 +3011,7 @@ export default function BirdDogPage() {
       const destination = (scheduleForm.flightDestination || optimized.firstDestination || "").trim();
       const isFeasible = !optimized.blockedReason;
       const hotelName = isFeasible
-        ? (scheduleForm.hotelName.trim() || await suggestHotelForDestination(destination))
+        ? (scheduleForm.hotelName.trim() || await suggestHotelForDestination(hotelHubDestination || destination))
         : "";
       const basePlan = isFeasible
         ? withHotelReturnLeg(optimized.plan, hotelName)
@@ -2959,10 +3053,13 @@ export default function BirdDogPage() {
         const locationStatus = optimized.usedLiveLocation
           ? "Current location detected."
           : "Using first selected player location as start.";
+        const hotelStatus = hotelHubDestination
+          ? ` Recommended hotel hub: ${hotelHubDestination}.`
+          : "";
         const unresolvedStatus = optimized.unresolvedStops
           ? ` ${optimized.unresolvedStops} destination(s) could not be geocoded; fallback travel estimates were used.`
           : "";
-        setPlayerSearchStatus(`Optimized route generated. ${locationStatus}${unresolvedStatus} Hotel recommendation added.${quotedPlan.quoteSummary ? ` ${quotedPlan.quoteSummary}` : ""}`);
+        setPlayerSearchStatus(`Optimized route generated. ${locationStatus}${unresolvedStatus}${hotelStatus} Hotel recommendation added.${quotedPlan.quoteSummary ? ` ${quotedPlan.quoteSummary}` : ""}`);
       }
     } catch {
       const emergencyPlan: PlanItem[] = instantPlan;
@@ -3384,6 +3481,7 @@ export default function BirdDogPage() {
       return [...prev, { playerId: desiredPlayerId, selectionKey, name: match.name, team: match.school || "Unknown Team" }];
     });
     autoPlannerRef.current.key = "";
+    clearSmartScheduleInsights();
     setAndPersistPlanWorkflowStatus("draft");
     setPlanWorkflowNote("Target player updated. Recommendation is regenerating.");
   }
@@ -3394,6 +3492,7 @@ export default function BirdDogPage() {
       teamRosterCartPlayers.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey)
     );
     autoPlannerRef.current.key = "";
+    clearSmartScheduleInsights();
     setAndPersistPlanWorkflowStatus("draft");
     setPlanWorkflowNote("Target player removed. Recommendation is regenerating.");
   }
@@ -3410,6 +3509,7 @@ export default function BirdDogPage() {
       return next;
     });
     autoPlannerRef.current.key = "";
+    clearSmartScheduleInsights();
     setAndPersistPlanWorkflowStatus("draft");
     setPlanWorkflowNote("Player order updated. Recommendation will prioritize this order.");
   }
@@ -3425,6 +3525,7 @@ export default function BirdDogPage() {
     );
     setDesiredPlayersAndPersist((prev) => prev.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey));
     autoPlannerRef.current.key = "";
+    clearSmartScheduleInsights();
     setAndPersistPlanWorkflowStatus("draft");
   }
 
@@ -3447,6 +3548,7 @@ export default function BirdDogPage() {
       return [...reorderedFromCart, ...remaining];
     });
     autoPlannerRef.current.key = "";
+    clearSmartScheduleInsights();
     setAndPersistPlanWorkflowStatus("draft");
   }
 
@@ -3456,6 +3558,7 @@ export default function BirdDogPage() {
       prev.filter((item) => !String(desiredPlayerSelectionKey(item)).startsWith("team:"))
     );
     autoPlannerRef.current.key = "";
+    clearSmartScheduleInsights();
     setAndPersistPlanWorkflowStatus("draft");
     setPlanWorkflowNote("Cross-team roster cart cleared.");
   }
@@ -3477,6 +3580,7 @@ export default function BirdDogPage() {
       return Array.from(merged.values());
     });
     autoPlannerRef.current.key = "";
+    clearSmartScheduleInsights();
     setAndPersistPlanWorkflowStatus("draft");
     setPlanWorkflowNote(
       mode === "replace"
@@ -4327,6 +4431,17 @@ export default function BirdDogPage() {
                 <p className="muted" style={{ marginTop: 0 }}>
                   Start point: {destinationForPlayer(desiredPlayers[0]) || "Current location"}
                 </p>
+                {smartRouteHint ? (
+                  <p className="muted" style={{ marginTop: 0 }}>
+                    {smartRouteHint}
+                  </p>
+                ) : null}
+                {recommendedHotelHub ? (
+                  <p className="muted" style={{ marginTop: 0 }}>
+                    Hotel hub (nearest for selected players): {recommendedHotelHub}
+                    {scheduleForm.hotelName ? ` · Recommended stay: ${scheduleForm.hotelName}` : ""}
+                  </p>
+                ) : null}
                 <div className="table-wrap" style={{ marginTop: 6 }}>
                   <table className="roster-table">
                     <thead>
