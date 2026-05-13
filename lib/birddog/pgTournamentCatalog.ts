@@ -10,8 +10,10 @@ const DISCOVERY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 12 * 1000;
 const MAX_FID_PAGES = 120;
 const MAX_PRT_PAGES = 32;
+const MAX_GID_PAGES = 80;
 const MAX_DISCOVERY_CONCURRENCY = 4;
 const MAX_FEATURED_CONCURRENCY = 8;
+const MAX_GROUPED_CONCURRENCY = 6;
 const MAX_CATALOG_ITEMS = 500;
 
 export type PgCatalogItem = {
@@ -37,6 +39,7 @@ type PgCatalogCache = {
   items: PgCatalogItem[];
   discoveryFetchedAt: number;
   featuredIds: number[];
+  groupedIds: number[];
   inFlight: Promise<PgCatalogItem[]> | null;
 };
 
@@ -48,6 +51,7 @@ function getCacheRef() {
       items: [],
       discoveryFetchedAt: 0,
       featuredIds: [],
+      groupedIds: [],
       inFlight: null
     };
   }
@@ -176,6 +180,13 @@ function parseNumberSet(html: string, pattern: RegExp) {
   return set;
 }
 
+function absolutizePgUrl(href: string) {
+  const raw = normalizeSpace(href);
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `${PG_BASE_URL}${raw.startsWith("/") ? "" : "/"}${raw}`;
+}
+
 async function fetchHtml(url: string) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -220,15 +231,20 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-async function discoverFeaturedIds(forceRefresh = false) {
+async function discoverCatalogIds(forceRefresh = false) {
   const cache = getCacheRef();
   const now = Date.now();
-  if (!forceRefresh && cache.featuredIds.length && now - cache.discoveryFetchedAt < DISCOVERY_CACHE_TTL_MS) {
-    return cache.featuredIds;
+  const hasCachedDiscovery = cache.featuredIds.length || cache.groupedIds.length;
+  if (!forceRefresh && hasCachedDiscovery && now - cache.discoveryFetchedAt < DISCOVERY_CACHE_TTL_MS) {
+    return {
+      featuredIds: cache.featuredIds,
+      groupedIds: cache.groupedIds
+    };
   }
 
   const featuredSet = new Set<number>();
   const groupSet = new Set<number>([333]);
+  const groupedSet = new Set<number>([23065]);
 
   const [scheduleHtml, rootGroupHtml] = await Promise.all([
     fetchHtml(PG_SCHEDULE_URL).catch(() => ""),
@@ -239,6 +255,7 @@ async function discoverFeaturedIds(forceRefresh = false) {
     if (!html) return;
     parseNumberSet(html, /FeaturedEvents\.aspx\?fid=(\d+)/gi).forEach((id) => featuredSet.add(id));
     parseNumberSet(html, /FeaturedGroups\.aspx\?PrtID=(\d+)/gi).forEach((id) => groupSet.add(id));
+    parseNumberSet(html, /GroupedEvents\.aspx\?gid=(\d+)/gi).forEach((id) => groupedSet.add(id));
   });
 
   let frontier = Array.from(groupSet).slice(0, MAX_PRT_PAGES);
@@ -259,6 +276,7 @@ async function discoverFeaturedIds(forceRefresh = false) {
     pages.forEach((html) => {
       if (!html) return;
       parseNumberSet(html, /FeaturedEvents\.aspx\?fid=(\d+)/gi).forEach((id) => featuredSet.add(id));
+      parseNumberSet(html, /GroupedEvents\.aspx\?gid=(\d+)/gi).forEach((id) => groupedSet.add(id));
       parseNumberSet(html, /FeaturedGroups\.aspx\?PrtID=(\d+)/gi).forEach((id) => {
         if (!visited.has(id)) nextGroups.add(id);
       });
@@ -269,11 +287,14 @@ async function discoverFeaturedIds(forceRefresh = false) {
   }
 
   const featuredIds = Array.from(featuredSet).sort((a, b) => a - b).slice(0, MAX_FID_PAGES);
-  if (featuredIds.length) {
+  const groupedIds = Array.from(groupedSet).sort((a, b) => a - b).slice(0, MAX_GID_PAGES);
+
+  if (featuredIds.length || groupedIds.length) {
     cache.featuredIds = featuredIds;
+    cache.groupedIds = groupedIds;
     cache.discoveryFetchedAt = now;
   }
-  return featuredIds;
+  return { featuredIds, groupedIds };
 }
 
 function parseFeaturedEventRows(html: string) {
@@ -366,33 +387,94 @@ function parseFeaturedEvents(html: string): PgCatalogItem[] {
   return Array.from(map.values());
 }
 
+function parseGroupedEvents(html: string, gid: number): PgCatalogItem[] {
+  const cardPattern = /<a[^>]*href="([^"]+)"[^>]*>\s*<div[^>]+class="pgds-EventCard[^"]*"[\s\S]*?<\/div>\s*<\/a>/gi;
+  const items: PgCatalogItem[] = [];
+  const todayIso = new Date().toISOString().slice(0, 10);
+  let match = cardPattern.exec(html);
+  while (match) {
+    const card = match[0];
+    const href = absolutizePgUrl(match[1] || "");
+    const name = normalizeSpace((card.match(/id="[^"]*lblEventName_[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1] || ""));
+    const displayDate = normalizeSpace((card.match(/id="[^"]*lblEventDate_[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1] || ""));
+    const displayCity = normalizeSpace((card.match(/id="[^"]*lblCityState_[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1] || ""));
+    const teamsRaw = normalizeSpace((card.match(/id="[^"]*hlTeamsAttending_[^"]*"[^>]*>([\s\S]*?)<\/a>/i)?.[1] || ""));
+    if (!name || !displayDate) {
+      match = cardPattern.exec(html);
+      continue;
+    }
+    const dateRange = parseDateRange(displayDate, displayDate);
+    const date = dateRange?.start || todayIso;
+    const teamsValue = teamsRaw
+      ? (/teams?/i.test(teamsRaw) ? teamsRaw : `${teamsRaw} TEAMS`)
+      : "";
+    const eventId = href.match(/[?&]event=(\d+)/i)?.[1] || "";
+    const harvestHint = eventId
+      ? `${PG_BASE_URL}/Events/Default.aspx?event=${eventId}`
+      : (href || `${PG_BASE_URL}/Schedule/GroupedEvents.aspx?gid=${gid}`);
+    const slugBase = eventId
+      ? `pg-live-event-${eventId}-${slugify(name)}`
+      : `pg-live-${gid}-${slugify(name)}-${date}`;
+    items.push({
+      slug: slugBase.slice(0, 240),
+      name,
+      season: inferSeason(date),
+      company: "PG",
+      displayDate,
+      displayCity,
+      displayTeams: teamsValue,
+      harvestHint
+    });
+    match = cardPattern.exec(html);
+  }
+  return items;
+}
+
 function sortItems(items: PgCatalogItem[]) {
   return items.sort((a, b) => `${a.displayDate} ${a.name}`.localeCompare(`${b.displayDate} ${b.name}`));
 }
 
 async function fetchPgFromSource(forceDiscoveryRefresh = false) {
-  const featuredIds = await discoverFeaturedIds(forceDiscoveryRefresh);
-  if (!featuredIds.length) return [];
+  const { featuredIds, groupedIds } = await discoverCatalogIds(forceDiscoveryRefresh);
 
-  const pages = await mapWithConcurrency(
-    featuredIds,
-    MAX_FEATURED_CONCURRENCY,
-    async (fid) => {
-      try {
-        const html = await fetchHtml(`${PG_BASE_URL}/Schedule/FeaturedEvents.aspx?fid=${fid}`);
-        return parseFeaturedEvents(html);
-      } catch {
-        return [];
-      }
-    }
-  );
+  const [featuredPages, groupedPages] = await Promise.all([
+    featuredIds.length
+      ? mapWithConcurrency(
+        featuredIds,
+        MAX_FEATURED_CONCURRENCY,
+        async (fid) => {
+          try {
+            const html = await fetchHtml(`${PG_BASE_URL}/Schedule/FeaturedEvents.aspx?fid=${fid}`);
+            return parseFeaturedEvents(html);
+          } catch {
+            return [];
+          }
+        }
+      )
+      : Promise.resolve([] as PgCatalogItem[][]),
+    groupedIds.length
+      ? mapWithConcurrency(
+        groupedIds,
+        MAX_GROUPED_CONCURRENCY,
+        async (gid) => {
+          try {
+            const html = await fetchHtml(`${PG_BASE_URL}/Schedule/GroupedEvents.aspx?gid=${gid}`);
+            return parseGroupedEvents(html, gid);
+          } catch {
+            return [];
+          }
+        }
+      )
+      : Promise.resolve([] as PgCatalogItem[][])
+  ]);
 
   const byHint = new Map<string, PgCatalogItem>();
-  pages.flat().forEach((item) => {
+  [...featuredPages.flat(), ...groupedPages.flat()].forEach((item) => {
     const key = item.harvestHint.toLowerCase();
     if (!byHint.has(key)) byHint.set(key, item);
   });
 
+  if (!byHint.size) return [];
   return sortItems(Array.from(byHint.values())).slice(0, MAX_CATALOG_ITEMS);
 }
 

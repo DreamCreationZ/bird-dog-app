@@ -31,12 +31,6 @@ type InventoryItem = {
   harvestHint?: string;
 };
 
-function applyLivePbrInventory(baseInventory: InventoryItem[], livePbr: InventoryItem[]) {
-  if (!livePbr.length) return baseInventory;
-  const withoutPbr = baseInventory.filter((item) => item.company !== "PBR");
-  return [...withoutPbr, ...livePbr];
-}
-
 function normalizeInventoryName(value: string) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -66,8 +60,19 @@ function applyLiveInventory(
     };
   };
 
-  const nextPg = livePg.length ? livePg.map((item) => mapLiveItem(item, basePg)) : basePg;
-  const nextPbr = livePbr.length ? livePbr.map((item) => mapLiveItem(item, basePbr)) : basePbr;
+  const mergeLiveWithBase = (liveRows: InventoryItem[], baseRows: InventoryItem[]) => {
+    if (!liveRows.length) return baseRows;
+    const mappedLive = liveRows.map((item) => mapLiveItem(item, baseRows));
+    const liveBySlug = new Set(mappedLive.map((item) => item.slug));
+    const fallbackBase = baseRows.filter((baseItem) => {
+      if (liveBySlug.has(baseItem.slug)) return false;
+      return !mappedLive.some((liveItem) => inventoryNamesMatch(liveItem.name, baseItem.name));
+    });
+    return [...mappedLive, ...fallbackBase];
+  };
+
+  const nextPg = mergeLiveWithBase(livePg, basePg);
+  const nextPbr = mergeLiveWithBase(livePbr, basePbr);
 
   const staticOther = baseInventory.filter((item) => item.company !== "PG" && item.company !== "PBR");
   return [...staticOther, ...nextPg, ...nextPbr];
