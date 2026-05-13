@@ -2697,32 +2697,11 @@ export default function BirdDogPage() {
 
     const manualSource = String(preferredSourceText || scheduleForm.flightSource || "").trim();
     const startPoint =
-      await detectCoachStartPoint()
-      || (manualSource ? await geocodeForRoute(manualSource) : null);
+      (manualSource ? await geocodeForRoute(manualSource) : null)
+      || await detectCoachStartPoint();
 
-    const unvisited = [...geocoded];
-    const ordered: typeof geocoded = [];
-    let current = startPoint;
-    while (unvisited.length) {
-      if (current?.lat != null && current?.lng != null) {
-        const currentPoint = current;
-        let bestIndex = 0;
-        let bestDistance = Number.POSITIVE_INFINITY;
-        unvisited.forEach((stop, index) => {
-          if (!stop.point) return;
-          const km = distanceKm(currentPoint.lat, currentPoint.lng, stop.point.lat, stop.point.lng);
-          if (km < bestDistance) {
-            bestDistance = km;
-            bestIndex = index;
-          }
-        });
-        ordered.push(unvisited.splice(bestIndex, 1)[0]);
-      } else {
-        ordered.push(unvisited.shift() as (typeof geocoded)[number]);
-      }
-      const latest = ordered[ordered.length - 1];
-      if (latest?.point) current = latest.point;
-    }
+    // Keep the coach-selected player priority order.
+    const ordered = geocoded;
 
     const fallbackStartLabel = manualSource || "Current location";
     let cursorMs = Date.now() + 15 * 60 * 1000;
@@ -2740,9 +2719,18 @@ export default function BirdDogPage() {
         advisory: "Location data incomplete; flight availability must be checked."
       };
 
-      if (prevPoint?.lat != null && prevPoint?.lng != null && stop.point?.lat != null && stop.point?.lng != null) {
+      const sameLocationByText = normalizeLocationText(prevLabel) === normalizeLocationText(destinationLabel);
+      if (sameLocationByText) {
+        travelEstimate = {
+          mode: "On-site",
+          minutes: 0,
+          advisory: "Already at player location."
+        };
+      } else if (prevPoint?.lat != null && prevPoint?.lng != null && stop.point?.lat != null && stop.point?.lng != null) {
         const km = distanceKm(prevPoint.lat, prevPoint.lng, stop.point.lat, stop.point.lng);
-        travelEstimate = travelModeByDistance(km);
+        travelEstimate = km <= 0.6
+          ? { mode: "On-site", minutes: 0, advisory: "Already at player location." }
+          : travelModeByDistance(km);
       } else {
         travelEstimate = travelModeByText(prevLabel, destinationLabel);
       }
@@ -2896,9 +2884,11 @@ export default function BirdDogPage() {
     if (options?.keepActiveTab !== false) {
       setActiveTab("notes");
     }
-    const instantFlightDestination = scheduleForm.flightDestination || destinationForPlayer(desiredPlayers[0]) || "";
+    const firstPlayerStart = destinationForPlayer(desiredPlayers[0]) || "";
+    const instantFlightDestination = scheduleForm.flightDestination || firstPlayerStart;
     const instantForm = {
       ...scheduleForm,
+      flightSource: firstPlayerStart || scheduleForm.flightSource || "Current location",
       flightDestination: instantFlightDestination
     };
     const instantPlan = buildInstantRecommendation(desiredPlayers);
@@ -2909,9 +2899,8 @@ export default function BirdDogPage() {
     setPlayerSearchStatus(`Generating optimized route for ${desiredPlayers.length} selected players...`);
     try {
       const rawSource = scheduleForm.flightSource.trim();
-      const preferredSource = rawSource && !/^current location$/i.test(rawSource)
-        ? rawSource
-        : "";
+      const preferredSource = firstPlayerStart
+        || (rawSource && !/^current location$/i.test(rawSource) ? rawSource : "");
 
       const optimized = await buildOptimizedCoachPlan(desiredPlayers, preferredSource);
       if (!optimized.plan.length) {
@@ -2938,7 +2927,7 @@ export default function BirdDogPage() {
 
       const nextForm = {
         ...scheduleForm,
-        flightSource: optimized.usedLiveLocation ? optimized.sourceLabel : (preferredSource || "Current location"),
+        flightSource: preferredSource || (optimized.usedLiveLocation ? optimized.sourceLabel : "Current location"),
         flightDestination: destination,
         flightArrivalTime: scheduleForm.flightArrivalTime || toInputDateTime(finalPlan[0]?.at || new Date().toISOString()),
         hotelName,
@@ -2954,8 +2943,8 @@ export default function BirdDogPage() {
         setAndPersistPlanWorkflowStatus("pending_approval");
         setPlanWorkflowNote(
           options?.autoRun
-            ? "Recommendation auto-created. Open booking to approve or modify travel options."
-            : "Recommendation created. Open booking to approve or modify travel options."
+            ? "Schedule auto-created from selected player order."
+            : "Schedule created from selected player order."
         );
       } else {
         setAndPersistPlanWorkflowStatus("draft");
@@ -2969,7 +2958,7 @@ export default function BirdDogPage() {
       } else {
         const locationStatus = optimized.usedLiveLocation
           ? "Current location detected."
-          : "Using entered start city.";
+          : "Using first selected player location as start.";
         const unresolvedStatus = optimized.unresolvedStops
           ? ` ${optimized.unresolvedStops} destination(s) could not be geocoded; fallback travel estimates were used.`
           : "";
@@ -2980,7 +2969,7 @@ export default function BirdDogPage() {
       if (emergencyPlan.length) {
         const fallbackForm = {
           ...instantForm,
-          flightSource: instantForm.flightSource || "Current location",
+          flightSource: instantForm.flightSource || firstPlayerStart || "Current location",
           flightDestination: instantForm.flightDestination || destinationForPlayer(desiredPlayers[0]),
           notes: scheduleForm.notes || "Fallback recommendation generated while map services are unavailable."
         };
@@ -4324,10 +4313,20 @@ export default function BirdDogPage() {
           <div className="panel" style={{ marginBottom: 10 }}>
             <div className="row wrap" style={{ alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <h3 style={{ marginTop: 0, marginBottom: 0 }}>Selected Players</h3>
+              <button
+                type="button"
+                onClick={() => void generateScheduleFromSmartPlayers({ keepActiveTab: true })}
+                disabled={!desiredPlayers.length}
+              >
+                Create Schedule
+              </button>
             </div>
             {desiredPlayers.length ? (
               <div style={{ marginTop: 8 }}>
                 <p className="muted" style={{ marginTop: 0 }}>Selected players: {desiredPlayers.length}</p>
+                <p className="muted" style={{ marginTop: 0 }}>
+                  Start point: {destinationForPlayer(desiredPlayers[0]) || "Current location"}
+                </p>
                 <div className="table-wrap" style={{ marginTop: 6 }}>
                   <table className="roster-table">
                     <thead>
@@ -4374,6 +4373,38 @@ export default function BirdDogPage() {
                     </tbody>
                   </table>
                 </div>
+                {playerSearchStatus ? (
+                  <p className="muted" style={{ marginTop: 8 }}>
+                    {playerSearchStatus}
+                  </p>
+                ) : null}
+                {myGeneratedPlan.length ? (
+                  <div style={{ marginTop: 10 }}>
+                    <h4 style={{ marginTop: 0, marginBottom: 6 }}>Coach Schedule Preview</h4>
+                    <div className="table-wrap">
+                      <table className="roster-table">
+                        <thead>
+                          <tr>
+                            <th>#</th>
+                            <th>Time</th>
+                            <th>Step</th>
+                            <th>Details</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {myGeneratedPlan.map((step, idx) => (
+                            <tr key={`${step.at}-${idx}`}>
+                              <td>{idx + 1}</td>
+                              <td>{new Date(step.at).toLocaleString()}</td>
+                              <td>{step.title}</td>
+                              <td>{step.detail}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <p className="muted" style={{ marginTop: 8 }}>
