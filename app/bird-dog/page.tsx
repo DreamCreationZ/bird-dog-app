@@ -1085,6 +1085,9 @@ export default function BirdDogPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuContainerRef = useRef<HTMLDivElement | null>(null);
   const [queryStateApplied, setQueryStateApplied] = useState(false);
+  const selectedTournamentIdRef = useRef("");
+  const selectedInventorySlugRef = useRef("");
+  const companyRef = useRef<"PG" | "PBR">("PG");
 
   const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
   const [coachSharedNotesByUser, setCoachSharedNotesByUser] = useState<Map<string, CoachSharedNote[]>>(new Map());
@@ -1164,6 +1167,18 @@ export default function BirdDogPage() {
       company
     });
   }, [company, user]);
+
+  useEffect(() => {
+    selectedTournamentIdRef.current = selectedTournamentId;
+  }, [selectedTournamentId]);
+
+  useEffect(() => {
+    selectedInventorySlugRef.current = selectedInventorySlug;
+  }, [selectedInventorySlug]);
+
+  useEffect(() => {
+    companyRef.current = company;
+  }, [company]);
 
   const games = selectedTournament?.games || [];
   const players = useMemo(() => uniquePlayers(games), [games]);
@@ -1372,8 +1387,9 @@ export default function BirdDogPage() {
         const defaultCompany: "PG" | "PBR" = requestedCompany && nextCompanies.includes(requestedCompany)
           ? requestedCompany
           : (nextCompanies[0] || "PG");
+        const requestedTournamentId = String(params.get("tournamentId") || "").trim();
         await Promise.allSettled([
-          loadCompanyData(defaultCompany),
+          loadCompanyData(defaultCompany, false, requestedTournamentId),
           fetchJobs(),
           fetchInventory(),
           fetchSchedules(),
@@ -1735,7 +1751,30 @@ export default function BirdDogPage() {
     void finalize();
   }, []);
 
-  async function loadCompanyData(nextCompany: "PG" | "PBR", forceRefresh = false) {
+  function chooseTournamentIdForCompanyLoad(
+    nextCompany: "PG" | "PBR",
+    nextTournaments: Tournament[],
+    preferredTournamentId?: string
+  ) {
+    const preferred = String(preferredTournamentId || "").trim();
+    if (preferred && nextTournaments.some((item) => item.id === preferred)) {
+      return preferred;
+    }
+
+    const currentCompany = companyRef.current;
+    const currentTournamentId = String(selectedTournamentIdRef.current || "").trim();
+    if (
+      currentCompany === nextCompany
+      && currentTournamentId
+      && nextTournaments.some((item) => item.id === currentTournamentId)
+    ) {
+      return currentTournamentId;
+    }
+
+    return nextTournaments[0]?.id || "";
+  }
+
+  async function loadCompanyData(nextCompany: "PG" | "PBR", forceRefresh = false, preferredTournamentId = "") {
     setLoadingHarvest(true);
     setCompany(nextCompany);
     setTournaments([]);
@@ -1745,9 +1784,10 @@ export default function BirdDogPage() {
       const dataset = await loadHarvestDataset(nextCompany, forceRefresh);
       const nextTournaments: Tournament[] = dataset.tournaments || [];
       setTournaments(nextTournaments);
-      setSelectedTournamentId(nextTournaments[0]?.id || "");
-      if (nextTournaments[0]?.id) {
-        await loadTournamentDetails(nextCompany, nextTournaments[0].id, forceRefresh);
+      const nextTournamentId = chooseTournamentIdForCompanyLoad(nextCompany, nextTournaments, preferredTournamentId);
+      setSelectedTournamentId(nextTournamentId);
+      if (nextTournamentId) {
+        await loadTournamentDetails(nextCompany, nextTournamentId, forceRefresh);
       } else {
         setSelectedGameId("");
       }
@@ -1807,7 +1847,11 @@ export default function BirdDogPage() {
 
   async function refreshTournamentByInventory(item: InventoryTournament) {
     try {
-      const targetTournamentId = await resolveTournamentIdForItem(item);
+      const preferredTournamentId = (
+        selectedInventorySlugRef.current === item.slug
+        && companyRef.current === item.company
+      ) ? selectedTournamentIdRef.current : "";
+      const targetTournamentId = await resolveTournamentIdForItem(item, preferredTournamentId);
       const payload = {
         company: item.company,
         inventorySlug: item.slug,
@@ -1846,7 +1890,19 @@ export default function BirdDogPage() {
     }
   }
 
-  async function resolveTournamentIdForItem(item: InventoryTournament) {
+  async function resolveTournamentIdForItem(item: InventoryTournament, preferredTournamentId = "") {
+    const preferredId = String(preferredTournamentId || "").trim();
+    if (preferredId) return preferredId;
+
+    const currentlySelectedId = String(selectedTournamentIdRef.current || "").trim();
+    if (
+      currentlySelectedId
+      && selectedInventorySlugRef.current === item.slug
+      && companyRef.current === item.company
+    ) {
+      return currentlySelectedId;
+    }
+
     const wanted = normalizeTournamentName(item.name);
     const byCurrentState = company === item.company ? tournaments.find((t) => {
       const name = normalizeTournamentName(t.name);
