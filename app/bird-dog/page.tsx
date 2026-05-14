@@ -473,7 +473,13 @@ function normalizeStorageScope(value: string) {
   return normalized || "na";
 }
 
-function rosterCartStorageKey(company: "PG" | "PBR") {
+function rosterCartStorageKey(company: "PG" | "PBR", inventorySlug?: string) {
+  const companyScope = normalizeStorageScope(company);
+  const inventoryScope = normalizeStorageScope(inventorySlug || "global");
+  return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}:${inventoryScope}`;
+}
+
+function legacyRosterCartStorageKey(company: "PG" | "PBR") {
   const companyScope = normalizeStorageScope(company);
   return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}`;
 }
@@ -1158,7 +1164,11 @@ export default function BirdDogPage() {
     const scopeTournament = selectedTournamentId || "tournament";
     return `${PLAN_WORKFLOW_STATUS_KEY_PREFIX}:${user.orgId}:${user.userId}:${scopeSlug}:${scopeTournament}`;
   }, [selectedInventorySlug, selectedTournamentId, user]);
-  const teamRosterCartStorageKey = useMemo(() => rosterCartStorageKey(company), [company]);
+  const teamRosterCartStorageKey = useMemo(
+    () => rosterCartStorageKey(company, selectedInventorySlug),
+    [company, selectedInventorySlug]
+  );
+  const legacyTeamRosterCartStorageKey = useMemo(() => legacyRosterCartStorageKey(company), [company]);
   const desiredPlayersStorageKey = useMemo(() => {
     if (!user) return "";
     return desiredPlayersScopedStorageKey({
@@ -1555,12 +1565,21 @@ export default function BirdDogPage() {
 
   useEffect(() => {
     const raw = safeLocalGet(teamRosterCartStorageKey);
-    if (raw == null) {
-      setTeamRosterCartPlayers([]);
+    if (raw != null) {
+      setTeamRosterCartPlayers(readRosterCartStorage(teamRosterCartStorageKey));
       return;
     }
-    setTeamRosterCartPlayers(readRosterCartStorage(teamRosterCartStorageKey));
-  }, [teamRosterCartStorageKey]);
+
+    const legacyRaw = safeLocalGet(legacyTeamRosterCartStorageKey);
+    if (legacyRaw != null) {
+      const legacyRows = readRosterCartStorage(legacyTeamRosterCartStorageKey);
+      setTeamRosterCartPlayers(legacyRows);
+      writeRosterCartStorage(teamRosterCartStorageKey, legacyRows);
+      return;
+    }
+
+    setTeamRosterCartPlayers([]);
+  }, [teamRosterCartStorageKey, legacyTeamRosterCartStorageKey]);
 
   useEffect(() => {
     if (!desiredPlayersStorageKey) {

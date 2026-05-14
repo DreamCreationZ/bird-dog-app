@@ -350,7 +350,13 @@ function normalizeCompany(value: string | null | undefined): "PG" | "PBR" | "" {
   return "";
 }
 
-function rosterCartStorageKey(company: string) {
+function rosterCartStorageKey(company: string, inventorySlug?: string) {
+  const companyScope = normalizeStorageScope(company || "pg");
+  const inventoryScope = normalizeStorageScope(inventorySlug || "global");
+  return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}:${inventoryScope}`;
+}
+
+function legacyRosterCartStorageKey(company: string) {
   const companyScope = normalizeStorageScope(company || "pg");
   return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}`;
 }
@@ -732,16 +738,33 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     }
     return "PG";
   }, [initialParams.returnCompany]);
-  const cartStorageKey = useMemo(() => rosterCartStorageKey(cartCompany), [cartCompany]);
+  const cartInventorySlug = useMemo(
+    () => initialParams.returnInventorySlug || initialParams.inventorySlug || "",
+    [initialParams.inventorySlug, initialParams.returnInventorySlug]
+  );
+  const cartStorageKey = useMemo(
+    () => rosterCartStorageKey(cartCompany, cartInventorySlug),
+    [cartCompany, cartInventorySlug]
+  );
+  const legacyCartStorageKey = useMemo(() => legacyRosterCartStorageKey(cartCompany), [cartCompany]);
 
   useEffect(() => {
     const raw = typeof window === "undefined" ? null : window.localStorage.getItem(cartStorageKey);
-    if (raw == null) {
-      setCrossTeamCartPlayers([]);
+    if (raw != null) {
+      setCrossTeamCartPlayers(readRosterCartStorage(cartStorageKey));
       return;
     }
-    setCrossTeamCartPlayers(readRosterCartStorage(cartStorageKey));
-  }, [cartStorageKey]);
+
+    const legacyRaw = typeof window === "undefined" ? null : window.localStorage.getItem(legacyCartStorageKey);
+    if (legacyRaw != null) {
+      const legacyRows = readRosterCartStorage(legacyCartStorageKey);
+      setCrossTeamCartPlayers(legacyRows);
+      writeRosterCartStorage(cartStorageKey, legacyRows);
+      return;
+    }
+
+    setCrossTeamCartPlayers([]);
+  }, [cartStorageKey, legacyCartStorageKey]);
 
   useEffect(() => {
     let mounted = true;
@@ -1643,9 +1666,14 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     }
 
     setCrossTeamCartPlayers((prev) => {
-      const merged = new Map<string, CrossTeamCartPlayer>(
-        prev.map((item) => [desiredSelectionKey(item), item])
-      );
+      const persisted = readRosterCartStorage(cartStorageKey);
+      const merged = new Map<string, CrossTeamCartPlayer>();
+      persisted.forEach((item) => {
+        merged.set(desiredSelectionKey(item), item);
+      });
+      prev.forEach((item) => {
+        merged.set(desiredSelectionKey(item), item);
+      });
       selectedRoster.forEach((row) => {
         const rowKey = rosterRowKey(row);
         const selectionKey = `team:${initialParams.teamId}:${rowKey}`;
