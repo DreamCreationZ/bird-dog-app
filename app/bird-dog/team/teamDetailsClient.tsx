@@ -2600,13 +2600,16 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
           </label>
           <div className="row wrap" style={{ marginTop: 6 }}>
             <p className="muted" style={{ margin: 0 }}>
-              Team selections: {selectedBestPlayerRows.length}
+              Team selections: {selectedBestPlayerRows.length} | Final cart (all teams): {crossTeamCartPlayers.length}
             </p>
             <button type="button" className="secondary" onClick={clearTeamSelection} disabled={!selectedPlayers.length}>
               Clear Team Selection
             </button>
             <button type="button" onClick={addSelectedPlayersToCart} disabled={!selectedPlayers.length}>
               Add Selected To Final Cart
+            </button>
+            <button type="button" className="secondary" onClick={clearCrossTeamCart} disabled={!crossTeamCartPlayers.length}>
+              Clear Final Cart
             </button>
           </div>
           <div className="table-wrap" style={{ marginTop: 8 }}>
@@ -2642,6 +2645,37 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
                 )) : (
                   <tr>
                     <td colSpan={7}>No roster rows found yet for this team.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="table-wrap" style={{ marginTop: 10 }}>
+            <table className="roster-table">
+              <thead>
+                <tr>
+                  <th colSpan={3}>Final Player Cart (All Teams)</th>
+                </tr>
+                <tr>
+                  <th>Player</th>
+                  <th>Team</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {crossTeamCartPlayers.length ? crossTeamCartPlayers.map((item) => (
+                  <tr key={desiredSelectionKey(item)}>
+                    <td>{item.name || "-"}</td>
+                    <td>{item.team || "-"}</td>
+                    <td>
+                      <button type="button" className="secondary" onClick={() => removeCartPlayer(desiredSelectionKey(item))}>
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={3}>No players in final cart yet.</td>
                   </tr>
                 )}
               </tbody>
