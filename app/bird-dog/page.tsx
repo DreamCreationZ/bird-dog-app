@@ -258,6 +258,7 @@ const LOCAL_SCHEDULE_FALLBACK_KEY = "bird_dog:local_schedule_fallback:v1";
 const PLAN_WORKFLOW_STATUS_KEY_PREFIX = "bird_dog:plan_workflow_status:v1";
 const DESIRED_PLAYERS_STORAGE_KEY_PREFIX = "bird_dog:desired_players:v1";
 const ROSTER_CART_STORAGE_KEY_PREFIX = "bird_dog:roster_cart:v3";
+const ROSTER_CART_GLOBAL_KEY = "bird_dog:roster_cart:v3:global";
 const BOOKING_REVIEW_DRAFT_KEY = "bird_dog:booking_review_draft:v1";
 const BOOKING_SUMMARY_KEY = "bird_dog:booking_summary:v1";
 const PROFILE_FORM_STORAGE_KEY_PREFIX = "bird_dog:profile_form:v1";
@@ -1198,6 +1199,7 @@ export default function BirdDogPage() {
   const teamRosterCartReadKeys = useMemo(() => {
     const candidates = [
       teamRosterCartStorageKey,
+      ROSTER_CART_GLOBAL_KEY,
       legacyRosterCartStorageKey(company, selectedInventorySlug),
       legacyRosterCartStorageKey(company),
       legacyRosterCartStorageKey("PG", selectedInventorySlug),
@@ -1207,6 +1209,10 @@ export default function BirdDogPage() {
     ];
     return Array.from(new Set(candidates.filter(Boolean)));
   }, [company, selectedInventorySlug, teamRosterCartStorageKey]);
+  const teamRosterCartWriteKeys = useMemo(
+    () => Array.from(new Set([teamRosterCartStorageKey, ROSTER_CART_GLOBAL_KEY])),
+    [teamRosterCartStorageKey]
+  );
   const desiredPlayersStorageKey = useMemo(() => {
     if (!user) return "";
     return desiredPlayersScopedStorageKey({
@@ -1605,9 +1611,9 @@ export default function BirdDogPage() {
     const merged = mergeRosterCartStorage(teamRosterCartReadKeys);
     setTeamRosterCartPlayers(merged);
     if (merged.length) {
-      writeRosterCartStorage(teamRosterCartStorageKey, merged);
+      teamRosterCartWriteKeys.forEach((key) => writeRosterCartStorage(key, merged));
     }
-  }, [teamRosterCartReadKeys, teamRosterCartStorageKey]);
+  }, [teamRosterCartReadKeys, teamRosterCartWriteKeys]);
 
   useEffect(() => {
     if (!desiredPlayersStorageKey) {
@@ -3674,7 +3680,7 @@ export default function BirdDogPage() {
 
   function persistTeamRosterCart(next: DesiredPlayer[]) {
     setTeamRosterCartPlayers(next);
-    writeRosterCartStorage(teamRosterCartStorageKey, next);
+    teamRosterCartWriteKeys.forEach((key) => writeRosterCartStorage(key, next));
   }
 
   function removeTeamRosterCartPlayer(selectionKey: string) {

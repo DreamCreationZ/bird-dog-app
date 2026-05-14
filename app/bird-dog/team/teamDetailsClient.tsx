@@ -171,6 +171,7 @@ type PlannerCacheState = {
 
 const COACH_BOOKING_PROFILE_KEY = "bd-coach-booking-profile:v1";
 const ROSTER_CART_STORAGE_KEY_PREFIX = "bird_dog:roster_cart:v3";
+const ROSTER_CART_GLOBAL_KEY = "bird_dog:roster_cart:v3:global";
 const COACH_START_LOCATION_PROMPTED_KEY = "bird_dog:coach_start_location_prompted:v1";
 
 type TeamDetailsCachePayload = {
@@ -768,6 +769,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   const cartStorageReadKeys = useMemo(() => {
     const candidates = [
       cartStorageKey,
+      ROSTER_CART_GLOBAL_KEY,
       legacyRosterCartStorageKey(cartCompany, cartInventorySlug),
       legacyRosterCartStorageKey(cartCompany),
       legacyRosterCartStorageKey("PG", cartInventorySlug),
@@ -780,6 +782,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   const cartStorageWriteKeys = useMemo(() => {
     const candidates = [
       cartStorageKey,
+      ROSTER_CART_GLOBAL_KEY,
       legacyRosterCartStorageKey(cartCompany, cartInventorySlug)
     ];
     return Array.from(new Set(candidates.filter(Boolean)));
