@@ -351,14 +351,33 @@ function normalizeCompany(value: string | null | undefined): "PG" | "PBR" | "" {
 }
 
 function rosterCartStorageKey(company: string, inventorySlug?: string) {
-  const companyScope = normalizeStorageScope(company || "pg");
-  const inventoryScope = normalizeStorageScope(inventorySlug || "global");
-  return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}:${inventoryScope}`;
-}
-
-function legacyRosterCartStorageKey(company: string) {
+  const inventoryScope = normalizeStorageScope(inventorySlug || "");
+  if (inventorySlug) {
+    return `${ROSTER_CART_STORAGE_KEY_PREFIX}:scope:${inventoryScope}`;
+  }
   const companyScope = normalizeStorageScope(company || "pg");
   return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}`;
+}
+
+function legacyRosterCartStorageKey(company: string, inventorySlug?: string) {
+  const companyScope = normalizeStorageScope(company || "pg");
+  const inventoryScope = normalizeStorageScope(inventorySlug || "");
+  if (inventorySlug) {
+    return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}:${inventoryScope}`;
+  }
+  return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}`;
+}
+
+function mergeRosterCartStorage(keys: string[]) {
+  const merged = new Map<string, CrossTeamCartPlayer>();
+  keys.forEach((key) => {
+    if (!key) return;
+    const rows = readRosterCartStorage(key);
+    rows.forEach((item) => {
+      merged.set(desiredSelectionKey(item), item);
+    });
+  });
+  return Array.from(merged.values());
 }
 
 function readRosterCartStorage(key: string): CrossTeamCartPlayer[] {
@@ -746,25 +765,33 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     () => rosterCartStorageKey(cartCompany, cartInventorySlug),
     [cartCompany, cartInventorySlug]
   );
-  const legacyCartStorageKey = useMemo(() => legacyRosterCartStorageKey(cartCompany), [cartCompany]);
+  const cartStorageReadKeys = useMemo(() => {
+    const candidates = [
+      cartStorageKey,
+      legacyRosterCartStorageKey(cartCompany, cartInventorySlug),
+      legacyRosterCartStorageKey(cartCompany),
+      legacyRosterCartStorageKey("PG", cartInventorySlug),
+      legacyRosterCartStorageKey("PBR", cartInventorySlug),
+      legacyRosterCartStorageKey("PG"),
+      legacyRosterCartStorageKey("PBR")
+    ];
+    return Array.from(new Set(candidates.filter(Boolean)));
+  }, [cartCompany, cartInventorySlug, cartStorageKey]);
+  const cartStorageWriteKeys = useMemo(() => {
+    const candidates = [
+      cartStorageKey,
+      legacyRosterCartStorageKey(cartCompany, cartInventorySlug)
+    ];
+    return Array.from(new Set(candidates.filter(Boolean)));
+  }, [cartCompany, cartInventorySlug, cartStorageKey]);
 
   useEffect(() => {
-    const raw = typeof window === "undefined" ? null : window.localStorage.getItem(cartStorageKey);
-    if (raw != null) {
-      setCrossTeamCartPlayers(readRosterCartStorage(cartStorageKey));
-      return;
+    const merged = mergeRosterCartStorage(cartStorageReadKeys);
+    setCrossTeamCartPlayers(merged);
+    if (merged.length) {
+      cartStorageWriteKeys.forEach((key) => writeRosterCartStorage(key, merged));
     }
-
-    const legacyRaw = typeof window === "undefined" ? null : window.localStorage.getItem(legacyCartStorageKey);
-    if (legacyRaw != null) {
-      const legacyRows = readRosterCartStorage(legacyCartStorageKey);
-      setCrossTeamCartPlayers(legacyRows);
-      writeRosterCartStorage(cartStorageKey, legacyRows);
-      return;
-    }
-
-    setCrossTeamCartPlayers([]);
-  }, [cartStorageKey, legacyCartStorageKey]);
+  }, [cartStorageReadKeys, cartStorageWriteKeys]);
 
   useEffect(() => {
     let mounted = true;
@@ -1666,7 +1693,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     }
 
     setCrossTeamCartPlayers((prev) => {
-      const persisted = readRosterCartStorage(cartStorageKey);
+      const persisted = mergeRosterCartStorage(cartStorageReadKeys);
       const merged = new Map<string, CrossTeamCartPlayer>();
       persisted.forEach((item) => {
         merged.set(desiredSelectionKey(item), item);
@@ -1688,7 +1715,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
         });
       });
       const next = Array.from(merged.values());
-      writeRosterCartStorage(cartStorageKey, next);
+      cartStorageWriteKeys.forEach((key) => writeRosterCartStorage(key, next));
       return next;
     });
 
@@ -1700,14 +1727,14 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   function removeCartPlayer(selectionKey: string) {
     setCrossTeamCartPlayers((prev) => {
       const next = prev.filter((item) => desiredSelectionKey(item) !== selectionKey);
-      writeRosterCartStorage(cartStorageKey, next);
+      cartStorageWriteKeys.forEach((key) => writeRosterCartStorage(key, next));
       return next;
     });
   }
 
   function clearCrossTeamCart() {
     setCrossTeamCartPlayers([]);
-    writeRosterCartStorage(cartStorageKey, []);
+    cartStorageWriteKeys.forEach((key) => writeRosterCartStorage(key, []));
     setPlannerStatus("Final player cart cleared.");
   }
 

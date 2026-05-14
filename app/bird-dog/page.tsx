@@ -473,15 +473,38 @@ function normalizeStorageScope(value: string) {
   return normalized || "na";
 }
 
-function rosterCartStorageKey(company: "PG" | "PBR", inventorySlug?: string) {
-  const companyScope = normalizeStorageScope(company);
-  const inventoryScope = normalizeStorageScope(inventorySlug || "global");
-  return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}:${inventoryScope}`;
+function rosterCartStorageKey(input: {
+  company: "PG" | "PBR";
+  inventorySlug?: string;
+  tournamentId?: string;
+}) {
+  const inventoryScope = normalizeStorageScope(input.inventorySlug || "");
+  if (input.inventorySlug) {
+    return `${ROSTER_CART_STORAGE_KEY_PREFIX}:scope:${inventoryScope}`;
+  }
+  const companyScope = normalizeStorageScope(input.company);
+  return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}`;
 }
 
-function legacyRosterCartStorageKey(company: "PG" | "PBR") {
+function legacyRosterCartStorageKey(company: "PG" | "PBR", inventorySlug?: string) {
   const companyScope = normalizeStorageScope(company);
+  const inventoryScope = normalizeStorageScope(inventorySlug || "");
+  if (inventorySlug) {
+    return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}:${inventoryScope}`;
+  }
   return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}`;
+}
+
+function mergeRosterCartStorage(keys: string[]) {
+  const merged = new Map<string, DesiredPlayer>();
+  keys.forEach((key) => {
+    if (!key) return;
+    const rows = readRosterCartStorage(key);
+    rows.forEach((item) => {
+      merged.set(String(item.selectionKey || item.playerId), item);
+    });
+  });
+  return Array.from(merged.values());
 }
 
 function desiredPlayersScopedStorageKey(input: { orgId: string; userId: string; company: "PG" | "PBR" }) {
@@ -1165,10 +1188,25 @@ export default function BirdDogPage() {
     return `${PLAN_WORKFLOW_STATUS_KEY_PREFIX}:${user.orgId}:${user.userId}:${scopeSlug}:${scopeTournament}`;
   }, [selectedInventorySlug, selectedTournamentId, user]);
   const teamRosterCartStorageKey = useMemo(
-    () => rosterCartStorageKey(company, selectedInventorySlug),
-    [company, selectedInventorySlug]
+    () => rosterCartStorageKey({
+      company,
+      inventorySlug: selectedInventorySlug,
+      tournamentId: selectedTournamentId
+    }),
+    [company, selectedInventorySlug, selectedTournamentId]
   );
-  const legacyTeamRosterCartStorageKey = useMemo(() => legacyRosterCartStorageKey(company), [company]);
+  const teamRosterCartReadKeys = useMemo(() => {
+    const candidates = [
+      teamRosterCartStorageKey,
+      legacyRosterCartStorageKey(company, selectedInventorySlug),
+      legacyRosterCartStorageKey(company),
+      legacyRosterCartStorageKey("PG", selectedInventorySlug),
+      legacyRosterCartStorageKey("PBR", selectedInventorySlug),
+      legacyRosterCartStorageKey("PG"),
+      legacyRosterCartStorageKey("PBR")
+    ];
+    return Array.from(new Set(candidates.filter(Boolean)));
+  }, [company, selectedInventorySlug, teamRosterCartStorageKey]);
   const desiredPlayersStorageKey = useMemo(() => {
     if (!user) return "";
     return desiredPlayersScopedStorageKey({
@@ -1564,22 +1602,12 @@ export default function BirdDogPage() {
   }, [selectedTournamentId, selectedInventorySlug]);
 
   useEffect(() => {
-    const raw = safeLocalGet(teamRosterCartStorageKey);
-    if (raw != null) {
-      setTeamRosterCartPlayers(readRosterCartStorage(teamRosterCartStorageKey));
-      return;
+    const merged = mergeRosterCartStorage(teamRosterCartReadKeys);
+    setTeamRosterCartPlayers(merged);
+    if (merged.length) {
+      writeRosterCartStorage(teamRosterCartStorageKey, merged);
     }
-
-    const legacyRaw = safeLocalGet(legacyTeamRosterCartStorageKey);
-    if (legacyRaw != null) {
-      const legacyRows = readRosterCartStorage(legacyTeamRosterCartStorageKey);
-      setTeamRosterCartPlayers(legacyRows);
-      writeRosterCartStorage(teamRosterCartStorageKey, legacyRows);
-      return;
-    }
-
-    setTeamRosterCartPlayers([]);
-  }, [teamRosterCartStorageKey, legacyTeamRosterCartStorageKey]);
+  }, [teamRosterCartReadKeys, teamRosterCartStorageKey]);
 
   useEffect(() => {
     if (!desiredPlayersStorageKey) {
