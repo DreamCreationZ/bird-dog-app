@@ -1140,6 +1140,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   }
 
   function goBackOneStep() {
+    mergeRosterSelectionsIntoFinalCart(selectedBestPlayerRows, false);
     if (inlineMode) {
       onClose?.();
       return;
@@ -1687,11 +1688,11 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     setSelectedPlayers([]);
   }
 
-  function addSelectedPlayersToCart() {
-    const selectedSet = new Set(selectedPlayers);
-    const selectedRoster = rosterRows.filter((row) => selectedSet.has(rosterRowKey(row)));
+  function mergeRosterSelectionsIntoFinalCart(selectedRoster: TeamRosterRow[], announce: boolean) {
     if (!selectedRoster.length) {
-      setPlannerStatus("Select at least one player from this roster before adding to cart.");
+      if (announce) {
+        setPlannerStatus("Select at least one player from this roster before adding to cart.");
+      }
       return;
     }
 
@@ -1722,9 +1723,17 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
       return next;
     });
 
-    setPlannerStatus(
-      `Added ${selectedRoster.length} player(s) from ${initialParams.teamName || "this team"} to final cart. Open another team to keep adding.`
-    );
+    if (announce) {
+      setPlannerStatus(
+        `Added ${selectedRoster.length} player(s) from ${initialParams.teamName || "this team"} to final cart. Open another team to keep adding.`
+      );
+    }
+  }
+
+  function addSelectedPlayersToCart() {
+    const selectedSet = new Set(selectedPlayers);
+    const selectedRoster = rosterRows.filter((row) => selectedSet.has(rosterRowKey(row)));
+    mergeRosterSelectionsIntoFinalCart(selectedRoster, true);
   }
 
   function removeCartPlayer(selectionKey: string) {
@@ -1742,6 +1751,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   }
 
   function goToTournamentRosterSelection() {
+    mergeRosterSelectionsIntoFinalCart(selectedBestPlayerRows, false);
     const nextParams = new URLSearchParams();
     nextParams.set("tab", "notes");
     if (initialParams.returnInventorySlug || initialParams.inventorySlug) {
@@ -2360,6 +2370,12 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     return rosterRows.filter((row) => selectedSet.has(rosterRowKey(row)));
   }, [rosterRows, selectedPlayers]);
 
+  useEffect(() => {
+    if (!selectedBestPlayerRows.length) return;
+    // Keep cross-team cart durable even if coach switches teams without tapping Add.
+    mergeRosterSelectionsIntoFinalCart(selectedBestPlayerRows, false);
+  }, [selectedBestPlayerRows]);
+
   function scrollToSection(sectionId: string) {
     if (typeof window === "undefined") return;
     const node = window.document.getElementById(sectionId);
@@ -2603,7 +2619,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
           </label>
           <div className="row wrap" style={{ marginTop: 6 }}>
             <p className="muted" style={{ margin: 0 }}>
-              Team selections: {selectedBestPlayerRows.length} | Final cart (all teams): {crossTeamCartPlayers.length}
+              Team selections (this team): {selectedBestPlayerRows.length} | Final cart (all teams): {crossTeamCartPlayers.length}
             </p>
             <button type="button" className="secondary" onClick={clearTeamSelection} disabled={!selectedPlayers.length}>
               Clear Team Selection
