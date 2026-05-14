@@ -286,7 +286,7 @@
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
-  filter: grayscale(0.95) saturate(0.15);
+  filter: blur(0.45px) grayscale(0.95) saturate(0.15);
 }
 
 .bd-root button.secondary {

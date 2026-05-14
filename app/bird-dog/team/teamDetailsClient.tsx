@@ -1140,7 +1140,6 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   }
 
   function goBackOneStep() {
-    mergeRosterSelectionsIntoFinalCart(selectedBestPlayerRows, false);
     if (inlineMode) {
       onClose?.();
       return;
@@ -1742,6 +1741,13 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
       cartStorageWriteKeys.forEach((key) => writeRosterCartStorage(key, next));
       return next;
     });
+    const currentTeamPrefix = `team:${initialParams.teamId}:`;
+    if (selectionKey.startsWith(currentTeamPrefix)) {
+      const rosterKey = selectionKey.slice(currentTeamPrefix.length);
+      if (rosterKey) {
+        setSelectedPlayers((prev) => prev.filter((item) => item !== rosterKey));
+      }
+    }
   }
 
   function clearCrossTeamCart() {
@@ -1751,7 +1757,6 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   }
 
   function goToTournamentRosterSelection() {
-    mergeRosterSelectionsIntoFinalCart(selectedBestPlayerRows, false);
     const nextParams = new URLSearchParams();
     nextParams.set("tab", "notes");
     if (initialParams.returnInventorySlug || initialParams.inventorySlug) {
@@ -2369,12 +2374,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     const selectedSet = new Set(selectedPlayers);
     return rosterRows.filter((row) => selectedSet.has(rosterRowKey(row)));
   }, [rosterRows, selectedPlayers]);
-
-  useEffect(() => {
-    if (!selectedBestPlayerRows.length) return;
-    // Keep cross-team cart durable even if coach switches teams without tapping Add.
-    mergeRosterSelectionsIntoFinalCart(selectedBestPlayerRows, false);
-  }, [selectedBestPlayerRows]);
+  const canCreateSchedule = crossTeamCartPlayers.length > 0;
 
   function scrollToSection(sectionId: string) {
     if (typeof window === "undefined") return;
@@ -2465,6 +2465,14 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
         <div className="row wrap" style={{ marginBottom: 8, marginTop: 8 }}>
           <button type="button" className="secondary" disabled>
             Team Roster
+          </button>
+          <button
+            type="button"
+            onClick={goToCoachScheduleTab}
+            disabled={!canCreateSchedule}
+            title={canCreateSchedule ? "Create coach schedule from selected players." : "Add players to final cart to enable schedule creation."}
+          >
+            Create Schedule
           </button>
         </div>
         {showScheduleTab ? (
@@ -2630,6 +2638,14 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
             <button type="button" className="secondary" onClick={clearCrossTeamCart} disabled={!crossTeamCartPlayers.length}>
               Clear Final Cart
             </button>
+            <button
+              type="button"
+              onClick={goToCoachScheduleTab}
+              disabled={!canCreateSchedule}
+              title={canCreateSchedule ? "Create coach schedule from selected players." : "Add players to final cart to enable schedule creation."}
+            >
+              Create Schedule
+            </button>
           </div>
           <div className="table-wrap" style={{ marginTop: 8 }}>
             <table className="roster-table">
@@ -2699,6 +2715,16 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
                 )}
               </tbody>
             </table>
+            <div className="row wrap" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                onClick={goToCoachScheduleTab}
+                disabled={!canCreateSchedule}
+                title={canCreateSchedule ? "Create coach schedule from selected players." : "Add players to final cart to enable schedule creation."}
+              >
+                Create Schedule
+              </button>
+            </div>
           </div>
         </div>
         ) : null}
