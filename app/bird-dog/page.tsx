@@ -249,6 +249,19 @@ type OptimizedStop = ItineraryStop & {
   lateByMinutes: number;
 };
 
+type CoachGameCandidate = {
+  key: string;
+  gameNo: string;
+  startMs: number;
+  endMs: number;
+  locationLabel: string;
+  locationQuery: string;
+  homeTeam: string;
+  awayTeam: string;
+  matchedPlayers: DesiredPlayer[];
+  point: GeoLocation | null;
+};
+
 const CACHE_KEY = "bird_dog_tournament_cache";
 const PREVIEW_UNLOCK_ALL =
   process.env.NEXT_PUBLIC_BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
@@ -1222,9 +1235,6 @@ export default function BirdDogPage() {
     hotelName: "",
     notes: ""
   });
-  const [startLocationMode, setStartLocationMode] = useState<"auto" | "manual">("auto");
-  const [manualEventLocation, setManualEventLocation] = useState("");
-  const [sourceSuggestions, setSourceSuggestions] = useState<PlaceSuggestion[]>([]);
   const [destinationSuggestions, setDestinationSuggestions] = useState<PlaceSuggestion[]>([]);
   const [hotelSuggestions, setHotelSuggestions] = useState<HotelSuggestion[]>([]);
   const [tournamentSearchQuery, setTournamentSearchQuery] = useState("");
@@ -1268,16 +1278,26 @@ export default function BirdDogPage() {
   const eventLocationHint = useMemo(() => {
     const candidates = [
       String(selectedInventory?.displayCity || "").trim(),
+      String(selectedTournament?.city || "").trim(),
       ...((selectedTournament?.teams || []).map((team) => String(team.from || "").trim()).filter(Boolean)),
       String(selectedTournament?.name || "").trim()
     ].filter(Boolean);
-    const withState = candidates.find((value) => Boolean(extractUsStateCode(value)));
-    return withState || candidates[0] || "";
-  }, [selectedInventory?.displayCity, selectedTournament?.name, selectedTournament?.teams]);
-  const eventStateCode = useMemo(
-    () => extractUsStateCode(eventLocationHint),
-    [eventLocationHint]
-  );
+    return candidates[0] || "";
+  }, [selectedInventory?.displayCity, selectedTournament?.city, selectedTournament?.name, selectedTournament?.teams]);
+  const airportStartLabel = useMemo(() => {
+    const base = String(eventLocationHint || "Event City").trim();
+    if (!base) return "Event City Airport";
+    if (/\bairport\b/i.test(base)) return base;
+    return `${base} Airport`;
+  }, [eventLocationHint]);
+
+  useEffect(() => {
+    if (!airportStartLabel) return;
+    setScheduleForm((prev) => {
+      if (prev.flightSource === airportStartLabel) return prev;
+      return { ...prev, flightSource: airportStartLabel };
+    });
+  }, [airportStartLabel]);
   const bookingBlockReason = useMemo(
     () => getBookingBlockReasonFromPlan(myGeneratedPlan),
     [myGeneratedPlan]
@@ -1857,27 +1877,6 @@ export default function BirdDogPage() {
 
   useEffect(() => {
     if (!canAccessLockedPages) {
-      setSourceSuggestions([]);
-      setDestinationSuggestions([]);
-      setHotelSuggestions([]);
-      return;
-    }
-    const sourceQuery = scheduleForm.flightSource.trim();
-    if (sourceQuery.length < 2) {
-      setSourceSuggestions([]);
-      return;
-    }
-    const id = window.setTimeout(() => {
-      void fetch(`/api/maps/autocomplete?q=${encodeURIComponent(sourceQuery)}`)
-        .then((res) => (res.ok ? res.json() : { suggestions: [] }))
-        .then((data) => setSourceSuggestions(Array.isArray(data?.suggestions) ? data.suggestions : []))
-        .catch(() => setSourceSuggestions([]));
-    }, 280);
-    return () => window.clearTimeout(id);
-  }, [scheduleForm.flightSource, canAccessLockedPages]);
-
-  useEffect(() => {
-    if (!canAccessLockedPages) {
       setDestinationSuggestions([]);
       setHotelSuggestions([]);
       return;
@@ -2336,7 +2335,7 @@ export default function BirdDogPage() {
     if (!mine) return;
 
     setScheduleForm({
-      flightSource: mine.flight_source || "Current location",
+      flightSource: mine.flight_source || airportStartLabel || "Event Airport",
       flightDestination: mine.flight_destination || "",
       flightArrivalTime: toInputDateTime(mine.flight_arrival_time),
       hotelName: mine.hotel_name || "",
@@ -3030,201 +3029,294 @@ export default function BirdDogPage() {
     return String(teamMatch?.from || player.team || "Tournament Venue").trim();
   }
 
-  async function buildOptimizedCoachPlan(
-    targetPlayers: DesiredPlayer[],
-    preferredSourceText?: string,
-    options?: { disableLiveDetect?: boolean; fallbackStartPoint?: GeoLocation | null; manualStart?: boolean }
-  ) {
-    const grouped = new Map<string, { destination: string; players: DesiredPlayer[]; point: GeoLocation | null }>();
-    targetPlayers.forEach((player) => {
+  function teamsLookEquivalent(a: string, b: string) {
+    const left = normalizeSmartSearch(a);
+    const right = normalizeSmartSearch(b);
+    if (!left || !right) return false;
+    if (left === right || left.includes(right) || right.includes(left)) return true;
+    const leftTokens = teamNameTokens(left);
+    const rightTokens = teamNameTokens(right);
+    if (!leftTokens.length || !rightTokens.length) return false;
+    const rightSet = new Set(rightTokens);
+    const overlap = leftTokens.filter((token) => rightSet.has(token)).length;
+    const ratio = overlap / Math.max(1, Math.min(leftTokens.length, rightTokens.length));
+    return overlap >= 2 || ratio >= 0.6;
+  }
+
+  function gameLocationQuery(game: Game) {
+    const field = String(game.field || "Field TBD").trim() || "Field TBD";
+    const city = String(selectedInventory?.displayCity || selectedTournament?.city || "").trim();
+    return city ? `${field}, ${city}` : field;
+  }
+
+  function buildCoachGameCandidates(targetPlayers: DesiredPlayer[]): CoachGameCandidate[] {
+    const games = selectedTournament?.games || [];
+    const now = Date.now();
+    const GAME_MINUTES = 125;
+
+    if (!games.length) {
+      const grouped = new Map<string, { destination: string; players: DesiredPlayer[] }>();
+      targetPlayers.forEach((player) => {
+        const destination = destinationForPlayer(player);
+        const key = normalizeSmartSearch(destination) || desiredPlayerSelectionKey(player);
+        const existing = grouped.get(key);
+        if (existing) {
+          existing.players.push(player);
+        } else {
+          grouped.set(key, { destination, players: [player] });
+        }
+      });
+      return Array.from(grouped.values()).slice(0, 24).map((item, index) => {
+        const startMs = now + (index + 1) * 75 * 60 * 1000;
+        return {
+          key: `fallback:${index}`,
+          gameNo: `#${index + 1}`,
+          startMs,
+          endMs: startMs + GAME_MINUTES * 60 * 1000,
+          locationLabel: item.destination,
+          locationQuery: item.destination,
+          homeTeam: item.players[0]?.team || "Team A",
+          awayTeam: "Team B",
+          matchedPlayers: item.players,
+          point: null
+        } satisfies CoachGameCandidate;
+      });
+    }
+
+    const matchedPlayerKeys = new Set<string>();
+    const mapped: Array<CoachGameCandidate | null> = games.map((game, index): CoachGameCandidate | null => {
+      const matchedPlayers = targetPlayers.filter((player) =>
+        teamsLookEquivalent(player.team, game.homeTeam)
+        || teamsLookEquivalent(player.team, game.awayTeam)
+      );
+      if (!matchedPlayers.length) return null;
+      matchedPlayers.forEach((player) => matchedPlayerKeys.add(desiredPlayerSelectionKey(player)));
+      const startAt = Date.parse(String(game.startTime || ""));
+      const hasValidStart = Number.isFinite(startAt);
+      const startMs = hasValidStart ? startAt : (now + (index + 1) * 90 * 60 * 1000);
+      return {
+        key: String(game.id || `game:${index}`),
+        gameNo: extractGameNoLabel(game, index),
+        startMs,
+        endMs: startMs + GAME_MINUTES * 60 * 1000,
+        locationLabel: String(game.field || "Field TBD").trim() || "Field TBD",
+        locationQuery: gameLocationQuery(game),
+        homeTeam: String(game.homeTeam || "Team A"),
+        awayTeam: String(game.awayTeam || "Team B"),
+        matchedPlayers,
+        point: null
+      };
+    });
+    const candidates = mapped.filter((item): item is CoachGameCandidate => Boolean(item));
+
+    const fallbackUnmatched = targetPlayers.filter((player) => !matchedPlayerKeys.has(desiredPlayerSelectionKey(player)));
+    fallbackUnmatched.forEach((player, index) => {
       const destination = destinationForPlayer(player);
-      const key = normalizeSmartSearch(destination) || normalizeSmartSearch(player.team || "") || player.playerId;
-      const existing = grouped.get(key);
-      if (existing) {
-        existing.players.push(player);
-      } else {
-        grouped.set(key, { destination, players: [player], point: null });
-      }
+      const startMs = now + (index + 1) * 85 * 60 * 1000;
+      candidates.push({
+        key: `unmatched:${desiredPlayerSelectionKey(player)}`,
+        gameNo: `#U${index + 1}`,
+        startMs,
+        endMs: startMs + GAME_MINUTES * 60 * 1000,
+        locationLabel: destination,
+        locationQuery: destination,
+        homeTeam: player.team || "Team A",
+        awayTeam: "Team B",
+        matchedPlayers: [player],
+        point: null
+      });
     });
 
-    const stops = Array.from(grouped.values()).slice(0, 16);
-    const geocoded = await Promise.all(stops.map(async (stop) => ({
-      ...stop,
-      point: await geocodeForRoute(stop.destination)
+    return candidates.sort((a, b) => a.startMs - b.startMs);
+  }
+
+  async function buildOptimizedCoachPlan(targetPlayers: DesiredPlayer[], preferredSourceText?: string) {
+    const candidates = buildCoachGameCandidates(targetPlayers).slice(0, 48);
+    const geocoded = await Promise.all(candidates.map(async (candidate) => ({
+      ...candidate,
+      point: await geocodeForRoute(candidate.locationQuery)
     })));
 
-    const manualSource = String(preferredSourceText || scheduleForm.flightSource || "").trim();
-    const startPoint =
-      (manualSource ? await geocodeForRoute(manualSource) : null)
-      || options?.fallbackStartPoint
-      || (options?.disableLiveDetect ? null : await detectCoachStartPoint());
+    const startLabel = String(preferredSourceText || airportStartLabel || scheduleForm.flightSource || "Event Airport").trim();
+    const startPoint = await geocodeForRoute(startLabel);
+    const parsedArrival = Date.parse(String(scheduleForm.flightArrivalTime || ""));
+    let cursorMs = Number.isFinite(parsedArrival) ? parsedArrival : (Date.now() + 15 * 60 * 1000);
+    const travelPlan: PlanItem[] = [];
+    const unseenPlayers = new Set(targetPlayers.map((player) => desiredPlayerSelectionKey(player)));
+    const usedGameKeys = new Set<string>();
+    const visitedStops: Array<CoachGameCandidate & { watchStartMs: number; reason: string }> = [];
 
-    const firstStop = geocoded[0] || null;
-    const remaining = geocoded.slice(firstStop ? 1 : 0);
-    const ordered: typeof geocoded = firstStop ? [firstStop] : [];
-    let current = firstStop?.point || startPoint || null;
-
-    // Smart routing: keep Player #1 as fixed start, then pick nearest next stop.
-    while (remaining.length) {
-      if (current?.lat != null && current?.lng != null) {
-        let bestIndex = -1;
-        let bestDistance = Number.POSITIVE_INFINITY;
-        remaining.forEach((stop, index) => {
-          if (!stop.point) return;
-          const km = distanceKm(current!.lat, current!.lng, stop.point.lat, stop.point.lng);
-          if (km < bestDistance) {
-            bestDistance = km;
-            bestIndex = index;
-          }
-        });
-        const picked = bestIndex >= 0
-          ? remaining.splice(bestIndex, 1)[0]
-          : remaining.shift();
-        if (!picked) break;
-        ordered.push(picked);
-        if (picked.point) current = picked.point;
-      } else {
-        const picked = remaining.shift();
-        if (!picked) break;
-        ordered.push(picked);
-        if (picked.point) current = picked.point;
-      }
-    }
-
+    let prevLabel = startPoint?.label || startLabel;
+    let prevPoint = startPoint;
+    let blockedReason = "";
     let smartReorderHint = "";
-    if (firstStop && geocoded.length > 2 && geocoded[1] && ordered[1]) {
-      const originalSecond = geocoded[1];
-      const suggestedSecond = ordered[1];
-      const originalKey = normalizeLocationText(originalSecond.destination);
-      const suggestedKey = normalizeLocationText(suggestedSecond.destination);
-      if (originalKey && suggestedKey && originalKey !== suggestedKey) {
-        const firstPoint = firstStop.point || startPoint || null;
-        const originalName = originalSecond.players[0]?.name || originalSecond.destination;
-        const suggestedName = suggestedSecond.players[0]?.name || suggestedSecond.destination;
-        if (firstPoint?.lat != null && firstPoint?.lng != null && originalSecond.point && suggestedSecond.point) {
-          const distToOriginal = distanceKm(firstPoint.lat, firstPoint.lng, originalSecond.point.lat, originalSecond.point.lng);
-          const distToSuggested = distanceKm(firstPoint.lat, firstPoint.lng, suggestedSecond.point.lat, suggestedSecond.point.lng);
-          if (distToSuggested + 0.1 < distToOriginal) {
-            smartReorderHint = `Smart suggestion: see ${suggestedName} before ${originalName} because it is closer to your first selected player location (${distToSuggested.toFixed(1)} km vs ${distToOriginal.toFixed(1)} km).`;
-          }
+    let firstReason = "";
+    const MIN_VIEW_MINUTES = 20;
+    const PRE_GAME_BUFFER_MINUTES = 10;
+
+    while (unseenPlayers.size > 0 && usedGameKeys.size < geocoded.length) {
+      let best: {
+        candidate: CoachGameCandidate;
+        travel: TravelEstimate;
+        departMs: number;
+        arriveMs: number;
+        watchStartMs: number;
+        waitMinutes: number;
+        lateByMinutes: number;
+        newCoverageKeys: string[];
+        reason: string;
+        score: number;
+      } | null = null;
+
+      for (const candidate of geocoded) {
+        if (usedGameKeys.has(candidate.key)) continue;
+
+        const newCoverage = candidate.matchedPlayers
+          .map((player) => desiredPlayerSelectionKey(player))
+          .filter((key) => unseenPlayers.has(key));
+        if (!newCoverage.length) continue;
+
+        const destinationLabel = candidate.point?.label || candidate.locationLabel;
+        let travelEstimate: TravelEstimate = {
+          mode: "Flight + transfer",
+          minutes: 10 * 60,
+          advisory: "Location data incomplete; verify live travel options."
+        };
+
+        const sameLocationByText = normalizeLocationText(prevLabel) === normalizeLocationText(destinationLabel);
+        if (sameLocationByText) {
+          travelEstimate = { mode: "On-site", minutes: 0, advisory: "Already at this venue." };
+        } else if (prevPoint?.lat != null && prevPoint?.lng != null && candidate.point?.lat != null && candidate.point?.lng != null) {
+          const km = distanceKm(prevPoint.lat, prevPoint.lng, candidate.point.lat, candidate.point.lng);
+          travelEstimate = km <= 0.6
+            ? { mode: "On-site", minutes: 0, advisory: "Already at this venue." }
+            : travelModeByDistance(km);
         } else {
-          smartReorderHint = `Smart suggestion: see ${suggestedName} before ${originalName} because it is closer to your first selected player location.`;
+          travelEstimate = travelModeByText(prevLabel, destinationLabel);
+        }
+
+        if (travelEstimate.minutes > MAX_FEASIBLE_TRAVEL_MINUTES) continue;
+        const departMs = cursorMs;
+        const arriveMs = departMs + travelEstimate.minutes * 60 * 1000;
+        const watchStartMs = Math.max(arriveMs, candidate.startMs - PRE_GAME_BUFFER_MINUTES * 60 * 1000);
+        const remainingMinutes = Math.floor((candidate.endMs - watchStartMs) / (60 * 1000));
+        if (remainingMinutes < MIN_VIEW_MINUTES) continue;
+
+        const waitMinutes = Math.max(0, Math.floor((candidate.startMs - arriveMs) / (60 * 1000)));
+        const lateByMinutes = Math.max(0, Math.floor((watchStartMs - candidate.startMs) / (60 * 1000)));
+        const minutesToEndAtArrival = Math.max(0, Math.floor((candidate.endMs - arriveMs) / (60 * 1000)));
+        const urgency = Math.max(0, 180 - minutesToEndAtArrival);
+        const score =
+          newCoverage.length * 140
+          + urgency * 1.1
+          - travelEstimate.minutes * 1.3
+          - waitMinutes * 0.25
+          - lateByMinutes * 2.2;
+
+        const reason = minutesToEndAtArrival <= 90
+          ? "timing is critical and this game will end sooner"
+          : travelEstimate.minutes <= 35
+            ? "this stop is nearest from your current point"
+            : "this stop gives the best balance of timing and travel";
+
+        if (!best || score > best.score) {
+          best = {
+            candidate,
+            travel: travelEstimate,
+            departMs,
+            arriveMs,
+            watchStartMs,
+            waitMinutes,
+            lateByMinutes,
+            newCoverageKeys: newCoverage,
+            reason,
+            score
+          };
         }
       }
+
+      if (!best) break;
+      usedGameKeys.add(best.candidate.key);
+      best.newCoverageKeys.forEach((key) => unseenPlayers.delete(key));
+
+      const destinationLabel = best.candidate.point?.label || best.candidate.locationLabel;
+      const coveragePlayers = best.candidate.matchedPlayers
+        .filter((player) => best.newCoverageKeys.includes(desiredPlayerSelectionKey(player)))
+        .map((player) => `${player.name} (${player.team})`);
+      const travelDetail = [
+        `${best.travel.mode} · ETA ${formatEta(best.travel.minutes)}`,
+        best.travel.advisory
+      ].filter(Boolean).join(" · ");
+
+      const legNo = visitedStops.length + 1;
+      travelPlan.push({
+        at: new Date(best.departMs).toISOString(),
+        title: `Travel ${legNo}: ${prevLabel} -> ${destinationLabel}`,
+        detail: `${travelDetail} · Smart reason: ${best.reason}.`
+      });
+
+      if (best.waitMinutes >= 20) {
+        travelPlan.push({
+          at: new Date(best.arriveMs).toISOString(),
+          title: `Arrive early at ${destinationLabel}`,
+          detail: `Early buffer ~${best.waitMinutes} min before first pitch.`
+        });
+      }
+
+      travelPlan.push({
+        at: new Date(best.watchStartMs).toISOString(),
+        title: `Scout Game ${best.candidate.gameNo}: ${best.candidate.homeTeam} vs ${best.candidate.awayTeam}`,
+        detail: `Prioritize players: ${coveragePlayers.join(", ") || "Selected players"} · Venue: ${best.candidate.locationLabel}`
+      });
+
+      const watchMinutes = Math.min(60, Math.max(25, Math.floor((best.candidate.endMs - best.watchStartMs) / (60 * 1000) * 0.45)));
+      const departVenueMs = Math.min(best.candidate.endMs, best.watchStartMs + watchMinutes * 60 * 1000);
+      cursorMs = departVenueMs + 15 * 60 * 1000;
+      prevLabel = destinationLabel;
+      prevPoint = best.candidate.point || null;
+
+      visitedStops.push({ ...best.candidate, watchStartMs: best.watchStartMs, reason: best.reason });
+      if (!firstReason) firstReason = best.reason;
     }
 
-    const stopsWithPoints = ordered.filter((stop) => Boolean(stop.point));
-    let hotelHubDestination = ordered[0]?.point?.label || ordered[0]?.destination || "";
+    if (unseenPlayers.size > 0) {
+      blockedReason = `Could not fit ${unseenPlayers.size} selected player(s) in feasible game windows.`;
+      const unresolvedNames = targetPlayers
+        .filter((player) => unseenPlayers.has(desiredPlayerSelectionKey(player)))
+        .map((player) => player.name)
+        .slice(0, 6);
+      if (unresolvedNames.length) {
+        travelPlan.push({
+          at: new Date(cursorMs).toISOString(),
+          title: "Uncovered players",
+          detail: `No feasible window found yet for: ${unresolvedNames.join(", ")}.`
+        });
+      }
+    }
+
+    if (visitedStops.length) {
+      const firstStop = visitedStops[0];
+      const firstPlayers = firstStop.matchedPlayers.map((player) => player.name).slice(0, 3).join(", ");
+      smartReorderHint = `Smart recommendation: start with ${firstPlayers || "first selected players"} because ${firstReason}.`;
+    }
+
+    const stopsWithPoints = visitedStops.filter((stop) => Boolean(stop.point));
+    let hotelHubDestination = visitedStops[0]?.point?.label || visitedStops[0]?.locationLabel || eventLocationHint || "";
     if (stopsWithPoints.length >= 2) {
       let best = stopsWithPoints[0];
       let bestScore = Number.POSITIVE_INFINITY;
       for (const candidate of stopsWithPoints) {
-        const candidatePoint = candidate.point!;
-        let score = 0;
-        for (const other of stopsWithPoints) {
-          if (!other.point) continue;
-          score += distanceKm(candidatePoint.lat, candidatePoint.lng, other.point.lat, other.point.lng);
-        }
-        if (score < bestScore) {
-          bestScore = score;
+        const point = candidate.point!;
+        const sum = stopsWithPoints.reduce((total, other) => {
+          if (!other.point) return total;
+          return total + distanceKm(point.lat, point.lng, other.point.lat, other.point.lng);
+        }, 0);
+        if (sum < bestScore) {
+          bestScore = sum;
           best = candidate;
         }
       }
-      hotelHubDestination = best.point?.label || best.destination || hotelHubDestination;
-    }
-
-    const fallbackStartLabel = manualSource || "Current location";
-    let cursorMs = Date.now() + 15 * 60 * 1000;
-    const travelPlan: PlanItem[] = [];
-    let prevLabel = startPoint?.label || fallbackStartLabel;
-    let prevPoint = startPoint;
-    let blockedReason = "";
-    let completedStops = 0;
-
-    for (const [idx, stop] of ordered.entries()) {
-      const destinationLabel = stop.point?.label || stop.destination;
-      let travelEstimate: TravelEstimate = {
-        mode: "Flight + transfer",
-        minutes: 11 * 60,
-        advisory: "Location data incomplete; flight availability must be checked."
-      };
-
-      const sameLocationByText = normalizeLocationText(prevLabel) === normalizeLocationText(destinationLabel);
-      if (sameLocationByText) {
-        travelEstimate = {
-          mode: "On-site",
-          minutes: 0,
-          advisory: "Already at player location."
-        };
-      } else if (prevPoint?.lat != null && prevPoint?.lng != null && stop.point?.lat != null && stop.point?.lng != null) {
-        const km = distanceKm(prevPoint.lat, prevPoint.lng, stop.point.lat, stop.point.lng);
-        travelEstimate = km <= 0.6
-          ? { mode: "On-site", minutes: 0, advisory: "Already at player location." }
-          : travelModeByDistance(km);
-      } else {
-        travelEstimate = travelModeByText(prevLabel, destinationLabel);
-      }
-
-      const departIso = new Date(cursorMs).toISOString();
-      const arriveMs = cursorMs + travelEstimate.minutes * 60 * 1000;
-      if (travelEstimate.minutes > MAX_FEASIBLE_TRAVEL_MINUTES) {
-        const infeasibleDetail = [
-          `${travelEstimate.mode} · ETA ${formatEta(travelEstimate.minutes)}`,
-          `Not feasible within next ${MAX_FEASIBLE_TRAVEL_HOURS} hours.`,
-          travelEstimate.advisory
-        ].filter(Boolean).join(" · ");
-        travelPlan.push({
-          at: departIso,
-          title: `Travel ${idx + 1}: ${prevLabel} -> ${destinationLabel}`,
-          detail: infeasibleDetail
-        });
-        blockedReason = `Cannot reach ${destinationLabel} from ${prevLabel} in next ${MAX_FEASIBLE_TRAVEL_HOURS} hours.`;
-        break;
-      }
-      const detail = [
-        `${travelEstimate.mode} · ETA ${formatEta(travelEstimate.minutes)}`,
-        travelEstimate.advisory
-      ].filter(Boolean).join(" · ");
-
-      travelPlan.push({
-        at: departIso,
-        title: `Travel ${idx + 1}: ${prevLabel} -> ${destinationLabel}`,
-        detail
-      });
-
-      const airportTransferMinutes = travelEstimate.minutes >= 15 * 60
-        ? 75
-        : (travelEstimate.minutes >= 6 * 60 ? 45 : 20);
-      const transferAtMs = arriveMs + airportTransferMinutes * 60 * 1000;
-      travelPlan.push({
-        at: new Date(transferAtMs).toISOString(),
-        title: `Airport transfer at ${destinationLabel}`,
-        detail: airportTransferMinutes >= 45
-          ? `Pre-book cab from airport to hotel/venue (~${airportTransferMinutes} min).`
-          : `Take local cab/ride-share from airport to venue (~${airportTransferMinutes} min).`
-      });
-
-      let scoutAtMs = transferAtMs;
-      if (travelEstimate.minutes >= 15 * 60) {
-        travelPlan.push({
-          at: new Date(transferAtMs).toISOString(),
-          title: `Hotel rest window at ${destinationLabel}`,
-          detail: "Recommended rest buffer: 2-3 hours before scouting."
-        });
-        scoutAtMs += 180 * 60 * 1000;
-      }
-
-      const playerList = stop.players.map((player) => `${player.name} (${player.team})`).join(", ");
-      travelPlan.push({
-        at: new Date(scoutAtMs).toISOString(),
-        title: `Scout Players at ${destinationLabel}`,
-        detail: `Selected players: ${playerList}`
-      });
-      completedStops += 1;
-
-      cursorMs = scoutAtMs + 30 * 60 * 1000;
-      prevLabel = destinationLabel;
-      prevPoint = stop.point || null;
+      hotelHubDestination = best.point?.label || best.locationLabel || hotelHubDestination;
     }
 
     if (!blockedReason && scheduleForm.hotelName.trim()) {
@@ -3236,11 +3328,12 @@ export default function BirdDogPage() {
     }
 
     const unresolvedStops = geocoded.filter((stop) => !stop.point).length;
+    const completedStops = targetPlayers.length - unseenPlayers.size;
     return {
       plan: travelPlan,
-      sourceLabel: startPoint?.label || fallbackStartLabel,
-      firstDestination: ordered[0]?.point?.label || ordered[0]?.destination || "",
-      usedLiveLocation: Boolean(startPoint) && !options?.manualStart,
+      sourceLabel: startPoint?.label || startLabel,
+      firstDestination: visitedStops[0]?.point?.label || visitedStops[0]?.locationLabel || "",
+      usedLiveLocation: false,
       unresolvedStops,
       blockedReason,
       completedStops,
@@ -3268,7 +3361,7 @@ export default function BirdDogPage() {
 
   function buildInstantRecommendation(targetPlayers: DesiredPlayer[], sourceOverride?: string): PlanItem[] {
     const now = Date.now() + 10 * 60 * 1000;
-    const source = String(sourceOverride || scheduleForm.flightSource || "").trim() || "Current location";
+    const source = String(sourceOverride || scheduleForm.flightSource || "").trim() || airportStartLabel || "Event Airport";
     const destination = scheduleForm.flightDestination.trim()
       || destinationForPlayer(targetPlayers[0])
       || "Tournament Venue";
@@ -3318,40 +3411,7 @@ export default function BirdDogPage() {
       setActiveTab("notes");
     }
     const firstPlayerStart = destinationForPlayer(selectedPlayers[0]) || "";
-    let preferredSource = "";
-    const manualSourceActive = startLocationMode === "manual";
-    let detectedStartPoint: GeoLocation | null = null;
-    const manualSource = manualEventLocation.trim();
-
-    if (manualSourceActive) {
-      if (!manualSource) {
-        const msg = "Enter your event-day location, then create schedule.";
-        setPlayerSearchStatus(msg);
-        setPlanWorkflowNote(msg);
-        return;
-      }
-      preferredSource = manualSource;
-    } else {
-      detectedStartPoint = await detectCoachStartPoint();
-      if (!detectedStartPoint) {
-        const msg = "Current location could not be detected. Enter event-day location manually.";
-        setPlayerSearchStatus(msg);
-        setPlanWorkflowNote(msg);
-        setStartLocationMode("manual");
-        return;
-      }
-      const detectedState = extractUsStateCode(detectedStartPoint.label);
-      if (eventStateCode && detectedState && eventStateCode !== detectedState) {
-        const msg = `Current location state (${detectedState}) does not match event state (${eventStateCode}). Enter event-day location manually.`;
-        setPlayerSearchStatus(msg);
-        setPlanWorkflowNote(msg);
-        setStartLocationMode("manual");
-        return;
-      }
-      preferredSource = detectedStartPoint.label;
-    }
-
-    const resolvedSource = preferredSource || firstPlayerStart || "Current location";
+    const resolvedSource = String(airportStartLabel || firstPlayerStart || "Event Airport").trim();
     clearSmartScheduleInsights();
     const instantFlightDestination = scheduleForm.flightDestination || firstPlayerStart;
     const instantForm = {
@@ -3365,19 +3425,15 @@ export default function BirdDogPage() {
     setMyGeneratedPlan(instantPlan);
     setAndPersistPlanWorkflowStatus("pending_approval");
     setPlanWorkflowNote("Generating recommendation...");
-    setPlayerSearchStatus(`Generating optimized route for ${selectedPlayers.length} selected players...`);
+    setPlayerSearchStatus(`Generating airport-first optimized route for ${selectedPlayers.length} selected players...`);
     try {
-      const optimized = await buildOptimizedCoachPlan(selectedPlayers, resolvedSource, {
-        disableLiveDetect: true,
-        fallbackStartPoint: manualSourceActive ? null : detectedStartPoint,
-        manualStart: manualSourceActive
-      });
+      const optimized = await buildOptimizedCoachPlan(selectedPlayers, resolvedSource);
       const hotelHubDestination = optimized.hotelHubDestination || optimized.firstDestination || firstPlayerStart || "";
       setRecommendedHotelHub(hotelHubDestination);
       if (optimized.smartReorderHint) {
         setSmartRouteHint(optimized.smartReorderHint);
       } else if (selectedPlayers.length > 1) {
-        setSmartRouteHint("Selected order is already efficient from your first selected player location.");
+        setSmartRouteHint("Selected order is already efficient based on travel distance + match timing.");
       }
       if (!optimized.plan.length) {
         const msg = "Live route data is limited right now. Showing instant recommendation preview.";
@@ -3403,7 +3459,7 @@ export default function BirdDogPage() {
 
       const nextForm = {
         ...scheduleForm,
-        flightSource: resolvedSource || (optimized.usedLiveLocation ? optimized.sourceLabel : "Current location"),
+        flightSource: resolvedSource || optimized.sourceLabel || "Event Airport",
         flightDestination: destination,
         flightArrivalTime: scheduleForm.flightArrivalTime || toInputDateTime(finalPlan[0]?.at || new Date().toISOString()),
         hotelName,
@@ -3432,9 +3488,7 @@ export default function BirdDogPage() {
           `Recommendation generated with feasibility warning. ${optimized.blockedReason || "At least one leg is not feasible in the next 12 hours."}${quotedPlan.quoteSummary ? ` ${quotedPlan.quoteSummary}` : ""}`
         );
       } else {
-        const locationStatus = manualSourceActive
-          ? "Using manual event-day location."
-          : "Current location detected in event state.";
+        const locationStatus = `Starting from airport: ${resolvedSource}.`;
         const hotelStatus = hotelHubDestination
           ? ` Recommended hotel hub: ${hotelHubDestination}.`
           : "";
@@ -3448,7 +3502,7 @@ export default function BirdDogPage() {
       if (emergencyPlan.length) {
         const fallbackForm = {
           ...instantForm,
-          flightSource: instantForm.flightSource || firstPlayerStart || "Current location",
+          flightSource: instantForm.flightSource || resolvedSource || "Event Airport",
           flightDestination: instantForm.flightDestination || destinationForPlayer(selectedPlayers[0]),
           notes: scheduleForm.notes || "Fallback recommendation generated while map services are unavailable."
         };
@@ -4811,79 +4865,15 @@ export default function BirdDogPage() {
               <div style={{ marginTop: 8 }}>
                 <div className="panel" style={{ marginBottom: 10 }}>
                   <p className="muted" style={{ marginTop: 0 }}>
-                    Event location: {eventLocationHint || "Unknown"}{eventStateCode ? ` (${eventStateCode})` : ""}
+                    Event location: {eventLocationHint || "Unknown"}
                   </p>
-                  <div className="row wrap" style={{ gap: 8, marginBottom: 6 }}>
-                    <button
-                      type="button"
-                      className={startLocationMode === "auto" ? "" : "secondary"}
-                      onClick={() => {
-                        setStartLocationMode("auto");
-                        setScheduleForm((prev) => ({ ...prev, flightSource: "Current location" }));
-                      }}
-                    >
-                      Use Current Location
-                    </button>
-                    <button
-                      type="button"
-                      className={startLocationMode === "manual" ? "" : "secondary"}
-                      onClick={() => {
-                        setStartLocationMode("manual");
-                        setScheduleForm((prev) => ({ ...prev, flightSource: manualEventLocation.trim() || prev.flightSource }));
-                      }}
-                    >
-                      Enter Event-Day Location
-                    </button>
-                  </div>
-                  {startLocationMode === "manual" ? (
-                    <>
-                      <label style={{ display: "block" }}>
-                        Event-day start location
-                        <input
-                          value={manualEventLocation}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            setManualEventLocation(value);
-                            setScheduleForm((prev) => ({ ...prev, flightSource: value }));
-                          }}
-                          placeholder="Enter coach location for event day (city, state)"
-                        />
-                      </label>
-                      {sourceSuggestions.length ? (
-                        <div className="table-wrap" style={{ marginTop: 6 }}>
-                          <table className="roster-table">
-                            <tbody>
-                              {sourceSuggestions.slice(0, 6).map((item) => (
-                                <tr key={item.placeId}>
-                                  <td>
-                                    <button
-                                      type="button"
-                                      className="secondary"
-                                      style={{ border: "none", background: "transparent", textAlign: "left", padding: 0 }}
-                                      onClick={() => {
-                                        setManualEventLocation(item.label);
-                                        setScheduleForm((prev) => ({ ...prev, flightSource: item.label }));
-                                      }}
-                                    >
-                                      {item.label}
-                                    </button>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : null}
-                    </>
-                  ) : (
-                    <p className="muted" style={{ marginBottom: 0 }}>
-                      Auto mode is allowed only when your detected state matches the event state.
-                    </p>
-                  )}
+                  <p className="muted" style={{ marginBottom: 0 }}>
+                    Smart planner always starts from the event airport: {airportStartLabel || "Event Airport"}.
+                  </p>
                 </div>
                 <p className="muted" style={{ marginTop: 0 }}>Selected players: {desiredPlayers.length}</p>
                 <p className="muted" style={{ marginTop: 0 }}>
-                  Start point: {(startLocationMode === "manual" ? manualEventLocation : scheduleForm.flightSource).trim() || "Current location"}
+                  Start point: {airportStartLabel || "Event Airport"}
                 </p>
                 {smartRouteHint ? (
                   <p className="muted" style={{ marginTop: 0 }}>
