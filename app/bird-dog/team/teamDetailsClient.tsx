@@ -1185,6 +1185,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     const nextParams = new URLSearchParams();
     nextParams.set("tab", "notes");
     nextParams.set("autoCreateSchedule", "1");
+    nextParams.set("focus", "generatedSchedule");
     const nextInventory = initialParams.returnInventorySlug
       || initialParams.inventorySlug
       || currentSearch.get("returnInventorySlug")
@@ -1205,7 +1206,13 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
       nextParams.set("company", nextCompany);
       nextParams.set("provider", nextCompany);
     }
-    window.location.assign(`/bird-dog?${nextParams.toString()}`);
+    const targetUrl = `/bird-dog?${nextParams.toString()}`;
+    const opened = window.open(targetUrl, "_blank", "noopener,noreferrer");
+    if (opened) {
+      opened.opener = null;
+      return;
+    }
+    window.location.assign(targetUrl);
   }
 
   function openAppTab(tab: "tournaments" | "notes" | "profile") {

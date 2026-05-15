@@ -1153,6 +1153,7 @@ export default function BirdDogPage() {
   const [recommendedHotelHub, setRecommendedHotelHub] = useState("");
   const [planWorkflowStatus, setPlanWorkflowStatus] = useState<PlanWorkflowStatus>("draft");
   const [planWorkflowNote, setPlanWorkflowNote] = useState("");
+  const [focusGeneratedScheduleRequested, setFocusGeneratedScheduleRequested] = useState(false);
   const [latestBookingSummary, setLatestBookingSummary] = useState<BookingSummarySnapshot | null>(null);
   const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false);
   const [profileForm, setProfileForm] = useState<ProfileFormState>({
@@ -1338,6 +1339,7 @@ export default function BirdDogPage() {
   const selectedTournamentHydrationAttemptAtRef = useRef<Record<string, number>>({});
   const autoPlannerRef = useRef<{ busy: boolean; key: string }>({ busy: false, key: "" });
   const autoCreateScheduleRunKeyRef = useRef("");
+  const generatedSchedulePanelRef = useRef<HTMLDivElement | null>(null);
   const inlineTeamNoteMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const inlineTeamNoteMediaStreamRef = useRef<MediaStream | null>(null);
   const inlineTeamNoteAudioChunksRef = useRef<Blob[]>([]);
@@ -1378,8 +1380,19 @@ export default function BirdDogPage() {
     const current = new URL(window.location.href);
     if (!current.searchParams.has("autoCreateSchedule")) return;
     current.searchParams.delete("autoCreateSchedule");
+    if (current.searchParams.get("focus") === "generatedSchedule") {
+      current.searchParams.delete("focus");
+    }
     const next = `${current.pathname}${current.searchParams.toString() ? `?${current.searchParams.toString()}` : ""}`;
     window.history.replaceState({}, "", next);
+  }
+
+  function focusGeneratedSchedulePanel() {
+    if (typeof window === "undefined") return;
+    window.setTimeout(() => {
+      generatedSchedulePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      setFocusGeneratedScheduleRequested(false);
+    }, 120);
   }
 
   useEffect(() => {
@@ -1518,10 +1531,14 @@ export default function BirdDogPage() {
     const requestedCompany = parseCompanyParam(params.get("company") || params.get("provider"));
     const inventorySlug = params.get("inventorySlug");
     const tournamentId = params.get("tournamentId");
+    const focus = params.get("focus");
     if (tab === "coaches" || tab === "schedule" || tab === "bestPlayers") {
       setActiveTab("notes");
     } else if (tab === "tournaments" || tab === "notes" || tab === "profile") {
       setActiveTab(tab);
+    }
+    if (focus === "generatedSchedule") {
+      setFocusGeneratedScheduleRequested(true);
     }
     if (inventorySlug) {
       setSelectedInventorySlug(inventorySlug);
@@ -1688,6 +1705,7 @@ export default function BirdDogPage() {
       autoRun: true,
       targetPlayers: sourcePlayers
     }).finally(() => {
+      focusGeneratedSchedulePanel();
       clearAutoCreateScheduleQueryFlag();
     });
   }, [
@@ -1700,6 +1718,13 @@ export default function BirdDogPage() {
     teamRosterCartPlayers,
     user
   ]);
+
+  useEffect(() => {
+    if (!focusGeneratedScheduleRequested) return;
+    if (activeTab !== "notes") return;
+    if (!myGeneratedPlan.length && !desiredPlayers.length) return;
+    focusGeneratedSchedulePanel();
+  }, [activeTab, desiredPlayers.length, focusGeneratedScheduleRequested, myGeneratedPlan.length]);
 
   useEffect(() => {
     if (!user || !selectedTournamentId || loadingHarvest) return;
@@ -4630,7 +4655,7 @@ export default function BirdDogPage() {
               </p>
             )}
           </div>
-          <div className="panel" style={{ marginBottom: 10 }}>
+          <div className="panel" style={{ marginBottom: 10 }} id="generated-schedule-panel" ref={generatedSchedulePanelRef}>
             <div className="row wrap" style={{ alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <h3 style={{ marginTop: 0, marginBottom: 0 }}>Selected Players</h3>
               <button
