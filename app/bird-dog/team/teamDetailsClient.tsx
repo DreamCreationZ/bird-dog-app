@@ -787,14 +787,24 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     ];
     return Array.from(new Set(candidates.filter(Boolean)));
   }, [cartCompany, cartInventorySlug, cartStorageKey]);
+  const cartStorageSyncKeys = useMemo(
+    () => Array.from(new Set([...cartStorageReadKeys, ...cartStorageWriteKeys])),
+    [cartStorageReadKeys, cartStorageWriteKeys]
+  );
+
+  const persistCrossTeamCart = useMemo(
+    () => (rows: CrossTeamCartPlayer[]) => {
+      cartStorageSyncKeys.forEach((key) => writeRosterCartStorage(key, rows));
+    },
+    [cartStorageSyncKeys]
+  );
 
   useEffect(() => {
     const merged = mergeRosterCartStorage(cartStorageReadKeys);
     setCrossTeamCartPlayers(merged);
-    if (merged.length) {
-      cartStorageWriteKeys.forEach((key) => writeRosterCartStorage(key, merged));
-    }
-  }, [cartStorageReadKeys, cartStorageWriteKeys]);
+    // Normalize all storage aliases to one consistent source-of-truth value.
+    persistCrossTeamCart(merged);
+  }, [cartStorageReadKeys, persistCrossTeamCart]);
 
   useEffect(() => {
     let mounted = true;
@@ -1696,11 +1706,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     }
 
     setCrossTeamCartPlayers((prev) => {
-      const persisted = mergeRosterCartStorage(cartStorageReadKeys);
       const merged = new Map<string, CrossTeamCartPlayer>();
-      persisted.forEach((item) => {
-        merged.set(desiredSelectionKey(item), item);
-      });
       prev.forEach((item) => {
         merged.set(desiredSelectionKey(item), item);
       });
@@ -1718,7 +1724,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
         });
       });
       const next = Array.from(merged.values());
-      cartStorageWriteKeys.forEach((key) => writeRosterCartStorage(key, next));
+      persistCrossTeamCart(next);
       return next;
     });
 
@@ -1738,7 +1744,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   function removeCartPlayer(selectionKey: string) {
     setCrossTeamCartPlayers((prev) => {
       const next = prev.filter((item) => desiredSelectionKey(item) !== selectionKey);
-      cartStorageWriteKeys.forEach((key) => writeRosterCartStorage(key, next));
+      persistCrossTeamCart(next);
       return next;
     });
     const currentTeamPrefix = `team:${initialParams.teamId}:`;
@@ -1752,7 +1758,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
 
   function clearCrossTeamCart() {
     setCrossTeamCartPlayers([]);
-    cartStorageWriteKeys.forEach((key) => writeRosterCartStorage(key, []));
+    persistCrossTeamCart([]);
     setPlannerStatus("Final player cart cleared.");
   }
 
@@ -2638,14 +2644,6 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
             <button type="button" className="secondary" onClick={clearCrossTeamCart} disabled={!crossTeamCartPlayers.length}>
               Clear Final Cart
             </button>
-            <button
-              type="button"
-              onClick={goToCoachScheduleTab}
-              disabled={!canCreateSchedule}
-              title={canCreateSchedule ? "Create coach schedule from selected players." : "Add players to final cart to enable schedule creation."}
-            >
-              Create Schedule
-            </button>
           </div>
           <div className="table-wrap" style={{ marginTop: 8 }}>
             <table className="roster-table">
@@ -2715,16 +2713,6 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
                 )}
               </tbody>
             </table>
-            <div className="row wrap" style={{ marginTop: 10 }}>
-              <button
-                type="button"
-                onClick={goToCoachScheduleTab}
-                disabled={!canCreateSchedule}
-                title={canCreateSchedule ? "Create coach schedule from selected players." : "Add players to final cart to enable schedule creation."}
-              >
-                Create Schedule
-              </button>
-            </div>
           </div>
         </div>
         ) : null}
