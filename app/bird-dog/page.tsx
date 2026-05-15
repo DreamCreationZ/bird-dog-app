@@ -667,6 +667,84 @@ function normalizeLocationText(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+const US_STATE_CODES = new Set([
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+  "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+  "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+  "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+  "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+  "DC"
+]);
+
+const US_STATE_NAME_TO_CODE: Record<string, string> = {
+  alabama: "AL",
+  alaska: "AK",
+  arizona: "AZ",
+  arkansas: "AR",
+  california: "CA",
+  colorado: "CO",
+  connecticut: "CT",
+  delaware: "DE",
+  florida: "FL",
+  georgia: "GA",
+  hawaii: "HI",
+  idaho: "ID",
+  illinois: "IL",
+  indiana: "IN",
+  iowa: "IA",
+  kansas: "KS",
+  kentucky: "KY",
+  louisiana: "LA",
+  maine: "ME",
+  maryland: "MD",
+  massachusetts: "MA",
+  michigan: "MI",
+  minnesota: "MN",
+  mississippi: "MS",
+  missouri: "MO",
+  montana: "MT",
+  nebraska: "NE",
+  nevada: "NV",
+  "new hampshire": "NH",
+  "new jersey": "NJ",
+  "new mexico": "NM",
+  "new york": "NY",
+  "north carolina": "NC",
+  "north dakota": "ND",
+  ohio: "OH",
+  oklahoma: "OK",
+  oregon: "OR",
+  pennsylvania: "PA",
+  "rhode island": "RI",
+  "south carolina": "SC",
+  "south dakota": "SD",
+  tennessee: "TN",
+  texas: "TX",
+  utah: "UT",
+  vermont: "VT",
+  virginia: "VA",
+  washington: "WA",
+  "west virginia": "WV",
+  wisconsin: "WI",
+  wyoming: "WY",
+  "district of columbia": "DC"
+};
+
+function extractUsStateCode(value: string) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const upper = raw.toUpperCase();
+  const codeMatch = upper.match(/(?:,|\s)([A-Z]{2})(?:\b|$)/);
+  if (codeMatch?.[1] && US_STATE_CODES.has(codeMatch[1])) {
+    return codeMatch[1];
+  }
+  const normalized = normalizeLocationText(raw);
+  for (const [name, code] of Object.entries(US_STATE_NAME_TO_CODE)) {
+    if (normalized.includes(name)) return code;
+  }
+  return "";
+}
+
 function normalizeSearchText(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -874,6 +952,15 @@ function formatEta(minutes: number) {
 }
 
 function travelModeByText(from: string, to: string): TravelEstimate {
+  const fromState = extractUsStateCode(from);
+  const toState = extractUsStateCode(to);
+  if (fromState && toState && fromState === toState) {
+    return {
+      mode: "Drive / Cab",
+      minutes: 120,
+      advisory: `Same-state route (${fromState}). Ground transfer is usually fastest for field-to-field coverage.`
+    };
+  }
   const indiaUs = (looksLikeIndiaLocation(from) && looksLikeUsLocation(to))
     || (looksLikeIndiaLocation(to) && looksLikeUsLocation(from));
   if (indiaUs) {
@@ -1135,6 +1222,8 @@ export default function BirdDogPage() {
     hotelName: "",
     notes: ""
   });
+  const [startLocationMode, setStartLocationMode] = useState<"auto" | "manual">("auto");
+  const [manualEventLocation, setManualEventLocation] = useState("");
   const [sourceSuggestions, setSourceSuggestions] = useState<PlaceSuggestion[]>([]);
   const [destinationSuggestions, setDestinationSuggestions] = useState<PlaceSuggestion[]>([]);
   const [hotelSuggestions, setHotelSuggestions] = useState<HotelSuggestion[]>([]);
@@ -1175,6 +1264,19 @@ export default function BirdDogPage() {
   const selectedInventory = useMemo(
     () => displayInventory.find((item) => item.slug === selectedInventorySlug) || null,
     [displayInventory, selectedInventorySlug]
+  );
+  const eventLocationHint = useMemo(() => {
+    const candidates = [
+      String(selectedInventory?.displayCity || "").trim(),
+      ...((selectedTournament?.teams || []).map((team) => String(team.from || "").trim()).filter(Boolean)),
+      String(selectedTournament?.name || "").trim()
+    ].filter(Boolean);
+    const withState = candidates.find((value) => Boolean(extractUsStateCode(value)));
+    return withState || candidates[0] || "";
+  }, [selectedInventory?.displayCity, selectedTournament?.name, selectedTournament?.teams]);
+  const eventStateCode = useMemo(
+    () => extractUsStateCode(eventLocationHint),
+    [eventLocationHint]
   );
   const bookingBlockReason = useMemo(
     () => getBookingBlockReasonFromPlan(myGeneratedPlan),
@@ -2928,7 +3030,11 @@ export default function BirdDogPage() {
     return String(teamMatch?.from || player.team || "Tournament Venue").trim();
   }
 
-  async function buildOptimizedCoachPlan(targetPlayers: DesiredPlayer[], preferredSourceText?: string) {
+  async function buildOptimizedCoachPlan(
+    targetPlayers: DesiredPlayer[],
+    preferredSourceText?: string,
+    options?: { disableLiveDetect?: boolean; fallbackStartPoint?: GeoLocation | null; manualStart?: boolean }
+  ) {
     const grouped = new Map<string, { destination: string; players: DesiredPlayer[]; point: GeoLocation | null }>();
     targetPlayers.forEach((player) => {
       const destination = destinationForPlayer(player);
@@ -2950,7 +3056,8 @@ export default function BirdDogPage() {
     const manualSource = String(preferredSourceText || scheduleForm.flightSource || "").trim();
     const startPoint =
       (manualSource ? await geocodeForRoute(manualSource) : null)
-      || await detectCoachStartPoint();
+      || options?.fallbackStartPoint
+      || (options?.disableLiveDetect ? null : await detectCoachStartPoint());
 
     const firstStop = geocoded[0] || null;
     const remaining = geocoded.slice(firstStop ? 1 : 0);
@@ -3133,7 +3240,7 @@ export default function BirdDogPage() {
       plan: travelPlan,
       sourceLabel: startPoint?.label || fallbackStartLabel,
       firstDestination: ordered[0]?.point?.label || ordered[0]?.destination || "",
-      usedLiveLocation: Boolean(startPoint),
+      usedLiveLocation: Boolean(startPoint) && !options?.manualStart,
       unresolvedStops,
       blockedReason,
       completedStops,
@@ -3159,9 +3266,9 @@ export default function BirdDogPage() {
     return `Recommended hotel near ${cleanDestination}`;
   }
 
-  function buildInstantRecommendation(targetPlayers: DesiredPlayer[]): PlanItem[] {
+  function buildInstantRecommendation(targetPlayers: DesiredPlayer[], sourceOverride?: string): PlanItem[] {
     const now = Date.now() + 10 * 60 * 1000;
-    const source = scheduleForm.flightSource.trim() || "Current location";
+    const source = String(sourceOverride || scheduleForm.flightSource || "").trim() || "Current location";
     const destination = scheduleForm.flightDestination.trim()
       || destinationForPlayer(targetPlayers[0])
       || "Tournament Venue";
@@ -3211,26 +3318,60 @@ export default function BirdDogPage() {
       setActiveTab("notes");
     }
     const firstPlayerStart = destinationForPlayer(selectedPlayers[0]) || "";
+    let preferredSource = "";
+    const manualSourceActive = startLocationMode === "manual";
+    let detectedStartPoint: GeoLocation | null = null;
+    const manualSource = manualEventLocation.trim();
+
+    if (manualSourceActive) {
+      if (!manualSource) {
+        const msg = "Enter your event-day location, then create schedule.";
+        setPlayerSearchStatus(msg);
+        setPlanWorkflowNote(msg);
+        return;
+      }
+      preferredSource = manualSource;
+    } else {
+      detectedStartPoint = await detectCoachStartPoint();
+      if (!detectedStartPoint) {
+        const msg = "Current location could not be detected. Enter event-day location manually.";
+        setPlayerSearchStatus(msg);
+        setPlanWorkflowNote(msg);
+        setStartLocationMode("manual");
+        return;
+      }
+      const detectedState = extractUsStateCode(detectedStartPoint.label);
+      if (eventStateCode && detectedState && eventStateCode !== detectedState) {
+        const msg = `Current location state (${detectedState}) does not match event state (${eventStateCode}). Enter event-day location manually.`;
+        setPlayerSearchStatus(msg);
+        setPlanWorkflowNote(msg);
+        setStartLocationMode("manual");
+        return;
+      }
+      preferredSource = detectedStartPoint.label;
+    }
+
+    const resolvedSource = preferredSource || firstPlayerStart || "Current location";
     clearSmartScheduleInsights();
     const instantFlightDestination = scheduleForm.flightDestination || firstPlayerStart;
     const instantForm = {
       ...scheduleForm,
-      flightSource: firstPlayerStart || scheduleForm.flightSource || "Current location",
+      flightSource: resolvedSource,
       flightDestination: instantFlightDestination,
       hotelName: ""
     };
-    const instantPlan = buildInstantRecommendation(selectedPlayers);
+    const instantPlan = buildInstantRecommendation(selectedPlayers, resolvedSource);
     setScheduleForm(instantForm);
     setMyGeneratedPlan(instantPlan);
     setAndPersistPlanWorkflowStatus("pending_approval");
     setPlanWorkflowNote("Generating recommendation...");
     setPlayerSearchStatus(`Generating optimized route for ${selectedPlayers.length} selected players...`);
     try {
-      const rawSource = scheduleForm.flightSource.trim();
-      const preferredSource = firstPlayerStart
-        || (rawSource && !/^current location$/i.test(rawSource) ? rawSource : "");
-
-      const optimized = await buildOptimizedCoachPlan(selectedPlayers, preferredSource);
+      const optimized = await buildOptimizedCoachPlan(selectedPlayers, resolvedSource, {
+        disableLiveDetect: true,
+        fallbackStartPoint: manualSourceActive ? null : detectedStartPoint,
+        manualStart: manualSourceActive
+      });
       const hotelHubDestination = optimized.hotelHubDestination || optimized.firstDestination || firstPlayerStart || "";
       setRecommendedHotelHub(hotelHubDestination);
       if (optimized.smartReorderHint) {
@@ -3262,7 +3403,7 @@ export default function BirdDogPage() {
 
       const nextForm = {
         ...scheduleForm,
-        flightSource: preferredSource || (optimized.usedLiveLocation ? optimized.sourceLabel : "Current location"),
+        flightSource: resolvedSource || (optimized.usedLiveLocation ? optimized.sourceLabel : "Current location"),
         flightDestination: destination,
         flightArrivalTime: scheduleForm.flightArrivalTime || toInputDateTime(finalPlan[0]?.at || new Date().toISOString()),
         hotelName,
@@ -3291,9 +3432,9 @@ export default function BirdDogPage() {
           `Recommendation generated with feasibility warning. ${optimized.blockedReason || "At least one leg is not feasible in the next 12 hours."}${quotedPlan.quoteSummary ? ` ${quotedPlan.quoteSummary}` : ""}`
         );
       } else {
-        const locationStatus = optimized.usedLiveLocation
-          ? "Current location detected."
-          : "Using first selected player location as start.";
+        const locationStatus = manualSourceActive
+          ? "Using manual event-day location."
+          : "Current location detected in event state.";
         const hotelStatus = hotelHubDestination
           ? ` Recommended hotel hub: ${hotelHubDestination}.`
           : "";
@@ -4668,9 +4809,81 @@ export default function BirdDogPage() {
             </div>
             {desiredPlayers.length ? (
               <div style={{ marginTop: 8 }}>
+                <div className="panel" style={{ marginBottom: 10 }}>
+                  <p className="muted" style={{ marginTop: 0 }}>
+                    Event location: {eventLocationHint || "Unknown"}{eventStateCode ? ` (${eventStateCode})` : ""}
+                  </p>
+                  <div className="row wrap" style={{ gap: 8, marginBottom: 6 }}>
+                    <button
+                      type="button"
+                      className={startLocationMode === "auto" ? "" : "secondary"}
+                      onClick={() => {
+                        setStartLocationMode("auto");
+                        setScheduleForm((prev) => ({ ...prev, flightSource: "Current location" }));
+                      }}
+                    >
+                      Use Current Location
+                    </button>
+                    <button
+                      type="button"
+                      className={startLocationMode === "manual" ? "" : "secondary"}
+                      onClick={() => {
+                        setStartLocationMode("manual");
+                        setScheduleForm((prev) => ({ ...prev, flightSource: manualEventLocation.trim() || prev.flightSource }));
+                      }}
+                    >
+                      Enter Event-Day Location
+                    </button>
+                  </div>
+                  {startLocationMode === "manual" ? (
+                    <>
+                      <label style={{ display: "block" }}>
+                        Event-day start location
+                        <input
+                          value={manualEventLocation}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setManualEventLocation(value);
+                            setScheduleForm((prev) => ({ ...prev, flightSource: value }));
+                          }}
+                          placeholder="Enter coach location for event day (city, state)"
+                        />
+                      </label>
+                      {sourceSuggestions.length ? (
+                        <div className="table-wrap" style={{ marginTop: 6 }}>
+                          <table className="roster-table">
+                            <tbody>
+                              {sourceSuggestions.slice(0, 6).map((item) => (
+                                <tr key={item.placeId}>
+                                  <td>
+                                    <button
+                                      type="button"
+                                      className="secondary"
+                                      style={{ border: "none", background: "transparent", textAlign: "left", padding: 0 }}
+                                      onClick={() => {
+                                        setManualEventLocation(item.label);
+                                        setScheduleForm((prev) => ({ ...prev, flightSource: item.label }));
+                                      }}
+                                    >
+                                      {item.label}
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="muted" style={{ marginBottom: 0 }}>
+                      Auto mode is allowed only when your detected state matches the event state.
+                    </p>
+                  )}
+                </div>
                 <p className="muted" style={{ marginTop: 0 }}>Selected players: {desiredPlayers.length}</p>
                 <p className="muted" style={{ marginTop: 0 }}>
-                  Start point: {destinationForPlayer(desiredPlayers[0]) || "Current location"}
+                  Start point: {(startLocationMode === "manual" ? manualEventLocation : scheduleForm.flightSource).trim() || "Current location"}
                 </p>
                 {smartRouteHint ? (
                   <p className="muted" style={{ marginTop: 0 }}>
