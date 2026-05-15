@@ -1181,20 +1181,31 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   }
 
   function goToCoachScheduleTab() {
+    const currentSearch = new URLSearchParams(window.location.search);
     const nextParams = new URLSearchParams();
     nextParams.set("tab", "notes");
-    if (initialParams.returnInventorySlug || initialParams.inventorySlug) {
-      nextParams.set("inventorySlug", initialParams.returnInventorySlug || initialParams.inventorySlug);
+    nextParams.set("autoCreateSchedule", "1");
+    const nextInventory = initialParams.returnInventorySlug
+      || initialParams.inventorySlug
+      || currentSearch.get("returnInventorySlug")
+      || currentSearch.get("inventorySlug")
+      || "";
+    const nextTournament = initialParams.returnTournamentId
+      || currentSearch.get("returnTournamentId")
+      || currentSearch.get("tournamentId")
+      || "";
+    if (nextInventory) {
+      nextParams.set("inventorySlug", nextInventory);
     }
-    if (initialParams.returnTournamentId) {
-      nextParams.set("tournamentId", initialParams.returnTournamentId);
+    if (nextTournament) {
+      nextParams.set("tournamentId", nextTournament);
     }
-    const nextCompany = resolveReturnCompany();
+    const nextCompany = resolveReturnCompany(currentSearch);
     if (nextCompany) {
       nextParams.set("company", nextCompany);
       nextParams.set("provider", nextCompany);
     }
-    window.location.replace(`/bird-dog?${nextParams.toString()}`);
+    window.location.assign(`/bird-dog?${nextParams.toString()}`);
   }
 
   function openAppTab(tab: "tournaments" | "notes" | "profile") {
@@ -1702,37 +1713,38 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
       if (announce) {
         setPlannerStatus("Select at least one player from this roster before adding to cart.");
       }
-      return;
+      return crossTeamCartPlayers;
     }
 
-    setCrossTeamCartPlayers((prev) => {
-      const merged = new Map<string, CrossTeamCartPlayer>();
-      prev.forEach((item) => {
-        merged.set(desiredSelectionKey(item), item);
-      });
-      selectedRoster.forEach((row) => {
-        const rowKey = rosterRowKey(row);
-        const selectionKey = `team:${initialParams.teamId}:${rowKey}`;
-        merged.set(selectionKey, {
-          playerId: selectionKey,
-          selectionKey,
-          name: row.name || "-",
-          team: row.team || initialParams.teamName || "Unknown Team",
-          hometown: row.hometown || "",
-          sourceTeamId: initialParams.teamId || "",
-          sourceTeamName: initialParams.teamName || row.team || ""
-        });
-      });
-      const next = Array.from(merged.values());
-      persistCrossTeamCart(next);
-      return next;
+    const merged = new Map<string, CrossTeamCartPlayer>();
+    crossTeamCartPlayers.forEach((item) => {
+      merged.set(desiredSelectionKey(item), item);
     });
+    selectedRoster.forEach((row) => {
+      const rowKey = rosterRowKey(row);
+      const selectionKey = `team:${initialParams.teamId}:${rowKey}`;
+      merged.set(selectionKey, {
+        playerId: selectionKey,
+        selectionKey,
+        name: row.name || "-",
+        team: row.team || initialParams.teamName || "Unknown Team",
+        hometown: row.hometown || "",
+        sourceTeamId: initialParams.teamId || "",
+        sourceTeamName: initialParams.teamName || row.team || ""
+      });
+    });
+    const next = Array.from(merged.values());
+    setCrossTeamCartPlayers(next);
+    // Persist immediately before navigation so auto-create on dashboard always has fresh cart data.
+    persistCrossTeamCart(next);
 
     if (announce) {
       setPlannerStatus(
         `Added ${selectedRoster.length} player(s) from ${initialParams.teamName || "this team"} to final cart. Open another team to keep adding.`
       );
     }
+
+    return next;
   }
 
   function addSelectedPlayersToCart() {
@@ -1760,6 +1772,18 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     setCrossTeamCartPlayers([]);
     persistCrossTeamCart([]);
     setPlannerStatus("Final player cart cleared.");
+  }
+
+  function createScheduleFromRosterSelection() {
+    let nextCart = crossTeamCartPlayers;
+    if (selectedBestPlayerRows.length) {
+      nextCart = mergeRosterSelectionsIntoFinalCart(selectedBestPlayerRows, false);
+    }
+    if (!nextCart.length) {
+      setPlannerStatus("Select at least one player, then create schedule.");
+      return;
+    }
+    goToCoachScheduleTab();
   }
 
   function goToTournamentRosterSelection() {
@@ -2380,7 +2404,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     const selectedSet = new Set(selectedPlayers);
     return rosterRows.filter((row) => selectedSet.has(rosterRowKey(row)));
   }, [rosterRows, selectedPlayers]);
-  const canCreateSchedule = crossTeamCartPlayers.length > 0;
+  const canCreateSchedule = crossTeamCartPlayers.length > 0 || selectedBestPlayerRows.length > 0;
 
   function scrollToSection(sectionId: string) {
     if (typeof window === "undefined") return;
@@ -2474,7 +2498,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
           </button>
           <button
             type="button"
-            onClick={goToCoachScheduleTab}
+            onClick={createScheduleFromRosterSelection}
             disabled={!canCreateSchedule}
             title={canCreateSchedule ? "Create coach schedule from selected players." : "Add players to final cart to enable schedule creation."}
           >

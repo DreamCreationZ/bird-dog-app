@@ -1213,6 +1213,10 @@ export default function BirdDogPage() {
     () => Array.from(new Set([teamRosterCartStorageKey, ROSTER_CART_GLOBAL_KEY])),
     [teamRosterCartStorageKey]
   );
+  const teamRosterCartSyncKeys = useMemo(
+    () => Array.from(new Set([...teamRosterCartReadKeys, ...teamRosterCartWriteKeys])),
+    [teamRosterCartReadKeys, teamRosterCartWriteKeys]
+  );
   const desiredPlayersStorageKey = useMemo(() => {
     if (!user) return "";
     return desiredPlayersScopedStorageKey({
@@ -1333,6 +1337,7 @@ export default function BirdDogPage() {
   const selectedTournamentHydrationKeyRef = useRef("");
   const selectedTournamentHydrationAttemptAtRef = useRef<Record<string, number>>({});
   const autoPlannerRef = useRef<{ busy: boolean; key: string }>({ busy: false, key: "" });
+  const autoCreateScheduleRunKeyRef = useRef("");
   const inlineTeamNoteMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const inlineTeamNoteMediaStreamRef = useRef<MediaStream | null>(null);
   const inlineTeamNoteAudioChunksRef = useRef<Blob[]>([]);
@@ -1366,6 +1371,15 @@ export default function BirdDogPage() {
       return;
     }
     setLatestBookingSummary(parsed);
+  }
+
+  function clearAutoCreateScheduleQueryFlag() {
+    if (typeof window === "undefined") return;
+    const current = new URL(window.location.href);
+    if (!current.searchParams.has("autoCreateSchedule")) return;
+    current.searchParams.delete("autoCreateSchedule");
+    const next = `${current.pathname}${current.searchParams.toString() ? `?${current.searchParams.toString()}` : ""}`;
+    window.history.replaceState({}, "", next);
   }
 
   useEffect(() => {
@@ -1610,10 +1624,9 @@ export default function BirdDogPage() {
   useEffect(() => {
     const merged = mergeRosterCartStorage(teamRosterCartReadKeys);
     setTeamRosterCartPlayers(merged);
-    if (merged.length) {
-      teamRosterCartWriteKeys.forEach((key) => writeRosterCartStorage(key, merged));
-    }
-  }, [teamRosterCartReadKeys, teamRosterCartWriteKeys]);
+    // Normalize all aliases so stale legacy keys do not resurrect removed players.
+    teamRosterCartSyncKeys.forEach((key) => writeRosterCartStorage(key, merged));
+  }, [teamRosterCartReadKeys, teamRosterCartSyncKeys]);
 
   useEffect(() => {
     if (!desiredPlayersStorageKey) {
@@ -1649,6 +1662,44 @@ export default function BirdDogPage() {
       return Array.from(merged.values());
     });
   }, [teamRosterCartPlayers]);
+
+  useEffect(() => {
+    if (!queryStateApplied || !user || loadingHarvest || typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("autoCreateSchedule") !== "1") return;
+    if (!selectedTournamentId && !selectedInventorySlug) return;
+
+    const sourcePlayers = teamRosterCartPlayers.length ? teamRosterCartPlayers : desiredPlayers;
+    if (!sourcePlayers.length) {
+      setPlanWorkflowNote("Select players first, then create schedule.");
+      clearAutoCreateScheduleQueryFlag();
+      return;
+    }
+
+    const runScope = selectedTournamentId || selectedInventorySlug || "no-tournament";
+    const runKey = `${runScope}:${company}:${sourcePlayers.map((item) => desiredPlayerSelectionKey(item)).join("|")}`;
+    if (autoCreateScheduleRunKeyRef.current === runKey) return;
+    autoCreateScheduleRunKeyRef.current = runKey;
+
+    setActiveTab("notes");
+    setDesiredPlayersAndPersist(sourcePlayers);
+    void generateScheduleFromSmartPlayers({
+      keepActiveTab: true,
+      autoRun: true,
+      targetPlayers: sourcePlayers
+    }).finally(() => {
+      clearAutoCreateScheduleQueryFlag();
+    });
+  }, [
+    company,
+    desiredPlayers,
+    loadingHarvest,
+    queryStateApplied,
+    selectedInventorySlug,
+    selectedTournamentId,
+    teamRosterCartPlayers,
+    user
+  ]);
 
   useEffect(() => {
     if (!user || !selectedTournamentId || loadingHarvest) return;
@@ -3117,23 +3168,24 @@ export default function BirdDogPage() {
     return latestGameStart < Date.now();
   }
 
-  async function generateScheduleFromSmartPlayers(options?: { keepActiveTab?: boolean; autoRun?: boolean }) {
-    if (!desiredPlayers.length) {
+  async function generateScheduleFromSmartPlayers(options?: { keepActiveTab?: boolean; autoRun?: boolean; targetPlayers?: DesiredPlayer[] }) {
+    const selectedPlayers = options?.targetPlayers?.length ? options.targetPlayers : desiredPlayers;
+    if (!selectedPlayers.length) {
       const msg = "Select at least one player, then generate schedule.";
       setPlayerSearchStatus(msg);
       setPlanWorkflowNote(msg);
       return;
     }
-    if (isSelectedTournamentPast()) {
-      const msg = "The tournament is already over, can't create the schedule.";
+    const isPast = isSelectedTournamentPast();
+    if (isPast) {
+      const msg = "Tournament date has passed. Generating route preview from selected players.";
       setPlayerSearchStatus(msg);
       setPlanWorkflowNote(msg);
-      return;
     }
     if (options?.keepActiveTab !== false) {
       setActiveTab("notes");
     }
-    const firstPlayerStart = destinationForPlayer(desiredPlayers[0]) || "";
+    const firstPlayerStart = destinationForPlayer(selectedPlayers[0]) || "";
     clearSmartScheduleInsights();
     const instantFlightDestination = scheduleForm.flightDestination || firstPlayerStart;
     const instantForm = {
@@ -3142,23 +3194,23 @@ export default function BirdDogPage() {
       flightDestination: instantFlightDestination,
       hotelName: ""
     };
-    const instantPlan = buildInstantRecommendation(desiredPlayers);
+    const instantPlan = buildInstantRecommendation(selectedPlayers);
     setScheduleForm(instantForm);
     setMyGeneratedPlan(instantPlan);
     setAndPersistPlanWorkflowStatus("pending_approval");
     setPlanWorkflowNote("Generating recommendation...");
-    setPlayerSearchStatus(`Generating optimized route for ${desiredPlayers.length} selected players...`);
+    setPlayerSearchStatus(`Generating optimized route for ${selectedPlayers.length} selected players...`);
     try {
       const rawSource = scheduleForm.flightSource.trim();
       const preferredSource = firstPlayerStart
         || (rawSource && !/^current location$/i.test(rawSource) ? rawSource : "");
 
-      const optimized = await buildOptimizedCoachPlan(desiredPlayers, preferredSource);
+      const optimized = await buildOptimizedCoachPlan(selectedPlayers, preferredSource);
       const hotelHubDestination = optimized.hotelHubDestination || optimized.firstDestination || firstPlayerStart || "";
       setRecommendedHotelHub(hotelHubDestination);
       if (optimized.smartReorderHint) {
         setSmartRouteHint(optimized.smartReorderHint);
-      } else if (desiredPlayers.length > 1) {
+      } else if (selectedPlayers.length > 1) {
         setSmartRouteHint("Selected order is already efficient from your first selected player location.");
       }
       if (!optimized.plan.length) {
@@ -3166,7 +3218,7 @@ export default function BirdDogPage() {
         setScheduleForm(instantForm);
         setMyGeneratedPlan(instantPlan);
         setAndPersistPlanWorkflowStatus("pending_approval");
-        await saveSchedule(instantPlan, desiredPlayers, instantForm);
+        await saveSchedule(instantPlan, selectedPlayers, instantForm);
         setPlayerSearchStatus(msg);
         setPlanWorkflowNote(msg);
         return;
@@ -3208,7 +3260,7 @@ export default function BirdDogPage() {
         setAndPersistPlanWorkflowStatus("draft");
         setPlanWorkflowNote(optimized.blockedReason || "Recommendation generated, but this route is not feasible within the next 12 hours.");
       }
-      await saveSchedule(finalPlan, desiredPlayers, nextForm);
+      await saveSchedule(finalPlan, selectedPlayers, nextForm);
       if (!isFeasible) {
         setPlayerSearchStatus(
           `Recommendation generated with feasibility warning. ${optimized.blockedReason || "At least one leg is not feasible in the next 12 hours."}${quotedPlan.quoteSummary ? ` ${quotedPlan.quoteSummary}` : ""}`
@@ -3231,14 +3283,14 @@ export default function BirdDogPage() {
         const fallbackForm = {
           ...instantForm,
           flightSource: instantForm.flightSource || firstPlayerStart || "Current location",
-          flightDestination: instantForm.flightDestination || destinationForPlayer(desiredPlayers[0]),
+          flightDestination: instantForm.flightDestination || destinationForPlayer(selectedPlayers[0]),
           notes: scheduleForm.notes || "Fallback recommendation generated while map services are unavailable."
         };
         setScheduleForm(fallbackForm);
         setMyGeneratedPlan(emergencyPlan);
         setAndPersistPlanWorkflowStatus("pending_approval");
         setPlanWorkflowNote("Fallback recommendation generated. Open booking to approve or modify options.");
-        await saveSchedule(emergencyPlan, desiredPlayers, fallbackForm);
+        await saveSchedule(emergencyPlan, selectedPlayers, fallbackForm);
         setPlayerSearchStatus("Fallback recommendation generated from selected players.");
         return;
       }
@@ -3680,7 +3732,7 @@ export default function BirdDogPage() {
 
   function persistTeamRosterCart(next: DesiredPlayer[]) {
     setTeamRosterCartPlayers(next);
-    teamRosterCartWriteKeys.forEach((key) => writeRosterCartStorage(key, next));
+    teamRosterCartSyncKeys.forEach((key) => writeRosterCartStorage(key, next));
   }
 
   function removeTeamRosterCartPlayer(selectionKey: string) {
