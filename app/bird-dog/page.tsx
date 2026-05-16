@@ -272,6 +272,7 @@ const PLAN_WORKFLOW_STATUS_KEY_PREFIX = "bird_dog:plan_workflow_status:v1";
 const DESIRED_PLAYERS_STORAGE_KEY_PREFIX = "bird_dog:desired_players:v1";
 const ROSTER_CART_STORAGE_KEY_PREFIX = "bird_dog:roster_cart:v3";
 const ROSTER_CART_GLOBAL_KEY = "bird_dog:roster_cart:v3:global";
+const INVENTORY_CACHE_STORAGE_KEY_PREFIX = "bird_dog:inventory_cache:v1";
 const BOOKING_REVIEW_DRAFT_KEY = "bird_dog:booking_review_draft:v1";
 const BOOKING_SUMMARY_KEY = "bird_dog:booking_summary:v1";
 const PROFILE_FORM_STORAGE_KEY_PREFIX = "bird_dog:profile_form:v1";
@@ -446,6 +447,70 @@ function safeLocalRemove(key: string) {
   } catch {
     // Ignore storage errors.
   }
+}
+
+type InventoryCacheSnapshot = {
+  cachedAt: string;
+  subscribed: boolean;
+  inventory: InventoryTournament[];
+};
+
+function inventoryCacheStorageKey(user: SessionUser | null) {
+  if (!user) return "";
+  const orgScope = normalizeStorageScope(user.orgId || "org");
+  const userScope = normalizeStorageScope(user.userId || "user");
+  return `${INVENTORY_CACHE_STORAGE_KEY_PREFIX}:${orgScope}:${userScope}`;
+}
+
+function sanitizeInventoryRows(rows: unknown): InventoryTournament[] {
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((item) => {
+      const row = item as Record<string, unknown>;
+      const company = String(row?.company || "").trim().toUpperCase() === "PBR" ? "PBR" : "PG";
+      const season = String(row?.season || "").trim().toLowerCase() === "fall" ? "fall" : "summer";
+      return {
+        slug: String(row?.slug || "").trim(),
+        name: String(row?.name || "").trim(),
+        season,
+        company,
+        locked: Boolean(row?.locked),
+        isArchive: Boolean(row?.isArchive),
+        harvestHint: row?.harvestHint ? String(row.harvestHint) : "",
+        displayDate: row?.displayDate ? String(row.displayDate) : "",
+        displayTeams: row?.displayTeams ? String(row.displayTeams) : "",
+        displayCity: row?.displayCity ? String(row.displayCity) : ""
+      } as InventoryTournament;
+    })
+    .filter((item) => item.slug && item.name);
+}
+
+function readInventoryCacheSnapshot(user: SessionUser | null, maxAgeMs = 12 * 60 * 60 * 1000) {
+  const key = inventoryCacheStorageKey(user);
+  if (!key) return null as InventoryCacheSnapshot | null;
+  const parsed = parseJsonSafe<Partial<InventoryCacheSnapshot> | null>(safeLocalGet(key), null);
+  if (!parsed) return null as InventoryCacheSnapshot | null;
+  const cachedAt = String(parsed.cachedAt || "");
+  const cachedAtMs = Date.parse(cachedAt);
+  if (Number.isFinite(cachedAtMs) && Date.now() - cachedAtMs > maxAgeMs) return null;
+  const inventory = sanitizeInventoryRows(parsed.inventory);
+  if (!inventory.length) return null;
+  return {
+    cachedAt,
+    subscribed: Boolean(parsed.subscribed),
+    inventory
+  } as InventoryCacheSnapshot;
+}
+
+function writeInventoryCacheSnapshot(user: SessionUser | null, inventory: InventoryTournament[], subscribed: boolean) {
+  const key = inventoryCacheStorageKey(user);
+  if (!key || !inventory.length) return;
+  const payload: InventoryCacheSnapshot = {
+    cachedAt: new Date().toISOString(),
+    subscribed: Boolean(subscribed),
+    inventory
+  };
+  safeLocalSet(key, JSON.stringify(payload));
 }
 
 function isPlanWorkflowStatus(value: string | null | undefined): value is PlanWorkflowStatus {
@@ -1218,6 +1283,8 @@ export default function BirdDogPage() {
   const selectedTournamentIdRef = useRef("");
   const selectedInventorySlugRef = useRef("");
   const companyRef = useRef<"PG" | "PBR">("PG");
+  const inventoryRef = useRef<InventoryTournament[]>([]);
+  const inventoryFetchSeqRef = useRef(0);
 
   const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
   const [coachSharedNotesByUser, setCoachSharedNotesByUser] = useState<Map<string, CoachSharedNote[]>>(new Map());
@@ -1360,6 +1427,10 @@ export default function BirdDogPage() {
   useEffect(() => {
     companyRef.current = company;
   }, [company]);
+
+  useEffect(() => {
+    inventoryRef.current = inventory;
+  }, [inventory]);
 
   const games = selectedTournament?.games || [];
   const players = useMemo(() => uniquePlayers(games), [games]);
@@ -1559,6 +1630,16 @@ export default function BirdDogPage() {
       mounted = false;
     };
   }, [router]);
+
+  useEffect(() => {
+    if (!user) return;
+    const cached = readInventoryCacheSnapshot(user);
+    if (!cached?.inventory.length) return;
+    setInventory((prev) => (prev.length ? prev : cached.inventory));
+    if (cached.subscribed) {
+      setSubscribed(true);
+    }
+  }, [user]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof navigator === "undefined") return;
@@ -2052,25 +2133,57 @@ export default function BirdDogPage() {
   }
 
   async function fetchInventory() {
-    setOpenError("");
-    const res = await fetch("/api/inventory");
+    const requestSeq = inventoryFetchSeqRef.current + 1;
+    inventoryFetchSeqRef.current = requestSeq;
+    const isLatestRequest = () => requestSeq === inventoryFetchSeqRef.current;
+
+    if (isLatestRequest()) setOpenError("");
+    const cachedSnapshot = readInventoryCacheSnapshot(user);
+    const inMemoryInventory = inventoryRef.current;
+    const keepStableInventory = (message: string) => {
+      const fallbackRows = inMemoryInventory.length
+        ? inMemoryInventory
+        : (cachedSnapshot?.inventory?.length ? cachedSnapshot.inventory : fallbackInventoryClient());
+      if (isLatestRequest()) {
+        setInventory(fallbackRows);
+        if (cachedSnapshot?.subscribed) {
+          setSubscribed(true);
+        }
+        setOpenError(message);
+      }
+      return fallbackRows;
+    };
+
+    let res: Response;
+    try {
+      res = await fetch("/api/inventory", { cache: "no-store" });
+    } catch {
+      return keepStableInventory("Tournament sync is temporarily unavailable. Showing last synced tournaments.");
+    }
+
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      setOpenError(`Unable to load tournaments (${res.status}). ${text.slice(0, 180)}`);
-      setInventory([]);
-      return [];
+      return keepStableInventory(`Unable to sync tournaments right now (${res.status}). Showing last synced tournaments.`);
     }
-    const data = await res.json();
-    const nextInventory: InventoryTournament[] = data.inventory || [];
-    setSubscribed(Boolean(data.subscribed));
+
+    const data = await res.json().catch(() => ({}));
+    const nextInventory = sanitizeInventoryRows(data?.inventory);
+    const nextSubscribed = Boolean(data?.subscribed);
+
     if (!nextInventory.length) {
-      setInventory([]);
-      setOpenError("");
-      return [];
+      return keepStableInventory("Tournament sync returned no rows. Showing last synced tournaments.");
     }
+
+    if (!isLatestRequest()) {
+      return nextInventory;
+    }
+
+    setSubscribed(nextSubscribed);
     setInventory(nextInventory);
-    if (data?.warning && !data?.fallback) {
+    writeInventoryCacheSnapshot(user, nextInventory, nextSubscribed);
+    if (data?.warning) {
       setOpenError(String(data.warning));
+    } else {
+      setOpenError("");
     }
     return nextInventory;
   }

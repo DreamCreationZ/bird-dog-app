@@ -31,6 +31,30 @@ type InventoryItem = {
   harvestHint?: string;
 };
 
+function withTimeoutFallback<T>(task: Promise<T>, timeoutMs: number, fallback: T) {
+  let settled = false;
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(fallback);
+    }, timeoutMs);
+    task
+      .then((value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(fallback);
+      });
+  });
+}
+
 function normalizeInventoryName(value: string) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -78,7 +102,7 @@ function applyLiveInventory(
   return [...staticOther, ...nextPg, ...nextPbr];
 }
 
-async function buildFallbackInventory() {
+function buildFallbackInventory() {
   const base = INVENTORY_SEED.map((item) => ({
     slug: item.slug,
     name: item.name,
@@ -88,14 +112,7 @@ async function buildFallbackInventory() {
     displayTeams: item.displayTeams || "",
     displayCity: item.displayCity || ""
   })) as InventoryItem[];
-
-  try {
-    const livePg = await fetchPgTournamentCatalog().then((result) => result.items as InventoryItem[]);
-    const livePbr = await fetchPbrTournamentCatalog().then((result) => result.items);
-    return applyLiveInventory(base, livePg, livePbr);
-  } catch {
-    return base;
-  }
+  return base;
 }
 
 function mapInventoryForResponse(
@@ -139,7 +156,7 @@ export async function GET(req: NextRequest) {
     && process.env.NODE_ENV !== "production";
   const forceUnlocked = previewUnlockAll || isAdminUser;
   const cookieUnlockedSet = fallbackUnlockedSlugs(req);
-  const fallbackBaseInventory = await buildFallbackInventory();
+  const fallbackBaseInventory = buildFallbackInventory();
 
   try {
     const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -152,11 +169,23 @@ export async function GET(req: NextRequest) {
       });
     }
     const seedMetaBySlug = new Map(INVENTORY_SEED.map((item) => [item.slug, item]));
-    await seedCircuitInventory();
-    const groupedEvents = await fetchPgGroupedEvents("23065").catch(() => []);
+    await withTimeoutFallback(seedCircuitInventory(), 3500, null);
+    const groupedEvents = await withTimeoutFallback(
+      fetchPgGroupedEvents("23065").catch(() => []),
+      4500,
+      [] as Awaited<ReturnType<typeof fetchPgGroupedEvents>>
+    );
     const [inventory, unlockedSlugs] = await Promise.all([
-      listCircuitInventory(),
-      listOrgUnlocks(session.orgId)
+      withTimeoutFallback(
+        listCircuitInventory(),
+        8000,
+        [] as Awaited<ReturnType<typeof listCircuitInventory>>
+      ),
+      withTimeoutFallback(
+        listOrgUnlocks(session.orgId),
+        5000,
+        [] as string[]
+      )
     ]);
     if (!inventory.length) {
       return NextResponse.json({
@@ -167,8 +196,16 @@ export async function GET(req: NextRequest) {
       });
     }
     const [livePg, livePbr] = await Promise.all([
-      fetchPgTournamentCatalog().then((result) => result.items as InventoryItem[]).catch(() => []),
-      fetchPbrTournamentCatalog().then((result) => result.items).catch(() => [])
+      withTimeoutFallback(
+        fetchPgTournamentCatalog().then((result) => result.items as InventoryItem[]),
+        7000,
+        [] as InventoryItem[]
+      ),
+      withTimeoutFallback(
+        fetchPbrTournamentCatalog().then((result) => result.items),
+        7000,
+        [] as Awaited<ReturnType<typeof fetchPbrTournamentCatalog>>["items"]
+      )
     ]);
     const mergedInventory = applyLiveInventory(inventory as InventoryItem[], livePg, livePbr);
     const unlockedSet = new Set([...unlockedSlugs, ...cookieUnlockedSet]);
