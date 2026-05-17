@@ -14,7 +14,7 @@ const MAX_GID_PAGES = 80;
 const MAX_DISCOVERY_CONCURRENCY = 4;
 const MAX_FEATURED_CONCURRENCY = 8;
 const MAX_GROUPED_CONCURRENCY = 6;
-const MAX_CATALOG_ITEMS = 500;
+const MAX_CATALOG_ITEMS = 2500;
 
 export type PgCatalogItem = {
   slug: string;
@@ -251,12 +251,17 @@ async function discoverCatalogIds(forceRefresh = false) {
     fetchHtml(PG_ROOT_GROUP_URL).catch(() => "")
   ]);
 
-  [scheduleHtml, rootGroupHtml].forEach((html) => {
+  const pinIds = (html: string) => {
     if (!html) return;
     parseNumberSet(html, /FeaturedEvents\.aspx\?fid=(\d+)/gi).forEach((id) => featuredSet.add(id));
     parseNumberSet(html, /FeaturedGroups\.aspx\?PrtID=(\d+)/gi).forEach((id) => groupSet.add(id));
     parseNumberSet(html, /GroupedEvents\.aspx\?gid=(\d+)/gi).forEach((id) => groupedSet.add(id));
-  });
+  };
+
+  // Keep "currently visible" IDs first; do not sort by numeric ID because
+  // lower/older IDs can crowd out current-season tournaments.
+  pinIds(scheduleHtml);
+  pinIds(rootGroupHtml);
 
   let frontier = Array.from(groupSet).slice(0, MAX_PRT_PAGES);
   const visited = new Set<number>();
@@ -286,8 +291,8 @@ async function discoverCatalogIds(forceRefresh = false) {
     depth += 1;
   }
 
-  const featuredIds = Array.from(featuredSet).sort((a, b) => a - b).slice(0, MAX_FID_PAGES);
-  const groupedIds = Array.from(groupedSet).sort((a, b) => a - b).slice(0, MAX_GID_PAGES);
+  const featuredIds = Array.from(featuredSet).slice(0, MAX_FID_PAGES);
+  const groupedIds = Array.from(groupedSet).slice(0, MAX_GID_PAGES);
 
   if (featuredIds.length || groupedIds.length) {
     cache.featuredIds = featuredIds;

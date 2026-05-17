@@ -198,12 +198,12 @@ export async function GET(req: NextRequest) {
     const [livePg, livePbr] = await Promise.all([
       withTimeoutFallback(
         fetchPgTournamentCatalog().then((result) => result.items as InventoryItem[]),
-        7000,
+        25000,
         [] as InventoryItem[]
       ),
       withTimeoutFallback(
         fetchPbrTournamentCatalog().then((result) => result.items),
-        7000,
+        15000,
         [] as Awaited<ReturnType<typeof fetchPbrTournamentCatalog>>["items"]
       )
     ]);
