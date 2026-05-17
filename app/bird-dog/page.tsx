@@ -1004,6 +1004,67 @@ function withHotelReturnLeg(plan: PlanItem[], hotelName: string) {
   ];
 }
 
+function parseTravelTitle(title: string) {
+  const match = String(title || "").match(/^Travel\s+\d+:\s*(.+?)\s*->\s*(.+)$/i);
+  if (!match) return null;
+  const from = String(match[1] || "").trim();
+  const to = String(match[2] || "").trim();
+  if (!from || !to) return null;
+  return { from, to };
+}
+
+function renumberTravelLegs(plan: PlanItem[]) {
+  let travelNo = 0;
+  return plan.map((item) => {
+    const parsed = parseTravelTitle(item.title);
+    if (!parsed) return item;
+    travelNo += 1;
+    return {
+      ...item,
+      title: `Travel ${travelNo}: ${parsed.from} -> ${parsed.to}`
+    };
+  });
+}
+
+function applyHotelFirstRoutePlan(
+  plan: PlanItem[],
+  options: { startLabel: string; hotelName: string; hotelAreaHint?: string }
+) {
+  if (!plan.length) return plan;
+  const hotelLabel = String(options.hotelName || "").trim()
+    || (options.hotelAreaHint ? `Recommended hotel near ${options.hotelAreaHint}` : "Recommended hotel");
+  const firstTravelIndex = plan.findIndex((item) => Boolean(parseTravelTitle(item.title)));
+  if (firstTravelIndex < 0) return renumberTravelLegs(plan);
+
+  const firstTravel = plan[firstTravelIndex];
+  const parsedFirst = parseTravelTitle(firstTravel.title);
+  if (!parsedFirst) return renumberTravelLegs(plan);
+
+  const firstTravelMs = Date.parse(String(firstTravel.at || ""));
+  const firstDepartMs = Number.isFinite(firstTravelMs) ? firstTravelMs : Date.now() + 90 * 60 * 1000;
+  const hotelArriveMs = firstDepartMs - 45 * 60 * 1000;
+  const hotelDepartMs = hotelArriveMs - 35 * 60 * 1000;
+
+  const toHotelLeg: PlanItem = {
+    at: new Date(hotelDepartMs).toISOString(),
+    title: `Travel 1: ${options.startLabel} -> ${hotelLabel}`,
+    detail: `Leave by ${formatPlanClock(hotelDepartMs)} · Reach by ${formatPlanClock(hotelArriveMs)} · Check in before scouting.`
+  };
+
+  const nextPlan = [...plan];
+  nextPlan[firstTravelIndex] = {
+    ...firstTravel,
+    title: `Travel 2: ${hotelLabel} -> ${parsedFirst.to}`,
+    detail: `Leave by ${formatPlanClock(firstDepartMs)} · ${String(firstTravel.detail || "").trim() || "Head to your first selected player game."}`
+  };
+
+  return renumberTravelLegs([
+    ...nextPlan.slice(0, firstTravelIndex),
+    toHotelLeg,
+    ...nextPlan.slice(firstTravelIndex)
+  ]);
+}
+
 type TravelEstimate = {
   mode: string;
   minutes: number;
@@ -1029,6 +1090,10 @@ function formatEta(minutes: number) {
   return mins ? `${hours} hr ${mins} min` : `${hours} hr`;
 }
 
+function formatPlanClock(valueMs: number) {
+  return new Date(valueMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 function travelModeByText(from: string, to: string): TravelEstimate {
   const fromState = extractUsStateCode(from);
   const toState = extractUsStateCode(to);
@@ -1043,41 +1108,41 @@ function travelModeByText(from: string, to: string): TravelEstimate {
     || (looksLikeIndiaLocation(to) && looksLikeUsLocation(from));
   if (indiaUs) {
     return {
-      mode: "Multi-leg flight",
-      minutes: 22 * 60,
-      advisory: "No direct flight likely. Same-day scouting may be impossible."
+      mode: "Long-distance transfer",
+      minutes: 12 * 60,
+      advisory: "Long cross-region route. Leave early to stay on schedule."
     };
   }
   if (looksLikeUsLocation(from) && looksLikeUsLocation(to)) {
     return {
-      mode: "Domestic flight + transfer",
-      minutes: 6 * 60 + 30
+      mode: "Intercity transfer",
+      minutes: 4 * 60 + 30
     };
   }
   return {
-    mode: "Flight + transfer",
-    minutes: 11 * 60,
-    advisory: "Estimated from location text; exact flight availability must be checked."
+    mode: "Ground transfer",
+    minutes: 3 * 60 + 30,
+    advisory: "Estimated from location text."
   };
 }
 
 function travelModeByDistance(km: number): TravelEstimate {
   if (km >= 9000) {
     return {
-      mode: "Multi-leg international flight",
-      minutes: Math.round((km / 820) * 60 + 540),
-      advisory: "No direct flight likely. Same-day scouting may be impossible."
+      mode: "Long-distance transfer",
+      minutes: Math.round((km / 420) * 60 + 240),
+      advisory: "Very long route; prioritize early-start games first."
     };
   }
   if (km >= 5500) {
     return {
-      mode: "Long-haul flight",
-      minutes: Math.round((km / 800) * 60 + 420),
-      advisory: "Likely includes connections and airport transfer time."
+      mode: "Long-distance transfer",
+      minutes: Math.round((km / 320) * 60 + 180),
+      advisory: "Long route across regions."
     };
   }
-  if (km >= 1200) return { mode: "Flight + transfer", minutes: Math.round((km / 760) * 60 + 180) };
-  if (km >= 300) return { mode: "Bus / Train + transfer", minutes: Math.round((km / 85) * 60 + 50) };
+  if (km >= 1200) return { mode: "Intercity transfer", minutes: Math.round((km / 110) * 60 + 90) };
+  if (km >= 300) return { mode: "Drive / Cab", minutes: Math.round((km / 85) * 60 + 50) };
   if (km >= 45) return { mode: "Cab / Car", minutes: Math.round((km / 45) * 60 + 20) };
   return { mode: "Local Transfer", minutes: Math.max(20, Math.round((km / 22) * 60 + 10)) };
 }
@@ -2448,7 +2513,7 @@ export default function BirdDogPage() {
     if (!mine) return;
 
     setScheduleForm({
-      flightSource: mine.flight_source || airportStartLabel || "Event Airport",
+      flightSource: mine.flight_source || airportStartLabel || "Event arrival hub",
       flightDestination: mine.flight_destination || "",
       flightArrivalTime: toInputDateTime(mine.flight_arrival_time),
       hotelName: mine.hotel_name || "",
@@ -3250,10 +3315,10 @@ export default function BirdDogPage() {
       point: await geocodeForRoute(candidate.locationQuery)
     })));
 
-    const startLabel = String(preferredSourceText || airportStartLabel || scheduleForm.flightSource || "Event Airport").trim();
+    const startLabel = String(preferredSourceText || airportStartLabel || scheduleForm.flightSource || "Event arrival hub").trim();
     const startPoint = await geocodeForRoute(startLabel);
     const parsedArrival = Date.parse(String(scheduleForm.flightArrivalTime || ""));
-    let cursorMs = Number.isFinite(parsedArrival) ? parsedArrival : (Date.now() + 15 * 60 * 1000);
+    let cursorMs = Number.isFinite(parsedArrival) ? parsedArrival : (Date.now() + 45 * 60 * 1000);
     const travelPlan: PlanItem[] = [];
     const unseenPlayers = new Set(targetPlayers.map((player) => desiredPlayerSelectionKey(player)));
     const usedGameKeys = new Set<string>();
@@ -3291,9 +3356,9 @@ export default function BirdDogPage() {
 
         const destinationLabel = candidate.point?.label || candidate.locationLabel;
         let travelEstimate: TravelEstimate = {
-          mode: "Flight + transfer",
-          minutes: 10 * 60,
-          advisory: "Location data incomplete; verify live travel options."
+          mode: "Ground transfer",
+          minutes: 120,
+          advisory: "Estimated from fallback routing."
         };
 
         const sameLocationByText = normalizeLocationText(prevLabel) === normalizeLocationText(destinationLabel);
@@ -3318,19 +3383,21 @@ export default function BirdDogPage() {
         const waitMinutes = Math.max(0, Math.floor((candidate.startMs - arriveMs) / (60 * 1000)));
         const lateByMinutes = Math.max(0, Math.floor((watchStartMs - candidate.startMs) / (60 * 1000)));
         const minutesToEndAtArrival = Math.max(0, Math.floor((candidate.endMs - arriveMs) / (60 * 1000)));
-        const urgency = Math.max(0, 180 - minutesToEndAtArrival);
+        const urgency = Math.max(0, 240 - minutesToEndAtArrival);
+        const startsSoon = Math.max(0, 120 - Math.max(0, Math.floor((candidate.startMs - arriveMs) / (60 * 1000))));
         const score =
           newCoverage.length * 140
-          + urgency * 1.1
-          - travelEstimate.minutes * 1.3
+          + urgency * 2.2
+          + startsSoon * 1.5
+          - travelEstimate.minutes * 1.15
           - waitMinutes * 0.25
-          - lateByMinutes * 2.2;
+          - lateByMinutes * 3.2;
 
         const reason = minutesToEndAtArrival <= 90
-          ? "timing is critical and this game will end sooner"
+          ? "match window ends soon, so this stop is time-critical"
           : travelEstimate.minutes <= 35
-            ? "this stop is nearest from your current point"
-            : "this stop gives the best balance of timing and travel";
+            ? "this is the nearest next stop from your current point"
+            : "this stop gives the best timing and travel balance";
 
         if (!best || score > best.score) {
           best = {
@@ -3357,7 +3424,9 @@ export default function BirdDogPage() {
         .filter((player) => best.newCoverageKeys.includes(desiredPlayerSelectionKey(player)))
         .map((player) => `${player.name} (${player.team})`);
       const travelDetail = [
-        `${best.travel.mode} · ETA ${formatEta(best.travel.minutes)}`,
+        `Leave by ${formatPlanClock(best.departMs)}`,
+        `Reach by ${formatPlanClock(best.arriveMs)} (${best.travel.mode}, ${formatEta(best.travel.minutes)})`,
+        best.reason,
         best.travel.advisory
       ].filter(Boolean).join(" · ");
 
@@ -3379,7 +3448,7 @@ export default function BirdDogPage() {
       travelPlan.push({
         at: new Date(best.watchStartMs).toISOString(),
         title: `Scout Game ${best.candidate.gameNo}: ${best.candidate.homeTeam} vs ${best.candidate.awayTeam}`,
-        detail: `Prioritize players: ${coveragePlayers.join(", ") || "Selected players"} · Venue: ${best.candidate.locationLabel}`
+        detail: `Prioritize players: ${coveragePlayers.join(", ") || "Selected players"} · Venue: ${best.candidate.locationLabel} · First pitch ${formatPlanClock(best.candidate.startMs)}`
       });
 
       const watchMinutes = Math.min(60, Math.max(25, Math.floor((best.candidate.endMs - best.watchStartMs) / (60 * 1000) * 0.45)));
@@ -3474,7 +3543,7 @@ export default function BirdDogPage() {
 
   function buildInstantRecommendation(targetPlayers: DesiredPlayer[], sourceOverride?: string): PlanItem[] {
     const now = Date.now() + 10 * 60 * 1000;
-    const source = String(sourceOverride || scheduleForm.flightSource || "").trim() || airportStartLabel || "Event Airport";
+    const source = String(sourceOverride || scheduleForm.flightSource || "").trim() || airportStartLabel || "Event arrival hub";
     const destination = scheduleForm.flightDestination.trim()
       || destinationForPlayer(targetPlayers[0])
       || "Tournament Venue";
@@ -3524,7 +3593,7 @@ export default function BirdDogPage() {
       setActiveTab("notes");
     }
     const firstPlayerStart = destinationForPlayer(selectedPlayers[0]) || "";
-    const resolvedSource = String(airportStartLabel || firstPlayerStart || "Event Airport").trim();
+    const resolvedSource = String(airportStartLabel || firstPlayerStart || "Event arrival hub").trim();
     clearSmartScheduleInsights();
     const instantFlightDestination = scheduleForm.flightDestination || firstPlayerStart;
     const instantForm = {
@@ -3538,7 +3607,7 @@ export default function BirdDogPage() {
     setMyGeneratedPlan(instantPlan);
     setAndPersistPlanWorkflowStatus("pending_approval");
     setPlanWorkflowNote("Generating recommendation...");
-    setPlayerSearchStatus(`Generating airport-first optimized route for ${selectedPlayers.length} selected players...`);
+    setPlayerSearchStatus(`Generating smart route for ${selectedPlayers.length} selected players...`);
     try {
       const optimized = await buildOptimizedCoachPlan(selectedPlayers, resolvedSource);
       const hotelHubDestination = optimized.hotelHubDestination || optimized.firstDestination || firstPlayerStart || "";
@@ -3564,15 +3633,20 @@ export default function BirdDogPage() {
       const hotelName = isFeasible
         ? (scheduleForm.hotelName.trim() || await suggestHotelForDestination(hotelHubDestination || destination))
         : "";
-      const basePlan = isFeasible
+      const withHotelPlan = isFeasible
         ? withHotelReturnLeg(optimized.plan, hotelName)
         : optimized.plan;
-      const quotedPlan = await enrichPlanWithLiveQuotes(basePlan);
-      const finalPlan = quotedPlan.plan;
+      const finalPlan = isFeasible
+        ? applyHotelFirstRoutePlan(withHotelPlan, {
+          startLabel: resolvedSource,
+          hotelName,
+          hotelAreaHint: hotelHubDestination || destination || eventLocationHint || ""
+        })
+        : withHotelPlan;
 
       const nextForm = {
         ...scheduleForm,
-        flightSource: resolvedSource || optimized.sourceLabel || "Event Airport",
+        flightSource: resolvedSource || optimized.sourceLabel || "Event arrival hub",
         flightDestination: destination,
         flightArrivalTime: scheduleForm.flightArrivalTime || toInputDateTime(finalPlan[0]?.at || new Date().toISOString()),
         hotelName,
@@ -3598,24 +3672,24 @@ export default function BirdDogPage() {
       await saveSchedule(finalPlan, selectedPlayers, nextForm);
       if (!isFeasible) {
         setPlayerSearchStatus(
-          `Recommendation generated with feasibility warning. ${optimized.blockedReason || "At least one leg is not feasible in the next 12 hours."}${quotedPlan.quoteSummary ? ` ${quotedPlan.quoteSummary}` : ""}`
+          `Recommendation generated with feasibility warning. ${optimized.blockedReason || "At least one leg is not feasible in the next 12 hours."}`
         );
       } else {
-        const locationStatus = `Starting from airport: ${resolvedSource}.`;
+        const locationStatus = `Route starts from your event arrival point and hotel hub.`;
         const hotelStatus = hotelHubDestination
           ? ` Recommended hotel hub: ${hotelHubDestination}.`
           : "";
         const unresolvedStatus = optimized.unresolvedStops
           ? ` ${optimized.unresolvedStops} destination(s) could not be geocoded; fallback travel estimates were used.`
           : "";
-        setPlayerSearchStatus(`Optimized route generated. ${locationStatus}${unresolvedStatus}${hotelStatus} Hotel recommendation added.${quotedPlan.quoteSummary ? ` ${quotedPlan.quoteSummary}` : ""}`);
+        setPlayerSearchStatus(`Optimized route generated. ${locationStatus}${unresolvedStatus}${hotelStatus} Hotel recommendation added.`);
       }
     } catch {
       const emergencyPlan: PlanItem[] = instantPlan;
       if (emergencyPlan.length) {
         const fallbackForm = {
           ...instantForm,
-          flightSource: instantForm.flightSource || resolvedSource || "Event Airport",
+          flightSource: instantForm.flightSource || resolvedSource || "Event arrival hub",
           flightDestination: instantForm.flightDestination || destinationForPlayer(selectedPlayers[0]),
           notes: scheduleForm.notes || "Fallback recommendation generated while map services are unavailable."
         };
@@ -3640,7 +3714,7 @@ export default function BirdDogPage() {
         if (!match) return null;
         const from = match[1]?.trim() || "";
         const to = match[2]?.trim() || "";
-        const mode = String(item.detail || "").split("·")[0]?.trim() || "Flight / Bus";
+        const mode = String(item.detail || "").split("·")[0]?.trim() || "Ground transfer";
         if (!from || !to) return null;
         return {
           at: item.at || new Date().toISOString(),
@@ -3650,86 +3724,6 @@ export default function BirdDogPage() {
         };
       })
       .filter((item): item is { at: string; from: string; to: string; mode: string } => Boolean(item));
-  }
-
-  function quoteDetailLine(quote: BookingQuoteResult) {
-    if (quote.status === "quoted" || quote.status === "booked") {
-      const price = quote.price ? `Price ${quote.price}` : "Price not returned";
-      const detail = String(quote.detail || "").trim();
-      const provider = quote.provider ? ` via ${quote.provider}` : "";
-      return detail
-        ? `Live quote${provider}: ${price} · ${detail}`
-        : `Live quote${provider}: ${price}`;
-    }
-    if (quote.status === "failed") {
-      return `Live quote unavailable: ${String(quote.detail || "No offer found for this leg.")}`;
-    }
-    if (quote.status === "skipped") {
-      return `Live quote unavailable: ${String(quote.detail || "Flight provider is not configured.")}`;
-    }
-    return "";
-  }
-
-  async function enrichPlanWithLiveQuotes(plan: PlanItem[]) {
-    const travelLegs = extractTravelLegsFromPlan(plan);
-    if (!travelLegs.length) return { plan, quoteSummary: "" };
-
-    try {
-      const fallbackName = String(user?.name || "Coach User").trim();
-      const [firstName, ...rest] = fallbackName.split(/\s+/).filter(Boolean);
-      const traveler = {
-        firstName: firstName || "Coach",
-        lastName: rest.join(" ") || "User",
-        dateOfBirth: "1990-01-01",
-        gender: (user?.gender || "UNSPECIFIED") as "MALE" | "FEMALE" | "UNSPECIFIED",
-        email: String(user?.email || ""),
-        phone: String(user?.phone || "9999999999"),
-        countryCallingCode: String(user?.countryCallingCode || "1"),
-        nationality: "US"
-      };
-
-      const quoteRes = await fetch("/api/bookings/approve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          quoteOnly: true,
-          teamName: "",
-          tournamentName: selectedTournament?.name || "",
-          traveler,
-          travelLegs
-        })
-      });
-      if (!quoteRes.ok) {
-        return { plan, quoteSummary: "Live quote provider unavailable right now. Showing route estimate." };
-      }
-      const quoteData = await quoteRes.json().catch(() => ({}));
-      const results = Array.isArray(quoteData?.results) ? quoteData.results as BookingQuoteResult[] : [];
-      if (!results.length) {
-        return { plan, quoteSummary: "No live quotes returned. Showing route estimate." };
-      }
-
-      let travelIdx = 0;
-      const nextPlan = plan.map((item) => {
-        if (!/^travel\s+\d+:/i.test(String(item.title || ""))) return item;
-        const quote = results[travelIdx++];
-        if (!quote) return item;
-        const line = quoteDetailLine(quote);
-        if (!line) return item;
-        return {
-          ...item,
-          detail: `${item.detail} · ${line}`
-        };
-      });
-
-      const quoted = results.filter((item) => item.status === "quoted" || item.status === "booked").length;
-      const failed = results.filter((item) => item.status === "failed").length;
-      if (quoted > 0) {
-        return { plan: nextPlan, quoteSummary: `Live quote check complete: ${quoted} leg(s) priced${failed ? `, ${failed} leg(s) unavailable` : ""}.` };
-      }
-      return { plan: nextPlan, quoteSummary: "Live quote check complete. Flight provider did not return a bookable fare for selected legs." };
-    } catch {
-      return { plan, quoteSummary: "Live quote check failed. Showing route estimate." };
-    }
   }
 
   async function bookApprovedRecommendation() {
@@ -4981,13 +4975,10 @@ export default function BirdDogPage() {
                     Event location: {eventLocationHint || "Unknown"}
                   </p>
                   <p className="muted" style={{ marginBottom: 0 }}>
-                    Smart planner always starts from the event airport: {airportStartLabel || "Event Airport"}.
+                    Smart routing runs in the background and prioritizes game timing first, then shortest travel.
                   </p>
                 </div>
                 <p className="muted" style={{ marginTop: 0 }}>Selected players: {desiredPlayers.length}</p>
-                <p className="muted" style={{ marginTop: 0 }}>
-                  Start point: {airportStartLabel || "Event Airport"}
-                </p>
                 {smartRouteHint ? (
                   <p className="muted" style={{ marginTop: 0 }}>
                     {smartRouteHint}
