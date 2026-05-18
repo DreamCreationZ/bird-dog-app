@@ -521,6 +521,25 @@ function localScheduleFallbackKey(user: SessionUser | null) {
   return `${LOCAL_SCHEDULE_FALLBACK_KEY}:${user.orgId}:${user.userId}`;
 }
 
+function latestScheduleTimestampMs(schedule: CoachSchedule | null | undefined) {
+  if (!schedule) return NaN;
+  const planTimes = Array.isArray(schedule.generated_plan)
+    ? schedule.generated_plan
+      .map((item) => Date.parse(String(item?.at || "")))
+      .filter((value) => Number.isFinite(value))
+    : [];
+  if (planTimes.length) return Math.max(...planTimes);
+  const flightAt = Date.parse(String(schedule.flight_arrival_time || ""));
+  if (Number.isFinite(flightAt)) return flightAt;
+  return NaN;
+}
+
+function isScheduleExpired(schedule: CoachSchedule | null | undefined) {
+  const latestAt = latestScheduleTimestampMs(schedule);
+  if (!Number.isFinite(latestAt)) return false;
+  return latestAt < Date.now();
+}
+
 function normalizeStorageScope(value: string) {
   const normalized = String(value || "")
     .toLowerCase()
@@ -1635,6 +1654,37 @@ export default function BirdDogPage() {
 
     return Array.from(grouped.values()).sort((left, right) => left.daySort - right.daySort);
   }, [games]);
+  const playerTeamTimingBySelectionKey = useMemo(() => {
+    const map = new Map<string, string>();
+    const nowMs = Date.now();
+    desiredPlayers.forEach((player) => {
+      const key = desiredPlayerSelectionKey(player);
+      const matches = games
+        .map((game) => {
+          const startMs = Date.parse(String(game.startTime || ""));
+          if (!Number.isFinite(startMs)) return null;
+          if (!teamsLookEquivalent(player.team, game.homeTeam) && !teamsLookEquivalent(player.team, game.awayTeam)) return null;
+          const opponent = teamsLookEquivalent(player.team, game.homeTeam) ? game.awayTeam : game.homeTeam;
+          return {
+            startMs,
+            opponent: String(opponent || "TBD"),
+            field: String(game.field || "Field TBD")
+          };
+        })
+        .filter((item): item is { startMs: number; opponent: string; field: string } => Boolean(item))
+        .sort((a, b) => a.startMs - b.startMs);
+      if (!matches.length) {
+        map.set(key, "Time TBD");
+        return;
+      }
+      const next = matches.find((item) => item.startMs >= nowMs) || matches[0];
+      map.set(
+        key,
+        `${new Date(next.startMs).toLocaleString()} · vs ${next.opponent} · ${next.field}`
+      );
+    });
+    return map;
+  }, [desiredPlayers, games]);
   const selectedTournamentTeams = selectedTournament?.teams || [];
   const teamsByNormalizedName = useMemo(() => {
     const map = new Map<string, TeamRef>();
@@ -2533,7 +2583,7 @@ export default function BirdDogPage() {
     if (!raw) return null;
     const parsed = parseJsonSafe<CoachSchedule | null>(raw, null);
     if (!parsed || typeof parsed !== "object") return null;
-    return {
+    const next = {
       id: String(parsed.id || `local-${user?.userId || "coach"}`),
       user_id: String(parsed.user_id || user?.userId || ""),
       coach_name: String(parsed.coach_name || user?.name || "Coach"),
@@ -2547,6 +2597,11 @@ export default function BirdDogPage() {
       generated_plan: Array.isArray(parsed.generated_plan) ? parsed.generated_plan : [],
       updated_at: String(parsed.updated_at || new Date().toISOString())
     };
+    if (isScheduleExpired(next)) {
+      safeLocalRemove(key);
+      return null;
+    }
+    return next;
   }
 
   function writeLocalFallbackSchedule(schedule: CoachSchedule) {
@@ -2596,7 +2651,20 @@ export default function BirdDogPage() {
 
   function hydrateMySchedule(data: CoachSchedule[]) {
     const mine = data.find((item) => item.user_id === user?.userId);
-    if (!mine) return;
+    if (!mine) {
+      setMyGeneratedPlan([]);
+      setAndPersistPlanWorkflowStatus("draft");
+      setPlanWorkflowNote("");
+      setScheduleForm((prev) => ({
+        ...prev,
+        flightSource: airportStartLabel || prev.flightSource || "Event arrival hub",
+        flightDestination: "",
+        flightArrivalTime: "",
+        hotelName: "",
+        notes: ""
+      }));
+      return;
+    }
 
     setScheduleForm({
       flightSource: mine.flight_source || airportStartLabel || "Event arrival hub",
@@ -2633,12 +2701,39 @@ export default function BirdDogPage() {
     }
     const data = await res.json();
     const remoteList: CoachSchedule[] = data.schedules || [];
+    const remoteMine = remoteList.find((item) => item.user_id === user?.userId) || null;
+    if (!remoteMine) {
+      const key = localScheduleFallbackKey(user);
+      if (key) safeLocalRemove(key);
+    }
     const local = readLocalFallbackSchedule();
     const scheduleList = local && !remoteList.some((item) => item.user_id === local.user_id)
       ? [local, ...remoteList]
       : remoteList;
     setSchedules(scheduleList);
     hydrateMySchedule(scheduleList);
+  }
+
+  async function removeMySchedule() {
+    const key = localScheduleFallbackKey(user);
+    const local = readLocalFallbackSchedule();
+    const hasServerSchedule = schedules.some((item) => item.user_id === user?.userId);
+    if (!hasServerSchedule && !local && !myGeneratedPlan.length) {
+      setPlayerSearchStatus("No schedule found to remove.");
+      return;
+    }
+    const res = await fetch("/api/schedules", { method: "DELETE" });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setPlayerSearchStatus(body?.error || `Unable to remove schedule (${res.status}).`);
+      return;
+    }
+    if (key) safeLocalRemove(key);
+    const data = await res.json().catch(() => ({}));
+    const nextList: CoachSchedule[] = Array.isArray(data?.schedules) ? data.schedules : [];
+    setSchedules(nextList);
+    hydrateMySchedule(nextList);
+    setPlayerSearchStatus("Schedule removed.");
   }
 
   async function fetchLiveLocations() {
@@ -4581,6 +4676,10 @@ export default function BirdDogPage() {
     () => new Set(desiredPlayers.map((item) => desiredPlayerSelectionKey(item))),
     [desiredPlayers]
   );
+  const myOwnSchedule = useMemo(
+    () => schedules.find((item) => item.user_id === user?.userId) || null,
+    [schedules, user?.userId]
+  );
   const shareableSchedules = useMemo(
     () => schedules.filter((item) => isShareableSchedule(item)),
     [schedules]
@@ -5082,13 +5181,24 @@ export default function BirdDogPage() {
       <section className="panel" id="generated-schedule-panel" ref={generatedSchedulePanelRef}>
         <div className="row wrap" style={{ alignItems: "center", justifyContent: "space-between", gap: 8 }}>
           <h3 style={{ marginTop: 0, marginBottom: 0 }}>My Players & Schedule</h3>
-          <button
-            type="button"
-            onClick={() => void generateScheduleFromSmartPlayers({ keepActiveTab: true })}
-            disabled={!desiredPlayers.length}
-          >
-            Create Schedule
-          </button>
+          <div className="row wrap" style={{ gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => void generateScheduleFromSmartPlayers({ keepActiveTab: true })}
+              disabled={!desiredPlayers.length}
+            >
+              Create Schedule
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => void removeMySchedule()}
+              disabled={!myGeneratedPlan.length && !myOwnSchedule}
+              title={!myGeneratedPlan.length && !myOwnSchedule ? "No saved schedule yet." : "Remove current saved schedule."}
+            >
+              Remove Schedule
+            </button>
+          </div>
         </div>
         <div style={{ marginTop: 8 }}>
           <p className="muted" style={{ marginTop: 0 }}>
@@ -5115,6 +5225,7 @@ export default function BirdDogPage() {
                   <th>Order</th>
                   <th>Player</th>
                   <th>Team</th>
+                  <th>Playing Time</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -5124,6 +5235,7 @@ export default function BirdDogPage() {
                     <td>{index + 1}</td>
                     <td>{player.name}</td>
                     <td>{player.team}</td>
+                    <td>{playerTeamTimingBySelectionKey.get(desiredPlayerSelectionKey(player)) || "Time TBD"}</td>
                     <td className="action-cell">
                       <button
                         type="button"
@@ -5152,7 +5264,7 @@ export default function BirdDogPage() {
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan={4}>No players selected yet. Open any team from Tournament Schedule and add players from Team Roster.</td>
+                    <td colSpan={5}>No players selected yet. Open any team from Tournament Schedule and add players from Team Roster.</td>
                   </tr>
                 )}
               </tbody>

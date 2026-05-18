@@ -297,8 +297,21 @@ export async function listCoachSchedules(orgId: string): Promise<CoachSchedule[]
   }));
 }
 
+function latestScheduleAtMs(schedule: CoachSchedule) {
+  const planTimes = Array.isArray(schedule.generated_plan)
+    ? schedule.generated_plan
+      .map((step) => Date.parse(String(step?.at || "")))
+      .filter((value) => Number.isFinite(value))
+    : [];
+  if (planTimes.length) return Math.max(...planTimes);
+  const flightAt = Date.parse(String(schedule.flight_arrival_time || ""));
+  if (Number.isFinite(flightAt)) return flightAt;
+  return NaN;
+}
+
 export async function cleanupPastCoachSchedules(orgId: string) {
   const nowIso = new Date().toISOString();
+  const nowMs = Date.now();
   await supabaseRequest("coach_schedules", {
     method: "DELETE",
     query: {
@@ -307,6 +320,37 @@ export async function cleanupPastCoachSchedules(orgId: string) {
     },
     prefer: "return=minimal"
   }).catch(() => undefined);
+
+  const schedules = await listCoachSchedules(orgId).catch(() => [] as CoachSchedule[]);
+  const expiredUserIds = schedules
+    .filter((item) => {
+      const latestAt = latestScheduleAtMs(item);
+      return Number.isFinite(latestAt) && latestAt < nowMs;
+    })
+    .map((item) => item.user_id)
+    .filter(Boolean);
+  if (!expiredUserIds.length) return;
+  await Promise.allSettled(expiredUserIds.map((userId) =>
+    supabaseRequest("coach_schedules", {
+      method: "DELETE",
+      query: {
+        org_id: `eq.${orgId}`,
+        user_id: `eq.${userId}`
+      },
+      prefer: "return=minimal"
+    })
+  ));
+}
+
+export async function deleteCoachScheduleForUser(orgId: string, userId: string) {
+  await supabaseRequest("coach_schedules", {
+    method: "DELETE",
+    query: {
+      org_id: `eq.${orgId}`,
+      user_id: `eq.${userId}`
+    },
+    prefer: "return=minimal"
+  });
 }
 
 export async function upsertCoachLiveLocation(input: {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cleanupPastCoachSchedules, listCoachSchedules, upsertCoachSchedule } from "@/lib/birddog/repository";
+import { cleanupPastCoachSchedules, deleteCoachScheduleForUser, listCoachSchedules, upsertCoachSchedule } from "@/lib/birddog/repository";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 
 function domainFromEmail(email: string | null | undefined) {
@@ -86,5 +86,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, schedules: sameDomainSchedulesOnly(session.email, session.userId, schedules) });
   } catch (error) {
     return NextResponse.json({ error: "Failed to save schedule", detail: String(error) }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  const session = readSessionFromRequest(req);
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    await deleteCoachScheduleForUser(session.orgId, session.userId);
+    await cleanupPastCoachSchedules(session.orgId);
+    const schedules = await listCoachSchedules(session.orgId);
+    return NextResponse.json({ ok: true, schedules: sameDomainSchedulesOnly(session.email, session.userId, schedules) });
+  } catch (error) {
+    return NextResponse.json({ error: "Failed to delete schedule", detail: String(error) }, { status: 500 });
   }
 }
