@@ -1313,7 +1313,7 @@ export default function BirdDogPage() {
   const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
   const [openError, setOpenError] = useState("");
   const [selectedInventorySlug, setSelectedInventorySlug] = useState("");
-  const [activeTab, setActiveTab] = useState<"tournaments" | "notes" | "profile">("tournaments");
+  const [activeTab, setActiveTab] = useState<"tournaments" | "notes" | "myPlayersSchedule" | "profile">("tournaments");
   const [inlineTeamNoteDrafts, setInlineTeamNoteDrafts] = useState<Record<string, InlineTeamNoteDraft>>({});
   const [inlineTeamNoteStatuses, setInlineTeamNoteStatuses] = useState<Record<string, string>>({});
   const [inlineTeamNoteRecorderState, setInlineTeamNoteRecorderState] = useState<RecorderState>("idle");
@@ -1777,8 +1777,8 @@ export default function BirdDogPage() {
     const inventorySlug = params.get("inventorySlug");
     const tournamentId = params.get("tournamentId");
     const focus = params.get("focus");
-    if (tab === "coaches" || tab === "schedule" || tab === "bestPlayers") {
-      setActiveTab("notes");
+    if (tab === "coaches" || tab === "schedule" || tab === "bestPlayers" || tab === "myPlayers" || tab === "myPlayersSchedule") {
+      setActiveTab("myPlayersSchedule");
     } else if (tab === "tournaments" || tab === "notes" || tab === "profile") {
       setActiveTab(tab);
     }
@@ -1943,7 +1943,7 @@ export default function BirdDogPage() {
     if (autoCreateScheduleRunKeyRef.current === runKey) return;
     autoCreateScheduleRunKeyRef.current = runKey;
 
-    setActiveTab("notes");
+    setActiveTab("myPlayersSchedule");
     setDesiredPlayersAndPersist(sourcePlayers);
     void generateScheduleFromSmartPlayers({
       keepActiveTab: true,
@@ -1966,7 +1966,7 @@ export default function BirdDogPage() {
 
   useEffect(() => {
     if (!focusGeneratedScheduleRequested) return;
-    if (activeTab !== "notes") return;
+    if (activeTab !== "myPlayersSchedule") return;
     if (!myGeneratedPlan.length && !desiredPlayers.length) return;
     focusGeneratedSchedulePanel();
   }, [activeTab, desiredPlayers.length, focusGeneratedScheduleRequested, myGeneratedPlan.length]);
@@ -3572,7 +3572,7 @@ export default function BirdDogPage() {
       setPlanWorkflowNote(msg);
     }
     if (options?.keepActiveTab !== false) {
-      setActiveTab("notes");
+      setActiveTab("myPlayersSchedule");
     }
     const firstPlayerStart = destinationForPlayer(selectedPlayers[0]) || "";
     const resolvedSource = String(airportStartLabel || firstPlayerStart || "Event arrival hub").trim();
@@ -3742,7 +3742,7 @@ export default function BirdDogPage() {
       safeLocalRemove(BOOKING_SUMMARY_KEY);
       setAndPersistPlanWorkflowStatus("pending_approval");
       setPlanWorkflowNote("Opening booking review in a new tab...");
-      const url = `/bookings/review?returnTo=${encodeURIComponent("/bird-dog?tab=notes")}`;
+      const url = `/bookings/review?returnTo=${encodeURIComponent("/bird-dog?tab=myPlayersSchedule")}`;
       const popup = window.open(url, "_blank", "noopener,noreferrer");
       if (!popup) {
         router.push(url);
@@ -4513,6 +4513,7 @@ export default function BirdDogPage() {
   const showTournaments = activeTab === "tournaments";
   const showNotes = activeTab === "notes";
   const showProfile = activeTab === "profile";
+  const showMyPlayersSchedule = activeTab === "myPlayersSchedule";
 
   useEffect(() => {
     if (!user) return;
@@ -4698,7 +4699,17 @@ export default function BirdDogPage() {
                   setMenuOpen(false);
                 }}
               >
-                Player Selection
+                Tournament Schedule
+              </button>
+              <button
+                type="button"
+                className={activeTab === "myPlayersSchedule" ? "active" : ""}
+                onClick={() => {
+                  setActiveTab("myPlayersSchedule");
+                  setMenuOpen(false);
+                }}
+              >
+                My Players & Schedule
               </button>
               <button
                 type="button"
@@ -4943,122 +4954,122 @@ export default function BirdDogPage() {
               </p>
             )}
           </div>
-          <div className="panel" style={{ marginBottom: 10 }} id="generated-schedule-panel" ref={generatedSchedulePanelRef}>
-            <div className="row wrap" style={{ alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-              <h3 style={{ marginTop: 0, marginBottom: 0 }}>Selected Players</h3>
-              <button
-                type="button"
-                onClick={() => void generateScheduleFromSmartPlayers({ keepActiveTab: true })}
-                disabled={!desiredPlayers.length}
-              >
-                Create Schedule
-              </button>
-            </div>
-            {desiredPlayers.length ? (
-              <div style={{ marginTop: 8 }}>
-                <div className="panel" style={{ marginBottom: 10 }}>
-                  <p className="muted" style={{ marginTop: 0 }}>
-                    Event location: {eventLocationHint || "Unknown"}
-                  </p>
-                  <p className="muted" style={{ marginBottom: 0 }}>
-                    Smart routing runs in the background and prioritizes game timing first, then shortest travel.
-                  </p>
-                </div>
-                <p className="muted" style={{ marginTop: 0 }}>Selected players: {desiredPlayers.length}</p>
-                {smartRouteHint ? (
-                  <p className="muted" style={{ marginTop: 0 }}>
-                    {smartRouteHint}
-                  </p>
-                ) : null}
-                {recommendedHotelHub ? (
-                  <p className="muted" style={{ marginTop: 0 }}>
-                    Hotel hub (nearest for selected players): {recommendedHotelHub}
-                    {scheduleForm.hotelName ? ` · Recommended stay: ${scheduleForm.hotelName}` : ""}
-                  </p>
-                ) : null}
-                <div className="table-wrap" style={{ marginTop: 6 }}>
-                  <table className="roster-table">
-                    <thead>
-                      <tr>
-                        <th>Order</th>
-                        <th>Player</th>
-                        <th>Team</th>
-                        <th>Action</th>
+        </div>
+      </section>
+      ) : null}
+
+      {showMyPlayersSchedule ? (
+      <section className="panel" id="generated-schedule-panel" ref={generatedSchedulePanelRef}>
+        <div className="row wrap" style={{ alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <h3 style={{ marginTop: 0, marginBottom: 0 }}>My Players & Schedule</h3>
+          <button
+            type="button"
+            onClick={() => void generateScheduleFromSmartPlayers({ keepActiveTab: true })}
+            disabled={!desiredPlayers.length}
+          >
+            Create Schedule
+          </button>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Event location: {eventLocationHint || "Unknown"}
+          </p>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Selected players: {desiredPlayers.length}
+          </p>
+          {smartRouteHint ? (
+            <p className="muted" style={{ marginTop: 0 }}>
+              {smartRouteHint}
+            </p>
+          ) : null}
+          {recommendedHotelHub ? (
+            <p className="muted" style={{ marginTop: 0 }}>
+              Hotel hub (nearest for selected players): {recommendedHotelHub}
+              {scheduleForm.hotelName ? ` · Recommended stay: ${scheduleForm.hotelName}` : ""}
+            </p>
+          ) : null}
+          <div className="table-wrap" style={{ marginTop: 6 }}>
+            <table className="roster-table">
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Player</th>
+                  <th>Team</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {desiredPlayers.length ? desiredPlayers.map((player, index) => (
+                  <tr key={desiredPlayerSelectionKey(player)}>
+                    <td>{index + 1}</td>
+                    <td>{player.name}</td>
+                    <td>{player.team}</td>
+                    <td className="action-cell">
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => moveDesiredPlayer(desiredPlayerSelectionKey(player), -1)}
+                        disabled={index === 0}
+                      >
+                        Up
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => moveDesiredPlayer(desiredPlayerSelectionKey(player), 1)}
+                        disabled={index === desiredPlayers.length - 1}
+                      >
+                        Down
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => removeDesiredPlayer(desiredPlayerSelectionKey(player))}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={4}>No players selected yet. Open any team from Tournament Schedule and add players from Team Roster.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          {playerSearchStatus ? (
+            <p className="muted" style={{ marginTop: 8 }}>
+              {playerSearchStatus}
+            </p>
+          ) : null}
+          <div style={{ marginTop: 10 }}>
+            <h4 style={{ marginTop: 0, marginBottom: 6 }}>Coach Schedule Preview</h4>
+            {myGeneratedPlan.length ? (
+              <div className="table-wrap">
+                <table className="roster-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Time</th>
+                      <th>Step</th>
+                      <th>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {myGeneratedPlan.map((step, idx) => (
+                      <tr key={`${step.at}-${idx}`}>
+                        <td>{idx + 1}</td>
+                        <td>{new Date(step.at).toLocaleString()}</td>
+                        <td>{step.title}</td>
+                        <td>{step.detail}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {desiredPlayers.map((player, index) => (
-                        <tr key={desiredPlayerSelectionKey(player)}>
-                          <td>{index + 1}</td>
-                          <td>{player.name}</td>
-                          <td>{player.team}</td>
-                          <td className="action-cell">
-                            <button
-                              type="button"
-                              className="secondary"
-                              onClick={() => moveDesiredPlayer(desiredPlayerSelectionKey(player), -1)}
-                              disabled={index === 0}
-                            >
-                              Up
-                            </button>
-                            <button
-                              type="button"
-                              className="secondary"
-                              onClick={() => moveDesiredPlayer(desiredPlayerSelectionKey(player), 1)}
-                              disabled={index === desiredPlayers.length - 1}
-                            >
-                              Down
-                            </button>
-                            <button
-                              type="button"
-                              className="secondary"
-                              onClick={() => removeDesiredPlayer(desiredPlayerSelectionKey(player))}
-                            >
-                              Remove
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {playerSearchStatus ? (
-                  <p className="muted" style={{ marginTop: 8 }}>
-                    {playerSearchStatus}
-                  </p>
-                ) : null}
-                {myGeneratedPlan.length ? (
-                  <div style={{ marginTop: 10 }}>
-                    <h4 style={{ marginTop: 0, marginBottom: 6 }}>Coach Schedule Preview</h4>
-                    <div className="table-wrap">
-                      <table className="roster-table">
-                        <thead>
-                          <tr>
-                            <th>#</th>
-                            <th>Time</th>
-                            <th>Step</th>
-                            <th>Details</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {myGeneratedPlan.map((step, idx) => (
-                            <tr key={`${step.at}-${idx}`}>
-                              <td>{idx + 1}</td>
-                              <td>{new Date(step.at).toLocaleString()}</td>
-                              <td>{step.title}</td>
-                              <td>{step.detail}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                ) : null}
+                    ))}
+                  </tbody>
+                </table>
               </div>
             ) : (
-              <p className="muted" style={{ marginTop: 8 }}>
-                No players selected yet. Open any team from the schedule above and add players from Team Roster.
-              </p>
+              <p className="muted" style={{ marginTop: 0 }}>No schedule created yet.</p>
             )}
           </div>
         </div>
