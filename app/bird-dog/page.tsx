@@ -1071,6 +1071,93 @@ function formatPlanClock(valueMs: number) {
   return new Date(valueMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
+const MONTH_TOKEN_TO_INDEX: Record<string, number> = {
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11
+};
+
+function monthTokenToIndex(token: string) {
+  return MONTH_TOKEN_TO_INDEX[String(token || "").trim().slice(0, 3).toLowerCase()] ?? null;
+}
+
+function parseTournamentDateStartMs(dateValue: string) {
+  const raw = String(dateValue || "").trim();
+  if (!raw) return null;
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    const year = Number(iso[1]);
+    const month = Number(iso[2]);
+    const day = Number(iso[3]);
+    return new Date(year, month - 1, day, 9, 0, 0, 0).getTime();
+  }
+  const us = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (us) {
+    const month = Number(us[1]);
+    const day = Number(us[2]);
+    const year = Number(us[3]);
+    return new Date(year, month - 1, day, 9, 0, 0, 0).getTime();
+  }
+  const parsed = Date.parse(raw);
+  if (Number.isFinite(parsed)) {
+    const d = new Date(parsed);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 9, 0, 0, 0).getTime();
+  }
+  return null;
+}
+
+function parseDisplayDateStartMs(displayDate: string, fallbackYear: number) {
+  const raw = String(displayDate || "").replace(/[–—]/g, "-").replace(/\s+/g, " ").trim();
+  if (!raw) return null;
+
+  const usDate = raw.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (usDate) {
+    const month = Number(usDate[1]);
+    const day = Number(usDate[2]);
+    const year = Number(usDate[3]);
+    return new Date(year, month - 1, day, 9, 0, 0, 0).getTime();
+  }
+
+  const range = raw.match(/^([A-Za-z]+)\s*(\d{1,2})\s*-\s*([A-Za-z]+)?\s*(\d{1,2})(?:,\s*(\d{4}))?$/);
+  if (range) {
+    const monthToken = range[1];
+    const day = Number(range[2]);
+    const explicitYear = range[5] ? Number(range[5]) : fallbackYear;
+    const monthIdx = monthTokenToIndex(monthToken);
+    if (monthIdx != null && Number.isFinite(day)) {
+      return new Date(explicitYear, monthIdx, day, 9, 0, 0, 0).getTime();
+    }
+  }
+
+  const single = raw.match(/^([A-Za-z]+)\s*(\d{1,2})(?:,\s*(\d{4}))?$/);
+  if (single) {
+    const monthIdx = monthTokenToIndex(single[1]);
+    const day = Number(single[2]);
+    const year = single[3] ? Number(single[3]) : fallbackYear;
+    if (monthIdx != null && Number.isFinite(day)) {
+      return new Date(year, monthIdx, day, 9, 0, 0, 0).getTime();
+    }
+  }
+
+  return null;
+}
+
+function extractYearFromTournamentLabel(nameOrDate: string, fallbackYear: number) {
+  const match = String(nameOrDate || "").match(/\b(20\d{2})\b/);
+  if (!match) return fallbackYear;
+  const year = Number(match[1]);
+  return Number.isFinite(year) ? year : fallbackYear;
+}
+
 function travelModeByText(from: string, to: string): TravelEstimate {
   const fromState = extractUsStateCode(from);
   const toState = extractUsStateCode(to);
@@ -1399,6 +1486,23 @@ export default function BirdDogPage() {
     if (/\bairport\b/i.test(base)) return base;
     return `${base} Airport`;
   }, [eventLocationHint]);
+  const tournamentPlanningStartMs = useMemo(() => {
+    const gameStarts = (selectedTournament?.games || [])
+      .map((game) => Date.parse(String(game.startTime || "")))
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b);
+    if (gameStarts.length) return gameStarts[0];
+
+    const fallbackYear = extractYearFromTournamentLabel(
+      `${selectedInventory?.name || ""} ${selectedTournament?.name || ""} ${selectedInventory?.displayDate || ""}`,
+      new Date().getFullYear()
+    );
+    const fromTournamentDate = parseTournamentDateStartMs(String(selectedTournament?.date || ""));
+    if (fromTournamentDate != null) return fromTournamentDate;
+    const fromInventoryDate = parseDisplayDateStartMs(String(selectedInventory?.displayDate || ""), fallbackYear);
+    if (fromInventoryDate != null) return fromInventoryDate;
+    return Date.now() + 2 * 60 * 60 * 1000;
+  }, [selectedInventory?.displayDate, selectedInventory?.name, selectedTournament?.date, selectedTournament?.games, selectedTournament?.name]);
 
   useEffect(() => {
     if (!airportStartLabel) return;
@@ -3212,6 +3316,7 @@ export default function BirdDogPage() {
   function buildCoachGameCandidates(targetPlayers: DesiredPlayer[]): CoachGameCandidate[] {
     const games = selectedTournament?.games || [];
     const now = Date.now();
+    const baselineStartMs = Math.max(tournamentPlanningStartMs, now);
     const GAME_MINUTES = 125;
 
     if (!games.length) {
@@ -3227,7 +3332,7 @@ export default function BirdDogPage() {
         }
       });
       return Array.from(grouped.values()).slice(0, 24).map((item, index) => {
-        const startMs = now + (index + 1) * 75 * 60 * 1000;
+        const startMs = baselineStartMs + index * 75 * 60 * 1000;
         return {
           key: `fallback:${index}`,
           gameNo: `#${index + 1}`,
@@ -3253,7 +3358,7 @@ export default function BirdDogPage() {
       matchedPlayers.forEach((player) => matchedPlayerKeys.add(desiredPlayerSelectionKey(player)));
       const startAt = Date.parse(String(game.startTime || ""));
       const hasValidStart = Number.isFinite(startAt);
-      const startMs = hasValidStart ? startAt : (now + (index + 1) * 90 * 60 * 1000);
+      const startMs = hasValidStart ? startAt : (baselineStartMs + index * 90 * 60 * 1000);
       return {
         key: String(game.id || `game:${index}`),
         gameNo: extractGameNoLabel(game, index),
@@ -3270,9 +3375,12 @@ export default function BirdDogPage() {
     const candidates = mapped.filter((item): item is CoachGameCandidate => Boolean(item));
 
     const fallbackUnmatched = targetPlayers.filter((player) => !matchedPlayerKeys.has(desiredPlayerSelectionKey(player)));
+    const candidatesBaseline = candidates.length
+      ? Math.min(...candidates.map((item) => item.startMs))
+      : baselineStartMs;
     fallbackUnmatched.forEach((player, index) => {
       const destination = destinationForPlayer(player);
-      const startMs = now + (index + 1) * 85 * 60 * 1000;
+      const startMs = candidatesBaseline + (index + 1) * 85 * 60 * 1000;
       candidates.push({
         key: `unmatched:${desiredPlayerSelectionKey(player)}`,
         gameNo: `#U${index + 1}`,
@@ -3300,7 +3408,19 @@ export default function BirdDogPage() {
     const startLabel = String(preferredSourceText || airportStartLabel || scheduleForm.flightSource || "Event arrival hub").trim();
     const startPoint = await geocodeForRoute(startLabel);
     const parsedArrival = Date.parse(String(scheduleForm.flightArrivalTime || ""));
-    let cursorMs = Number.isFinite(parsedArrival) ? parsedArrival : (Date.now() + 45 * 60 * 1000);
+    const gameStarts = geocoded
+      .map((candidate) => candidate.startMs)
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b);
+    const firstGameStartMs = gameStarts[0] ?? tournamentPlanningStartMs;
+    const lastGameStartMs = gameStarts.length ? gameStarts[gameStarts.length - 1] : firstGameStartMs;
+    const defaultArrivalMs = Math.max(Date.now() + 30 * 60 * 1000, firstGameStartMs - 120 * 60 * 1000);
+    let cursorMs = Number.isFinite(parsedArrival) ? parsedArrival : defaultArrivalMs;
+    const tooEarly = cursorMs < (firstGameStartMs - 24 * 60 * 60 * 1000);
+    const tooLate = cursorMs > (lastGameStartMs + 24 * 60 * 60 * 1000);
+    if (tooEarly || tooLate) {
+      cursorMs = defaultArrivalMs;
+    }
     const travelPlan: PlanItem[] = [];
     const unseenPlayers = new Set(targetPlayers.map((player) => desiredPlayerSelectionKey(player)));
     const usedGameKeys = new Set<string>();
@@ -3524,7 +3644,7 @@ export default function BirdDogPage() {
   }
 
   function buildInstantRecommendation(targetPlayers: DesiredPlayer[], sourceOverride?: string): PlanItem[] {
-    const now = Date.now() + 10 * 60 * 1000;
+    const now = Math.max(Date.now() + 10 * 60 * 1000, tournamentPlanningStartMs - 90 * 60 * 1000);
     const source = String(sourceOverride || scheduleForm.flightSource || "").trim() || airportStartLabel || "Event arrival hub";
     const destination = scheduleForm.flightDestination.trim()
       || destinationForPlayer(targetPlayers[0])
