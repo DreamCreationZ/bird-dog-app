@@ -9,6 +9,25 @@ import { fetchPbrTournamentCatalog } from "@/lib/birddog/pbrTournamentCatalog";
 import { fetchPgTournamentCatalog } from "@/lib/birddog/pgTournamentCatalog";
 
 const FALLBACK_UNLOCK_COOKIE = "bird_dog_fallback_unlocks";
+const LIVE_CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
+
+type LiveCatalogCache = {
+  fetchedAt: number;
+  pg: InventoryItem[];
+  pbr: InventoryItem[];
+};
+
+function getLiveCatalogCache() {
+  const g = globalThis as unknown as { __BIRD_DOG_LIVE_CATALOG_CACHE__?: LiveCatalogCache };
+  if (!g.__BIRD_DOG_LIVE_CATALOG_CACHE__) {
+    g.__BIRD_DOG_LIVE_CATALOG_CACHE__ = {
+      fetchedAt: 0,
+      pg: [],
+      pbr: []
+    };
+  }
+  return g.__BIRD_DOG_LIVE_CATALOG_CACHE__;
+}
 
 function fallbackUnlockedSlugs(req: NextRequest) {
   const raw = req.cookies.get(FALLBACK_UNLOCK_COOKIE)?.value || "";
@@ -115,6 +134,14 @@ function buildFallbackInventory() {
   return base;
 }
 
+function isSeedOnlyInventory(items: InventoryItem[]) {
+  if (!items.length) return true;
+  const seedSlugs = new Set(INVENTORY_SEED.map((item) => item.slug));
+  const hasLiveSlug = items.some((item) => item.slug.startsWith("pg-live-") || item.slug.startsWith("pbr-live-"));
+  if (hasLiveSlug) return false;
+  return items.every((item) => seedSlugs.has(item.slug));
+}
+
 function mapInventoryForResponse(
   inventory: InventoryItem[],
   previewUnlockAll: boolean,
@@ -195,23 +222,47 @@ export async function GET(req: NextRequest) {
         inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, cookieUnlockedSet)
       });
     }
-    const [livePg, livePbr] = await Promise.all([
-      withTimeoutFallback(
-        fetchPgTournamentCatalog().then((result) => result.items as InventoryItem[]),
-        25000,
-        [] as InventoryItem[]
-      ),
-      withTimeoutFallback(
-        fetchPbrTournamentCatalog().then((result) => result.items),
-        15000,
-        [] as Awaited<ReturnType<typeof fetchPbrTournamentCatalog>>["items"]
-      )
-    ]);
-    const mergedInventory = applyLiveInventory(inventory as InventoryItem[], livePg, livePbr);
+    const liveCatalogCache = getLiveCatalogCache();
+    const hasFreshLiveCache =
+      Date.now() - liveCatalogCache.fetchedAt < LIVE_CATALOG_CACHE_TTL_MS
+      && (liveCatalogCache.pg.length > 0 || liveCatalogCache.pbr.length > 0);
+
+    let livePg = hasFreshLiveCache ? liveCatalogCache.pg : [];
+    let livePbr = hasFreshLiveCache ? liveCatalogCache.pbr : [];
+    if (!hasFreshLiveCache) {
+      const [nextLivePg, nextLivePbr] = await Promise.all([
+        withTimeoutFallback(
+          fetchPgTournamentCatalog().then((result) => result.items as InventoryItem[]),
+          7000,
+          liveCatalogCache.pg
+        ),
+        withTimeoutFallback(
+          fetchPbrTournamentCatalog().then((result) => result.items as InventoryItem[]),
+          7000,
+          liveCatalogCache.pbr
+        )
+      ]);
+      livePg = nextLivePg;
+      livePbr = nextLivePbr;
+      if (livePg.length > 0 || livePbr.length > 0) {
+        liveCatalogCache.fetchedAt = Date.now();
+        liveCatalogCache.pg = livePg;
+        liveCatalogCache.pbr = livePbr;
+      }
+    }
+
+    let mergedInventory = applyLiveInventory(inventory as InventoryItem[], livePg, livePbr);
+    if (!livePg.length && !livePbr.length && isSeedOnlyInventory(mergedInventory)) {
+      // Avoid flashing stale seeded tournaments as if they were current live events.
+      mergedInventory = [];
+    }
     const unlockedSet = new Set([...unlockedSlugs, ...cookieUnlockedSet]);
 
     return NextResponse.json({
       subscribed: forceUnlocked || unlockedSet.size > 0,
+      warning: mergedInventory.length
+        ? undefined
+        : "Live tournament sync is still warming up. Please refresh in a few seconds.",
       inventory: mergedInventory.map((item) => {
         const match = item.company === "PG" ? bestGroupedEventMatch(item.name, groupedEvents) : null;
         const seedMeta = seedMetaBySlug.get(item.slug);

@@ -4,8 +4,7 @@ import { SetStateAction, TouchEvent, useEffect, useMemo, useRef, useState } from
 import { useRouter } from "next/navigation";
 import { Game, ItineraryStop, Player, PulseEvent, ScoutNote, SessionUser, Tournament } from "@/lib/birddog/types";
 import { loadHarvestDataset, loadHarvestOverview, loadHarvestTournament } from "@/lib/birddog/clientHarvest";
-import { INVENTORY_SEED, inventoryHarvestHint } from "@/lib/birddog/inventoryCatalog";
-import { isFreeTournamentAccess, isPastTournament } from "@/lib/birddog/tournamentAccess";
+import { isPastTournament } from "@/lib/birddog/tournamentAccess";
 import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 
 type RecorderState = "idle" | "recording";
@@ -306,28 +305,6 @@ function isTournamentLocked(item: InventoryTournament | null | undefined, option
   return item.locked;
 }
 
-function fallbackInventoryClient(): InventoryTournament[] {
-  return INVENTORY_SEED.map((item) => {
-    const isArchive = isFreeTournamentAccess({
-      slug: item.slug,
-      name: item.name,
-      displayDate: item.displayDate || ""
-    });
-    return {
-      slug: item.slug,
-      name: item.name,
-      season: item.season,
-      company: item.company,
-      locked: PREVIEW_UNLOCK_ALL ? false : !isArchive,
-      isArchive,
-      harvestHint: inventoryHarvestHint(item),
-      displayDate: item.displayDate || "",
-      displayTeams: item.displayTeams || "",
-      displayCity: item.displayCity || ""
-    };
-  });
-}
-
 function timeLabel(iso: string) {
   return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
@@ -485,7 +462,7 @@ function sanitizeInventoryRows(rows: unknown): InventoryTournament[] {
     .filter((item) => item.slug && item.name);
 }
 
-function readInventoryCacheSnapshot(user: SessionUser | null, maxAgeMs = 12 * 60 * 60 * 1000) {
+function readInventoryCacheSnapshot(user: SessionUser | null, maxAgeMs = 45 * 60 * 1000) {
   const key = inventoryCacheStorageKey(user);
   if (!key) return null as InventoryCacheSnapshot | null;
   const parsed = parseJsonSafe<Partial<InventoryCacheSnapshot> | null>(safeLocalGet(key), null);
@@ -2208,7 +2185,7 @@ export default function BirdDogPage() {
     const keepStableInventory = (message: string) => {
       const fallbackRows = inMemoryInventory.length
         ? inMemoryInventory
-        : (cachedSnapshot?.inventory?.length ? cachedSnapshot.inventory : fallbackInventoryClient());
+        : (cachedSnapshot?.inventory?.length ? cachedSnapshot.inventory : []);
       if (isLatestRequest()) {
         setInventory(fallbackRows);
         if (cachedSnapshot?.subscribed) {
@@ -2294,7 +2271,12 @@ export default function BirdDogPage() {
       setSelectedGameId(openedTournament.games?.[0]?.id || "");
       setTournamentViewTitle(openedTournament.name);
     } catch (error) {
-      setOpenError(String(error));
+      const detail = error instanceof Error ? error.message : "";
+      setOpenError(
+        detail && !/<html|<body|gateway|timeout/i.test(detail)
+          ? detail
+          : "Unable to refresh tournament details right now. Please retry in a few seconds."
+      );
     }
   }
 
@@ -4878,7 +4860,11 @@ export default function BirdDogPage() {
                 {unlockingSlug === item.slug ? <p className="small">Opening Checkout...</p> : null}
               </article>
             );
-          }) : <p className="muted">No {companyLabel(company)} tournaments matched your search.</p>}
+          }) : (
+            (inventoryRefreshing || !companyTournamentInventory.length)
+              ? <p className="muted">Syncing latest {companyLabel(company)} tournaments...</p>
+              : <p className="muted">No {companyLabel(company)} tournaments matched your search.</p>
+          )}
         </div>
       </section>
       ) : null}
