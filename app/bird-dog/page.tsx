@@ -273,6 +273,8 @@ type CoachGameCandidate = {
   point: GeoLocation | null;
 };
 
+type BirdDogTab = "tournaments" | "notes" | "myPlayersSchedule" | "profile";
+
 const CACHE_KEY = "bird_dog_tournament_cache";
 const PREVIEW_UNLOCK_ALL =
   process.env.NEXT_PUBLIC_BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
@@ -1445,7 +1447,7 @@ export default function BirdDogPage() {
   const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
   const [openError, setOpenError] = useState("");
   const [selectedInventorySlug, setSelectedInventorySlug] = useState("");
-  const [activeTab, setActiveTab] = useState<"tournaments" | "notes" | "myPlayersSchedule" | "profile">("tournaments");
+  const [activeTab, setActiveTab] = useState<BirdDogTab>("tournaments");
   const [inlineTeamNoteDrafts, setInlineTeamNoteDrafts] = useState<Record<string, InlineTeamNoteDraft>>({});
   const [inlineTeamNoteStatuses, setInlineTeamNoteStatuses] = useState<Record<string, string>>({});
   const [inlineTeamNoteRecorderState, setInlineTeamNoteRecorderState] = useState<RecorderState>("idle");
@@ -1459,6 +1461,7 @@ export default function BirdDogPage() {
   const companyRef = useRef<"PG" | "PBR">("PG");
   const inventoryRef = useRef<InventoryTournament[]>([]);
   const inventoryFetchSeqRef = useRef(0);
+  const tabHistoryRef = useRef<BirdDogTab[]>([]);
 
   const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
   const [coachSharedNotesByUser, setCoachSharedNotesByUser] = useState<Map<string, CoachSharedNote[]>>(new Map());
@@ -1834,6 +1837,33 @@ export default function BirdDogPage() {
     });
   }
 
+  function navigateTab(
+    nextTab: BirdDogTab,
+    options?: { rememberCurrent?: boolean; closeMenu?: boolean }
+  ) {
+    const rememberCurrent = options?.rememberCurrent !== false;
+    setActiveTab((current) => {
+      if (current === nextTab) return current;
+      if (rememberCurrent) {
+        const history = tabHistoryRef.current;
+        if (history[history.length - 1] !== current) {
+          history.push(current);
+        }
+      }
+      return nextTab;
+    });
+    if (options?.closeMenu) setMenuOpen(false);
+  }
+
+  function popPreviousTab(currentTab: BirdDogTab): BirdDogTab | null {
+    const history = tabHistoryRef.current;
+    while (history.length) {
+      const previous = history.pop();
+      if (previous && previous !== currentTab) return previous;
+    }
+    return null;
+  }
+
   function refreshBookingSummaryFromStorage() {
     const raw = safeLocalGet(BOOKING_SUMMARY_KEY);
     const parsed = parseJsonSafe<BookingSummarySnapshot | null>(raw, null);
@@ -2012,9 +2042,9 @@ export default function BirdDogPage() {
     const tournamentId = params.get("tournamentId");
     const focus = params.get("focus");
     if (tab === "coaches" || tab === "schedule" || tab === "bestPlayers" || tab === "myPlayers" || tab === "myPlayersSchedule") {
-      setActiveTab("myPlayersSchedule");
+      navigateTab("myPlayersSchedule", { rememberCurrent: false });
     } else if (tab === "tournaments" || tab === "notes" || tab === "profile") {
-      setActiveTab(tab);
+      navigateTab(tab, { rememberCurrent: false });
     }
     if (focus === "generatedSchedule") {
       setFocusGeneratedScheduleRequested(true);
@@ -2220,7 +2250,7 @@ export default function BirdDogPage() {
     if (autoCreateScheduleRunKeyRef.current === runKey) return;
     autoCreateScheduleRunKeyRef.current = runKey;
 
-    setActiveTab("myPlayersSchedule");
+    navigateTab("myPlayersSchedule");
     setDesiredPlayersAndPersist(sourcePlayers);
     void generateScheduleFromSmartPlayers({
       keepActiveTab: true,
@@ -2372,7 +2402,7 @@ export default function BirdDogPage() {
           setSelectedInventorySlug(returnInventorySlug);
         }
       }
-      setActiveTab("tournaments");
+      navigateTab("tournaments", { rememberCurrent: false });
       const next = new URL(window.location.href);
       next.searchParams.delete("payment");
       next.searchParams.delete("session_id");
@@ -2597,7 +2627,7 @@ export default function BirdDogPage() {
     setSelectedTournamentId(openedTournament.id);
     setSelectedGameId(openedTournament.games?.[0]?.id || "");
     setTournamentViewTitle(openedTournament.name);
-    setActiveTab("notes");
+    navigateTab("notes");
   }
 
   async function openTournamentFromExistingData(item: InventoryTournament, targetTournamentId?: string) {
@@ -4082,7 +4112,7 @@ export default function BirdDogPage() {
       setPlanWorkflowNote(msg);
     }
     if (options?.keepActiveTab !== false) {
-      setActiveTab("myPlayersSchedule");
+      navigateTab("myPlayersSchedule");
     }
     const requiredStates = requiredStateCodes.length ? requiredStateCodes : (eventStateCode ? [eventStateCode] : []);
     const currentCoachState = extractUsStateCode(String(airportStartLabel || scheduleForm.flightSource || ""));
@@ -5138,9 +5168,8 @@ export default function BirdDogPage() {
     };
   }, [menuOpen]);
   const canGoBackInApp = !showTournaments;
-  function goToTournamentDashboard() {
-    setActiveTab("tournaments");
-    setMenuOpen(false);
+  function goToTournamentDashboard(options?: { rememberCurrent?: boolean }) {
+    navigateTab("tournaments", { rememberCurrent: options?.rememberCurrent, closeMenu: true });
     void fetchInventory();
   }
   function switchDashboardCompany(nextCompany: "PG" | "PBR") {
@@ -5149,7 +5178,7 @@ export default function BirdDogPage() {
       return;
     }
     setMenuOpen(false);
-    setActiveTab("tournaments");
+    navigateTab("tournaments");
     setCompany(nextCompany);
     setSelectedInventorySlug("");
     setSelectedTournamentId("");
@@ -5165,11 +5194,16 @@ export default function BirdDogPage() {
     void Promise.allSettled([loadCompanyData(nextCompany, true), fetchInventory(), fetchJobs()]);
   }
   function goBackInApp() {
-    if (showNotes || showProfile) {
-      goToTournamentDashboard();
+    const previous = popPreviousTab(activeTab);
+    if (previous) {
+      navigateTab(previous, { rememberCurrent: false });
       return;
     }
-    goToTournamentDashboard();
+    if (activeTab === "myPlayersSchedule" && selectedTournamentId) {
+      navigateTab("notes", { rememberCurrent: false });
+      return;
+    }
+    goToTournamentDashboard({ rememberCurrent: false });
   }
   const orgPrimary = user?.orgPrimary || "#1f3a5f";
   const orgAccent = user?.orgAccent || "#d7a316";
@@ -5232,8 +5266,7 @@ export default function BirdDogPage() {
                 type="button"
                 className={activeTab === "tournaments" ? "active" : ""}
                 onClick={() => {
-                  setActiveTab("tournaments");
-                  setMenuOpen(false);
+                  goToTournamentDashboard();
                 }}
               >
                 {companyLabel(company)} Dashboard
@@ -5257,8 +5290,7 @@ export default function BirdDogPage() {
                 type="button"
                 className={activeTab === "notes" ? "active" : ""}
                 onClick={() => {
-                  setActiveTab("notes");
-                  setMenuOpen(false);
+                  navigateTab("notes", { closeMenu: true });
                 }}
               >
                 Tournament Schedule
@@ -5267,8 +5299,7 @@ export default function BirdDogPage() {
                 type="button"
                 className={activeTab === "myPlayersSchedule" ? "active" : ""}
                 onClick={() => {
-                  setActiveTab("myPlayersSchedule");
-                  setMenuOpen(false);
+                  navigateTab("myPlayersSchedule", { closeMenu: true });
                 }}
               >
                 My Players & Schedule
@@ -5277,8 +5308,7 @@ export default function BirdDogPage() {
                 type="button"
                 className={activeTab === "profile" ? "active" : ""}
                 onClick={() => {
-                  setActiveTab("profile");
-                  setMenuOpen(false);
+                  navigateTab("profile", { closeMenu: true });
                 }}
               >
                 My Profile
