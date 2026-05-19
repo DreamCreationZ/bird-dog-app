@@ -2797,8 +2797,31 @@ export default function BirdDogPage() {
       notes: mine.notes || ""
     });
     const persistedDesired = readDesiredPlayersStorage(desiredPlayersStorageKey) || [];
-    setDesiredPlayersAndPersist(persistedDesired);
-    const generated = persistedDesired.length ? (mine.generated_plan || []) : [];
+    const cartDesired = mergeRosterCartStorage(teamRosterCartReadKeys);
+    const remoteDesired = Array.isArray(mine.desired_players)
+      ? mine.desired_players
+        .map((item) => ({
+          playerId: String(item?.playerId || ""),
+          selectionKey: item?.selectionKey ? String(item.selectionKey) : undefined,
+          name: String(item?.name || ""),
+          team: String(item?.team || ""),
+          hometown: item?.hometown ? String(item.hometown) : undefined
+        }))
+        .filter((item) => item.playerId && item.name && item.team)
+      : [];
+    const mergedDesired = new Map<string, DesiredPlayer>();
+    cartDesired.forEach((item) => mergedDesired.set(desiredPlayerSelectionKey(item), item));
+    persistedDesired.forEach((item) => {
+      const key = desiredPlayerSelectionKey(item);
+      if (!mergedDesired.has(key)) mergedDesired.set(key, item);
+    });
+    remoteDesired.forEach((item) => {
+      const key = desiredPlayerSelectionKey(item);
+      if (!mergedDesired.has(key)) mergedDesired.set(key, item);
+    });
+    const hydratedDesired = Array.from(mergedDesired.values());
+    setDesiredPlayersAndPersist(hydratedDesired);
+    const generated = hydratedDesired.length ? (mine.generated_plan || []) : [];
     setMyGeneratedPlan(generated);
     const persistedRaw = planWorkflowStatusKey ? safeLocalGet(planWorkflowStatusKey) : null;
     const persisted = isPlanWorkflowStatus(persistedRaw) ? persistedRaw : null;
