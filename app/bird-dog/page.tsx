@@ -185,6 +185,12 @@ type StateArrivalInput = {
   arrivalTime: string;
 };
 
+type StateHotelInput = {
+  hotelName: string;
+  checkIn: string;
+  checkOut: string;
+};
+
 type TeamRef = NonNullable<Tournament["teams"]>[number];
 
 type InlineTeamNoteTarget = {
@@ -276,7 +282,6 @@ const LOCAL_SCHEDULE_FALLBACK_KEY = "bird_dog:local_schedule_fallback:v1";
 const PLAN_WORKFLOW_STATUS_KEY_PREFIX = "bird_dog:plan_workflow_status:v1";
 const DESIRED_PLAYERS_STORAGE_KEY_PREFIX = "bird_dog:desired_players:v1";
 const ROSTER_CART_STORAGE_KEY_PREFIX = "bird_dog:roster_cart:v3";
-const ROSTER_CART_GLOBAL_KEY = "bird_dog:roster_cart:v3:global";
 const INVENTORY_CACHE_STORAGE_KEY_PREFIX = "bird_dog:inventory_cache:v2";
 const BOOKING_REVIEW_DRAFT_KEY = "bird_dog:booking_review_draft:v1";
 const BOOKING_SUMMARY_KEY = "bird_dog:booking_summary:v1";
@@ -522,9 +527,16 @@ function getBookingBlockReasonFromPlan(plan: PlanItem[]) {
   return "";
 }
 
-function localScheduleFallbackKey(user: SessionUser | null) {
+function localScheduleFallbackKey(
+  user: SessionUser | null,
+  company: "PG" | "PBR",
+  inventorySlug?: string,
+  tournamentId?: string
+) {
   if (!user) return "";
-  return `${LOCAL_SCHEDULE_FALLBACK_KEY}:${user.orgId}:${user.userId}`;
+  const companyScope = normalizeStorageScope(company || "pg");
+  const eventScope = normalizeStorageScope(inventorySlug || tournamentId || "global");
+  return `${LOCAL_SCHEDULE_FALLBACK_KEY}:${user.orgId}:${user.userId}:${companyScope}:${eventScope}`;
 }
 
 function latestScheduleTimestampMs(schedule: CoachSchedule | null | undefined) {
@@ -588,11 +600,18 @@ function mergeRosterCartStorage(keys: string[]) {
   return Array.from(merged.values());
 }
 
-function desiredPlayersScopedStorageKey(input: { orgId: string; userId: string; company: "PG" | "PBR" }) {
+function desiredPlayersScopedStorageKey(input: {
+  orgId: string;
+  userId: string;
+  company: "PG" | "PBR";
+  inventorySlug?: string;
+  tournamentId?: string;
+}) {
   const orgScope = normalizeStorageScope(input.orgId || "org");
   const userScope = normalizeStorageScope(input.userId || "user");
   const companyScope = normalizeStorageScope(input.company || "pg");
-  return `${DESIRED_PLAYERS_STORAGE_KEY_PREFIX}:${orgScope}:${userScope}:${companyScope}`;
+  const inventoryScope = normalizeStorageScope(input.inventorySlug || input.tournamentId || "global");
+  return `${DESIRED_PLAYERS_STORAGE_KEY_PREFIX}:${orgScope}:${userScope}:${companyScope}:${inventoryScope}`;
 }
 
 function readRosterCartStorage(key: string) {
@@ -1472,6 +1491,13 @@ export default function BirdDogPage() {
   const [smartRouteHint, setSmartRouteHint] = useState("");
   const [flightBooked, setFlightBooked] = useState<"yes" | "no">("no");
   const [stateArrivalInputs, setStateArrivalInputs] = useState<Record<string, StateArrivalInput>>({});
+  const [hotelBooked, setHotelBooked] = useState<"yes" | "no">("no");
+  const [stateHotelInputs, setStateHotelInputs] = useState<Record<string, StateHotelInput>>({});
+  const [questionOpen, setQuestionOpen] = useState({
+    flight: true,
+    arrival: true,
+    hotel: true
+  });
   const [planWorkflowStatus, setPlanWorkflowStatus] = useState<PlanWorkflowStatus>("draft");
   const [planWorkflowNote, setPlanWorkflowNote] = useState("");
   const [focusGeneratedScheduleRequested, setFocusGeneratedScheduleRequested] = useState(false);
@@ -1561,18 +1587,12 @@ export default function BirdDogPage() {
   const teamRosterCartReadKeys = useMemo(() => {
     const candidates = [
       teamRosterCartStorageKey,
-      ROSTER_CART_GLOBAL_KEY,
-      legacyRosterCartStorageKey(company, selectedInventorySlug),
-      legacyRosterCartStorageKey(company),
-      legacyRosterCartStorageKey("PG", selectedInventorySlug),
-      legacyRosterCartStorageKey("PBR", selectedInventorySlug),
-      legacyRosterCartStorageKey("PG"),
-      legacyRosterCartStorageKey("PBR")
+      legacyRosterCartStorageKey(company, selectedInventorySlug)
     ];
     return Array.from(new Set(candidates.filter(Boolean)));
   }, [company, selectedInventorySlug, teamRosterCartStorageKey]);
   const teamRosterCartWriteKeys = useMemo(
-    () => Array.from(new Set([teamRosterCartStorageKey, ROSTER_CART_GLOBAL_KEY])),
+    () => Array.from(new Set([teamRosterCartStorageKey])),
     [teamRosterCartStorageKey]
   );
   const teamRosterCartSyncKeys = useMemo(
@@ -1584,9 +1604,11 @@ export default function BirdDogPage() {
     return desiredPlayersScopedStorageKey({
       orgId: user.orgId,
       userId: user.userId,
-      company
+      company,
+      inventorySlug: selectedInventorySlug,
+      tournamentId: selectedTournamentId
     });
-  }, [company, user]);
+  }, [company, selectedInventorySlug, selectedTournamentId, user]);
 
   useEffect(() => {
     selectedTournamentIdRef.current = selectedTournamentId;
@@ -1714,6 +1736,25 @@ export default function BirdDogPage() {
     if (!states.size && eventStateCode) states.add(eventStateCode);
     return Array.from(states.values());
   }, [desiredPlayers, games, selectedInventory?.displayCity, selectedTournament?.city, eventStateCode]);
+  const arrivalAnswersComplete = useMemo(
+    () => requiredStateCodes.length > 0 && requiredStateCodes.every((stateCode) => {
+      const row = stateArrivalInputs[stateCode];
+      return Boolean(String(row?.arrivalLocation || "").trim() && String(row?.arrivalTime || "").trim());
+    }),
+    [requiredStateCodes, stateArrivalInputs]
+  );
+  const hotelAnswersComplete = useMemo(
+    () => hotelBooked !== "yes"
+      || (requiredStateCodes.length > 0 && requiredStateCodes.every((stateCode) => {
+        const row = stateHotelInputs[stateCode];
+        return Boolean(
+          String(row?.hotelName || "").trim()
+          && String(row?.checkIn || "").trim()
+          && String(row?.checkOut || "").trim()
+        );
+      })),
+    [hotelBooked, requiredStateCodes, stateHotelInputs]
+  );
   const selectedTournamentTeams = selectedTournament?.teams || [];
   const teamsByNormalizedName = useMemo(() => {
     const map = new Map<string, TeamRef>();
@@ -2111,6 +2152,7 @@ export default function BirdDogPage() {
   useEffect(() => {
     if (!requiredStateCodes.length) {
       setStateArrivalInputs({});
+      setStateHotelInputs({});
       return;
     }
     setStateArrivalInputs((prev) => {
@@ -2124,7 +2166,31 @@ export default function BirdDogPage() {
       });
       return next;
     });
+    setStateHotelInputs((prev) => {
+      const next: Record<string, StateHotelInput> = {};
+      requiredStateCodes.forEach((stateCode) => {
+        const existing = prev[stateCode];
+        next[stateCode] = existing || {
+          hotelName: "",
+          checkIn: "",
+          checkOut: ""
+        };
+      });
+      return next;
+    });
   }, [requiredStateCodes, selectedInventory?.displayCity, selectedTournament?.city]);
+
+  useEffect(() => {
+    if (arrivalAnswersComplete) {
+      setQuestionOpen((prev) => (prev.arrival ? { ...prev, arrival: false } : prev));
+    }
+  }, [arrivalAnswersComplete]);
+
+  useEffect(() => {
+    if (hotelBooked === "yes" && hotelAnswersComplete) {
+      setQuestionOpen((prev) => (prev.hotel ? { ...prev, hotel: false } : prev));
+    }
+  }, [hotelAnswersComplete, hotelBooked]);
 
   useEffect(() => {
     if (!queryStateApplied || !user || loadingHarvest || typeof window === "undefined") return;
@@ -2624,7 +2690,7 @@ export default function BirdDogPage() {
   }
 
   function readLocalFallbackSchedule(): CoachSchedule | null {
-    const key = localScheduleFallbackKey(user);
+    const key = localScheduleFallbackKey(user, company, selectedInventorySlug, selectedTournamentId);
     if (!key) return null;
     const raw = safeLocalGet(key);
     if (!raw) return null;
@@ -2652,7 +2718,7 @@ export default function BirdDogPage() {
   }
 
   function writeLocalFallbackSchedule(schedule: CoachSchedule) {
-    const key = localScheduleFallbackKey(user);
+    const key = localScheduleFallbackKey(user, company, selectedInventorySlug, selectedTournamentId);
     if (!key) return;
     safeLocalSet(key, JSON.stringify(schedule));
   }
@@ -2720,9 +2786,9 @@ export default function BirdDogPage() {
       hotelName: mine.hotel_name || "",
       notes: mine.notes || ""
     });
-    const persistedDesired = readDesiredPlayersStorage(desiredPlayersStorageKey);
-    setDesiredPlayersAndPersist(persistedDesired ?? (mine.desired_players || []));
-    const generated = mine.generated_plan || [];
+    const persistedDesired = readDesiredPlayersStorage(desiredPlayersStorageKey) || [];
+    setDesiredPlayersAndPersist(persistedDesired);
+    const generated = persistedDesired.length ? (mine.generated_plan || []) : [];
     setMyGeneratedPlan(generated);
     const persistedRaw = planWorkflowStatusKey ? safeLocalGet(planWorkflowStatusKey) : null;
     const persisted = isPlanWorkflowStatus(persistedRaw) ? persistedRaw : null;
@@ -2750,7 +2816,7 @@ export default function BirdDogPage() {
     const remoteList: CoachSchedule[] = data.schedules || [];
     const remoteMine = remoteList.find((item) => item.user_id === user?.userId) || null;
     if (!remoteMine) {
-      const key = localScheduleFallbackKey(user);
+      const key = localScheduleFallbackKey(user, company, selectedInventorySlug, selectedTournamentId);
       if (key) safeLocalRemove(key);
     }
     const local = readLocalFallbackSchedule();
@@ -2762,7 +2828,7 @@ export default function BirdDogPage() {
   }
 
   async function removeMySchedule() {
-    const key = localScheduleFallbackKey(user);
+    const key = localScheduleFallbackKey(user, company, selectedInventorySlug, selectedTournamentId);
     const local = readLocalFallbackSchedule();
     const hasServerSchedule = schedules.some((item) => item.user_id === user?.userId);
     if (!hasServerSchedule && !local && !myGeneratedPlan.length) {
@@ -3350,6 +3416,20 @@ export default function BirdDogPage() {
     }));
   }
 
+  function updateStateHotelInput(stateCode: string, patch: Partial<StateHotelInput>) {
+    const normalized = String(stateCode || "").trim().toUpperCase();
+    if (!normalized) return;
+    setStateHotelInputs((prev) => ({
+      ...prev,
+      [normalized]: {
+        hotelName: String(prev[normalized]?.hotelName || "").trim(),
+        checkIn: String(prev[normalized]?.checkIn || "").trim(),
+        checkOut: String(prev[normalized]?.checkOut || "").trim(),
+        ...patch
+      }
+    }));
+  }
+
   function toggleSmartPlayerSelection(item: SmartPlayerResult) {
     const selectionKey = smartPlayerSelectionKey(item.teamId, item.playerId);
     setDesiredPlayersAndPersist((prev) => {
@@ -3559,20 +3639,34 @@ export default function BirdDogPage() {
     const candidatesBaseline = candidates.length
       ? Math.min(...candidates.map((item) => item.startMs))
       : baselineStartMs;
-    fallbackUnmatched.forEach((player, index) => {
+    const groupedFallback = new Map<string, { destination: string; team: string; players: DesiredPlayer[] }>();
+    fallbackUnmatched.forEach((player) => {
       const destination = destinationForPlayer(player);
+      const key = `${normalizeSmartSearch(destination)}::${normalizeSmartSearch(player.team)}`;
+      const existing = groupedFallback.get(key);
+      if (existing) {
+        existing.players.push(player);
+      } else {
+        groupedFallback.set(key, {
+          destination,
+          team: player.team || "Team A",
+          players: [player]
+        });
+      }
+    });
+    Array.from(groupedFallback.values()).forEach((group, index) => {
       const startMs = candidatesBaseline + (index + 1) * 85 * 60 * 1000;
       candidates.push({
-        key: `unmatched:${desiredPlayerSelectionKey(player)}`,
+        key: `unmatched:${normalizeSmartSearch(group.team)}:${index}`,
         gameNo: `#U${index + 1}`,
         startMs,
         endMs: startMs + GAME_MINUTES * 60 * 1000,
-        stateCode: extractUsStateCode(destination) || extractUsStateCode(String(selectedInventory?.displayCity || selectedTournament?.city || "")),
-        locationLabel: destination,
-        locationQuery: destination,
-        homeTeam: player.team || "Team A",
+        stateCode: extractUsStateCode(group.destination) || extractUsStateCode(String(selectedInventory?.displayCity || selectedTournament?.city || "")),
+        locationLabel: group.destination,
+        locationQuery: group.destination,
+        homeTeam: group.team,
         awayTeam: "Team B",
-        matchedPlayers: [player],
+        matchedPlayers: group.players,
         point: null
       });
     });
@@ -3756,6 +3850,7 @@ export default function BirdDogPage() {
         `Leave by ${formatPlanClock(best.departMs)}`,
         `Reach by ${formatPlanClock(best.arriveMs)} (${best.travel.mode}, ${formatEta(best.travel.minutes)})`
       ].filter(Boolean).join(" · ");
+      const isSameStop = normalizeLocationText(best.fromLabel) === normalizeLocationText(destinationLabel);
 
       if (best.switchedState && best.fromStateCode) {
         travelPlan.push({
@@ -3765,12 +3860,14 @@ export default function BirdDogPage() {
         });
       }
 
-      const legNo = visitedStops.length + 1;
-      travelPlan.push({
-        at: new Date(best.departMs).toISOString(),
-        title: `Travel ${legNo}: ${best.fromLabel} -> ${destinationLabel}`,
-        detail: travelDetail
-      });
+      const legNo = travelPlan.filter((step) => /^Travel\s+\d+:/i.test(String(step.title || ""))).length + 1;
+      if (!(isSameStop && best.travel.minutes === 0)) {
+        travelPlan.push({
+          at: new Date(best.departMs).toISOString(),
+          title: `Travel ${legNo}: ${best.fromLabel} -> ${destinationLabel}`,
+          detail: travelDetail
+        });
+      }
 
       if (best.waitMinutes >= 20) {
         travelPlan.push({
@@ -3895,6 +3992,33 @@ export default function BirdDogPage() {
     return [travel, ...scoutStops];
   }
 
+  function applyHotelStayMilestones(plan: PlanItem[], milestones: Array<{ stateCode: string; hotelName: string; checkIn?: string; checkOut?: string }>) {
+    if (!plan.length || !milestones.length) return plan;
+    const extras: PlanItem[] = [];
+    milestones.forEach((item) => {
+      const cleanName = String(item.hotelName || "").trim();
+      if (!cleanName) return;
+      const checkInMs = Date.parse(String(item.checkIn || ""));
+      if (Number.isFinite(checkInMs)) {
+        extras.push({
+          at: new Date(checkInMs).toISOString(),
+          title: `Hotel check-in (${item.stateCode})`,
+          detail: cleanName
+        });
+      }
+      const checkOutMs = Date.parse(String(item.checkOut || ""));
+      if (Number.isFinite(checkOutMs)) {
+        extras.push({
+          at: new Date(checkOutMs).toISOString(),
+          title: `Hotel check-out (${item.stateCode})`,
+          detail: cleanName
+        });
+      }
+    });
+    if (!extras.length) return plan;
+    return [...plan, ...extras].sort((a, b) => Date.parse(String(a.at || "")) - Date.parse(String(b.at || "")));
+  }
+
   function isSelectedTournamentPast() {
     const selectedName = selectedInventory?.name || selectedTournament?.name || "";
     const selectedDateLabel = selectedInventory?.displayDate || selectedTournament?.date || "";
@@ -3931,6 +4055,7 @@ export default function BirdDogPage() {
     const currentCoachState = extractUsStateCode(String(airportStartLabel || scheduleForm.flightSource || ""));
     const needsArrivalAnswers = flightBooked === "yes" || requiredStates.some((code) => code && code !== currentCoachState);
     const arrivalPayloadByState: Record<string, StateArrivalInput> = {};
+    const hotelPayloadByState: Record<string, StateHotelInput> = {};
     if (needsArrivalAnswers) {
       for (const stateCode of requiredStates) {
         const row = stateArrivalInputs[stateCode];
@@ -3943,6 +4068,21 @@ export default function BirdDogPage() {
           return;
         }
         arrivalPayloadByState[stateCode] = { arrivalLocation, arrivalTime };
+      }
+    }
+    if (hotelBooked === "yes") {
+      for (const stateCode of requiredStates) {
+        const row = stateHotelInputs[stateCode];
+        const hotelName = String(row?.hotelName || "").trim();
+        const checkIn = String(row?.checkIn || "").trim();
+        const checkOut = String(row?.checkOut || "").trim();
+        if (!hotelName || !checkIn || !checkOut) {
+          const msg = `Please enter hotel name, check-in, and check-out for ${stateCode}.`;
+          setPlayerSearchStatus(msg);
+          setPlanWorkflowNote(msg);
+          return;
+        }
+        hotelPayloadByState[stateCode] = { hotelName, checkIn, checkOut };
       }
     }
     const earliestArrival = Object.entries(arrivalPayloadByState)
@@ -3974,11 +4114,7 @@ export default function BirdDogPage() {
     try {
       const optimized = await buildOptimizedCoachPlan(selectedPlayers, resolvedSource, arrivalPayloadByState);
       const hotelHubDestination = optimized.hotelHubDestination || optimized.firstDestination || firstPlayerStart || "";
-      if (optimized.smartReorderHint) {
-        setSmartRouteHint(optimized.smartReorderHint);
-      } else if (selectedPlayers.length > 1) {
-        setSmartRouteHint("Selected order is already efficient based on travel distance + match timing.");
-      }
+      setSmartRouteHint("");
       if (!optimized.plan.length) {
         const msg = "Live route data is limited right now. Showing instant recommendation preview.";
         setScheduleForm(instantForm);
@@ -3992,19 +4128,30 @@ export default function BirdDogPage() {
 
       const destination = (scheduleForm.flightDestination || optimized.firstDestination || "").trim();
       const isFeasible = !optimized.blockedReason;
+      const primaryState = earliestArrival?.stateCode || requiredStates[0] || "";
+      const bookedHotelName = primaryState ? String(hotelPayloadByState[primaryState]?.hotelName || "").trim() : "";
       const hotelName = isFeasible
-        ? (scheduleForm.hotelName.trim() || await suggestHotelForDestination(hotelHubDestination || destination))
+        ? (bookedHotelName || scheduleForm.hotelName.trim() || await suggestHotelForDestination(hotelHubDestination || destination))
         : "";
       const withHotelPlan = isFeasible
         ? withHotelReturnLeg(optimized.plan, hotelName)
         : optimized.plan;
-      const finalPlan = isFeasible
+      const finalPlanBase = isFeasible
         ? applyHotelFirstRoutePlan(withHotelPlan, {
           startLabel: resolvedSource,
           hotelName,
           hotelAreaHint: hotelHubDestination || destination || eventLocationHint || ""
         })
         : withHotelPlan;
+      const finalPlan = applyHotelStayMilestones(
+        finalPlanBase,
+        Object.entries(hotelPayloadByState).map(([stateCode, row]) => ({
+          stateCode,
+          hotelName: row.hotelName,
+          checkIn: row.checkIn,
+          checkOut: row.checkOut
+        }))
+      );
 
       const nextForm = {
         ...scheduleForm,
@@ -5373,42 +5520,135 @@ export default function BirdDogPage() {
           <div className="panel" style={{ marginTop: 8, marginBottom: 8 }}>
             <h4 style={{ marginTop: 0, marginBottom: 6 }}>Coach Travel Inputs</h4>
             <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
-              Real planner uses these answers before creating route.
+              Planner builds route from your answers.
             </p>
-            <div className="row wrap" style={{ gap: 8, alignItems: "center" }}>
-              <label htmlFor="flight-booked" style={{ minWidth: 170 }}>Is your flight booked?</label>
-              <select
-                id="flight-booked"
-                value={flightBooked}
-                onChange={(event) => setFlightBooked(event.target.value === "yes" ? "yes" : "no")}
-              >
-                <option value="no">No</option>
-                <option value="yes">Yes</option>
-              </select>
+            <div className="panel" style={{ marginBottom: 8 }}>
+              <div className="row wrap" style={{ alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <strong>1. Is your flight booked?</strong>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setQuestionOpen((prev) => ({ ...prev, flight: !prev.flight }))}
+                >
+                  {questionOpen.flight ? "▲" : "▼"}
+                </button>
+              </div>
+              {questionOpen.flight ? (
+                <div style={{ marginTop: 8 }}>
+                  <select
+                    id="flight-booked"
+                    value={flightBooked}
+                    onChange={(event) => {
+                      const value = event.target.value === "yes" ? "yes" : "no";
+                      setFlightBooked(value);
+                      setQuestionOpen((prev) => ({ ...prev, flight: false, arrival: true }));
+                    }}
+                  >
+                    <option value="no">No</option>
+                    <option value="yes">Yes</option>
+                  </select>
+                </div>
+              ) : null}
             </div>
             {requiredStateCodes.length ? (
-              <div style={{ marginTop: 8 }}>
-                <p className="muted" style={{ marginTop: 0, marginBottom: 6 }}>
-                  Enter arrival location/time for each event state.
-                </p>
-                {requiredStateCodes.map((stateCode) => (
-                  <div key={stateCode} className="row wrap" style={{ gap: 8, marginBottom: 8, alignItems: "center" }}>
-                    <strong style={{ minWidth: 54 }}>{stateCode}</strong>
-                    <input
-                      value={stateArrivalInputs[stateCode]?.arrivalLocation || ""}
-                      onChange={(event) => updateStateArrivalInput(stateCode, { arrivalLocation: event.target.value })}
-                      placeholder={`Arrival city/airport for ${stateCode}`}
-                      style={{ minWidth: 280, flex: "1 1 320px" }}
-                    />
-                    <input
-                      type="datetime-local"
-                      value={stateArrivalInputs[stateCode]?.arrivalTime || ""}
-                      onChange={(event) => updateStateArrivalInput(stateCode, { arrivalTime: event.target.value })}
-                    />
+              <div className="panel" style={{ marginBottom: 8 }}>
+                <div className="row wrap" style={{ alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <strong>2. When will you reach each event state?</strong>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => setQuestionOpen((prev) => ({ ...prev, arrival: !prev.arrival }))}
+                  >
+                    {questionOpen.arrival ? "▲" : "▼"}
+                  </button>
+                </div>
+                {questionOpen.arrival ? (
+                  <div style={{ marginTop: 8 }}>
+                    {requiredStateCodes.map((stateCode) => (
+                      <div key={stateCode} className="row wrap" style={{ gap: 8, marginBottom: 8, alignItems: "center" }}>
+                        <strong style={{ minWidth: 54 }}>{stateCode}</strong>
+                        <input
+                          value={stateArrivalInputs[stateCode]?.arrivalLocation || ""}
+                          onChange={(event) => {
+                            updateStateArrivalInput(stateCode, { arrivalLocation: event.target.value });
+                          }}
+                          placeholder={`Arrival city/airport for ${stateCode}`}
+                          style={{ minWidth: 280, flex: "1 1 320px" }}
+                        />
+                        <input
+                          type="datetime-local"
+                          value={stateArrivalInputs[stateCode]?.arrivalTime || ""}
+                          onChange={(event) => {
+                            updateStateArrivalInput(stateCode, { arrivalTime: event.target.value });
+                          }}
+                        />
+                      </div>
+                    ))}
                   </div>
-                ))}
+                ) : null}
               </div>
             ) : null}
+            <div className="panel" style={{ marginBottom: 0 }}>
+              <div className="row wrap" style={{ alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <strong>3. Is your hotel booked?</strong>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setQuestionOpen((prev) => ({ ...prev, hotel: !prev.hotel }))}
+                >
+                  {questionOpen.hotel ? "▲" : "▼"}
+                </button>
+              </div>
+              {questionOpen.hotel ? (
+                <div style={{ marginTop: 8 }}>
+                  <select
+                    value={hotelBooked}
+                    onChange={(event) => {
+                      const value = event.target.value === "yes" ? "yes" : "no";
+                      setHotelBooked(value);
+                      if (value === "no") {
+                        setStateHotelInputs((prev) => {
+                          const next: Record<string, StateHotelInput> = {};
+                          Object.keys(prev).forEach((stateCode) => {
+                            next[stateCode] = { hotelName: "", checkIn: "", checkOut: "" };
+                          });
+                          return next;
+                        });
+                      }
+                      setQuestionOpen((prev) => ({ ...prev, hotel: value === "no" ? false : prev.hotel }));
+                    }}
+                  >
+                    <option value="no">No</option>
+                    <option value="yes">Yes</option>
+                  </select>
+                  {hotelBooked === "yes" ? (
+                    <div style={{ marginTop: 8 }}>
+                      {requiredStateCodes.map((stateCode) => (
+                        <div key={`hotel-${stateCode}`} className="row wrap" style={{ gap: 8, marginBottom: 8, alignItems: "center" }}>
+                          <strong style={{ minWidth: 54 }}>{stateCode}</strong>
+                          <input
+                            value={stateHotelInputs[stateCode]?.hotelName || ""}
+                            onChange={(event) => updateStateHotelInput(stateCode, { hotelName: event.target.value })}
+                            placeholder={`Hotel name in ${stateCode}`}
+                            style={{ minWidth: 220, flex: "1 1 240px" }}
+                          />
+                          <input
+                            type="datetime-local"
+                            value={stateHotelInputs[stateCode]?.checkIn || ""}
+                            onChange={(event) => updateStateHotelInput(stateCode, { checkIn: event.target.value })}
+                          />
+                          <input
+                            type="datetime-local"
+                            value={stateHotelInputs[stateCode]?.checkOut || ""}
+                            onChange={(event) => updateStateHotelInput(stateCode, { checkOut: event.target.value })}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           </div>
           {scheduleForm.hotelName ? (
             <p className="muted" style={{ marginTop: 0 }}>
