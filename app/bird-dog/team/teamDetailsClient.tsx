@@ -183,24 +183,15 @@ const TEAM_DETAILS_TTL_MS = 10 * 60 * 1000;
 
 function teamDetailsCacheKey(input: Props["initialParams"]) {
   const identity = [
-    input.inventorySlug,
+    input.returnInventorySlug || input.inventorySlug,
     input.teamId,
-    input.teamName,
-    input.tournamentName,
-    input.returnTournamentId,
-    input.eventId
+    input.teamName || "",
+    input.eventId || ""
   ].join("|");
-  return `bird_dog:team_details:v5:${identity}`;
+  return `bird_dog:team_details:v6:${identity}`;
 }
 
-function readTeamDetailsCache(key: string): TeamDetailsCachePayload | null {
-  if (typeof window === "undefined") return null;
-  let raw = "";
-  try {
-    raw = window.sessionStorage.getItem(key) || "";
-  } catch {
-    return null;
-  }
+function parseTeamDetailsCacheEntry(raw: string): TeamDetailsCachePayload | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as { savedAt: number; data: TeamDetailsCachePayload };
@@ -212,10 +203,35 @@ function readTeamDetailsCache(key: string): TeamDetailsCachePayload | null {
   }
 }
 
+function readTeamDetailsCache(key: string): TeamDetailsCachePayload | null {
+  if (typeof window === "undefined") return null;
+  let rawSession = "";
+  let rawLocal = "";
+  try {
+    rawSession = window.sessionStorage.getItem(key) || "";
+  } catch {
+    // Ignore storage read error.
+  }
+  const fromSession = parseTeamDetailsCacheEntry(rawSession);
+  if (fromSession) return fromSession;
+  try {
+    rawLocal = window.localStorage.getItem(key) || "";
+  } catch {
+    return null;
+  }
+  return parseTeamDetailsCacheEntry(rawLocal);
+}
+
 function writeTeamDetailsCache(key: string, payload: TeamDetailsCachePayload) {
   if (typeof window === "undefined") return;
+  const serialized = JSON.stringify({ savedAt: Date.now(), data: payload });
   try {
-    window.sessionStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), data: payload }));
+    window.sessionStorage.setItem(key, serialized);
+  } catch {
+    // Ignore storage write errors.
+  }
+  try {
+    window.localStorage.setItem(key, serialized);
   } catch {
     // Ignore storage write errors.
   }
@@ -1096,12 +1112,28 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     }
   }
 
-  async function fetchTeamDetailsRemote() {
-    const res = await fetch("/api/harvest/team", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(teamRequestPayload)
-    });
+  async function fetchTeamDetailsRemote(timeoutMs = 9000) {
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeoutId = controller
+      ? window.setTimeout(() => controller.abort(), timeoutMs)
+      : null;
+    let res: Response;
+    try {
+      res = await fetch("/api/harvest/team", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(teamRequestPayload),
+        signal: controller?.signal
+      });
+    } catch (error) {
+      const aborted = error instanceof DOMException && error.name === "AbortError";
+      if (aborted) {
+        throw new Error("Tournament details are syncing. Please refresh in a few seconds.");
+      }
+      throw error;
+    } finally {
+      if (timeoutId != null) window.clearTimeout(timeoutId);
+    }
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body?.error || `Failed (${res.status})`);

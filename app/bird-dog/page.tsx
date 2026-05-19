@@ -2858,6 +2858,8 @@ export default function BirdDogPage() {
       hotelName: mine.hotel_name || "",
       notes: mine.notes || ""
     });
+    const desiredStorageRaw = desiredPlayersStorageKey ? safeLocalGet(desiredPlayersStorageKey) : null;
+    const hasLocalDesiredState = desiredStorageRaw !== null;
     const persistedDesired = readDesiredPlayersStorage(desiredPlayersStorageKey) || [];
     const cartDesired = mergeRosterCartStorage(teamRosterCartReadKeys);
     const remoteDesired = Array.isArray(mine.desired_players)
@@ -2877,10 +2879,12 @@ export default function BirdDogPage() {
       const key = desiredPlayerSelectionKey(item);
       if (!mergedDesired.has(key)) mergedDesired.set(key, item);
     });
-    remoteDesired.forEach((item) => {
-      const key = desiredPlayerSelectionKey(item);
-      if (!mergedDesired.has(key)) mergedDesired.set(key, item);
-    });
+    if (!hasLocalDesiredState && mergedDesired.size === 0) {
+      remoteDesired.forEach((item) => {
+        const key = desiredPlayerSelectionKey(item);
+        if (!mergedDesired.has(key)) mergedDesired.set(key, item);
+      });
+    }
     const hydratedDesired = Array.from(mergedDesired.values());
     setDesiredPlayersAndPersist(hydratedDesired);
     const generated = hydratedDesired.length ? (mine.generated_plan || []) : [];
