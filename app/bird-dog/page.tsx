@@ -476,7 +476,7 @@ function sanitizeInventoryRows(rows: unknown): InventoryTournament[] {
     .filter((item) => item.slug && item.name);
 }
 
-function readInventoryCacheSnapshot(user: SessionUser | null, maxAgeMs = 45 * 60 * 1000) {
+function readInventoryCacheSnapshot(user: SessionUser | null, maxAgeMs = 10 * 60 * 1000) {
   const key = inventoryCacheStorageKey(user);
   if (!key) return null as InventoryCacheSnapshot | null;
   const parsed = parseJsonSafe<Partial<InventoryCacheSnapshot> | null>(safeLocalGet(key), null);
@@ -606,10 +606,17 @@ function desiredPlayerIdentityKey(item: DesiredPlayer) {
   return String(item.selectionKey || item.playerId);
 }
 
+function desiredPlayerDedupeKey(item: DesiredPlayer) {
+  const stable = String(item.selectionKey || item.playerId || "").trim();
+  if (stable) return `id:${stable}`;
+  const identity = desiredPlayerIdentityKey(item);
+  return identity ? `identity:${identity}` : "";
+}
+
 function dedupeDesiredPlayersByIdentity(rows: DesiredPlayer[]) {
   const deduped = new Map<string, DesiredPlayer>();
   rows.forEach((item) => {
-    const key = desiredPlayerIdentityKey(item);
+    const key = desiredPlayerDedupeKey(item) || desiredPlayerIdentityKey(item);
     if (!deduped.has(key)) {
       deduped.set(key, item);
     }
@@ -623,9 +630,9 @@ function mergeRosterCartStorage(keys: string[]) {
     if (!key) return;
     const rows = readRosterCartStorage(key);
     rows.forEach((item) => {
-      const identity = desiredPlayerIdentityKey(item);
-      if (!merged.has(identity)) {
-        merged.set(identity, item);
+      const dedupeKey = desiredPlayerDedupeKey(item) || desiredPlayerIdentityKey(item);
+      if (!merged.has(dedupeKey)) {
+        merged.set(dedupeKey, item);
       }
     });
   });
@@ -1619,30 +1626,15 @@ export default function BirdDogPage() {
     }),
     [company, selectedInventorySlug, selectedTournamentId]
   );
-  const teamRosterCartReadKeys = useMemo(() => {
+  const teamRosterCartLegacyKeys = useMemo(() => {
     const candidates = [
-      teamRosterCartStorageKey,
       rosterCartStorageKey({ company }),
       ROSTER_CART_GLOBAL_KEY,
       legacyRosterCartStorageKey(company, selectedInventorySlug),
       legacyRosterCartStorageKey(company)
     ];
     return Array.from(new Set(candidates.filter(Boolean)));
-  }, [company, selectedInventorySlug, teamRosterCartStorageKey]);
-  const teamRosterCartWriteKeys = useMemo(() => {
-    const candidates = [
-      teamRosterCartStorageKey,
-      rosterCartStorageKey({ company }),
-      ROSTER_CART_GLOBAL_KEY,
-      legacyRosterCartStorageKey(company, selectedInventorySlug),
-      legacyRosterCartStorageKey(company)
-    ];
-    return Array.from(new Set(candidates.filter(Boolean)));
-  }, [company, selectedInventorySlug, teamRosterCartStorageKey]);
-  const teamRosterCartSyncKeys = useMemo(
-    () => Array.from(new Set([...teamRosterCartReadKeys, ...teamRosterCartWriteKeys])),
-    [teamRosterCartReadKeys, teamRosterCartWriteKeys]
-  );
+  }, [company, selectedInventorySlug]);
   const desiredPlayersStorageKey = useMemo(() => {
     if (!user) return "";
     return desiredPlayersScopedStorageKey({
@@ -1869,6 +1861,39 @@ export default function BirdDogPage() {
     });
   }
 
+  function pruneLegacyTeamRosterCartAliases() {
+    teamRosterCartLegacyKeys.forEach((key) => {
+      if (!key || key === teamRosterCartStorageKey) return;
+      safeLocalRemove(key);
+    });
+  }
+
+  function readTeamRosterCartCanonical() {
+    if (!teamRosterCartStorageKey) return [] as DesiredPlayer[];
+    const canonicalRaw = safeLocalGet(teamRosterCartStorageKey);
+    if (canonicalRaw != null) {
+      return readRosterCartStorage(teamRosterCartStorageKey);
+    }
+    const migrated = mergeRosterCartStorage([teamRosterCartStorageKey, ...teamRosterCartLegacyKeys]);
+    writeRosterCartStorage(teamRosterCartStorageKey, migrated);
+    pruneLegacyTeamRosterCartAliases();
+    return migrated;
+  }
+
+  function setTeamRosterCartAndPersist(nextState: SetStateAction<DesiredPlayer[]>) {
+    setTeamRosterCartPlayers((prev) => {
+      const nextRaw = typeof nextState === "function"
+        ? (nextState as (previous: DesiredPlayer[]) => DesiredPlayer[])(prev)
+        : nextState;
+      const next = dedupeDesiredPlayersByIdentity(nextRaw);
+      if (teamRosterCartStorageKey) {
+        writeRosterCartStorage(teamRosterCartStorageKey, next);
+      }
+      pruneLegacyTeamRosterCartAliases();
+      return next;
+    });
+  }
+
   function navigateTab(
     nextTab: BirdDogTab,
     options?: { rememberCurrent?: boolean; closeMenu?: boolean }
@@ -1971,7 +1996,7 @@ export default function BirdDogPage() {
 
   useEffect(() => {
     if (!user) return;
-    const cached = readInventoryCacheSnapshot(user);
+    const cached = readInventoryCacheSnapshot(user, 3 * 60 * 1000);
     if (!cached?.inventory.length) return;
     setInventory((prev) => (prev.length ? prev : cached.inventory));
     if (cached.subscribed) {
@@ -2180,11 +2205,11 @@ export default function BirdDogPage() {
   }, [selectedTournamentId, selectedInventorySlug]);
 
   useEffect(() => {
-    const merged = mergeRosterCartStorage(teamRosterCartReadKeys);
+    const merged = readTeamRosterCartCanonical();
     setTeamRosterCartPlayers(merged);
-    // Normalize all aliases so stale legacy keys do not resurrect removed players.
-    teamRosterCartSyncKeys.forEach((key) => writeRosterCartStorage(key, merged));
-  }, [teamRosterCartReadKeys, teamRosterCartSyncKeys]);
+    // Keep only canonical key active so removed players cannot be resurrected by stale aliases.
+    pruneLegacyTeamRosterCartAliases();
+  }, [teamRosterCartLegacyKeys, teamRosterCartStorageKey]);
 
   useEffect(() => {
     if (!desiredPlayersStorageKey) {
@@ -2861,7 +2886,7 @@ export default function BirdDogPage() {
     const desiredStorageRaw = desiredPlayersStorageKey ? safeLocalGet(desiredPlayersStorageKey) : null;
     const hasLocalDesiredState = desiredStorageRaw !== null;
     const persistedDesired = readDesiredPlayersStorage(desiredPlayersStorageKey) || [];
-    const cartDesired = mergeRosterCartStorage(teamRosterCartReadKeys);
+    const cartDesired = readTeamRosterCartCanonical();
     const remoteDesired = Array.isArray(mine.desired_players)
       ? mine.desired_players
         .map((item) => ({
@@ -4637,8 +4662,8 @@ export default function BirdDogPage() {
 
   function removeDesiredPlayer(selectionKey: string) {
     setDesiredPlayersAndPersist((prev) => prev.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey));
-    persistTeamRosterCart(
-      teamRosterCartPlayers.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey)
+    setTeamRosterCartAndPersist((prev) =>
+      prev.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey)
     );
     autoPlannerRef.current.key = "";
     clearSmartScheduleInsights();
@@ -4664,13 +4689,12 @@ export default function BirdDogPage() {
   }
 
   function persistTeamRosterCart(next: DesiredPlayer[]) {
-    setTeamRosterCartPlayers(next);
-    teamRosterCartSyncKeys.forEach((key) => writeRosterCartStorage(key, next));
+    setTeamRosterCartAndPersist(next);
   }
 
   function removeTeamRosterCartPlayer(selectionKey: string) {
-    persistTeamRosterCart(
-      teamRosterCartPlayers.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey)
+    setTeamRosterCartAndPersist((prev) =>
+      prev.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey)
     );
     setDesiredPlayersAndPersist((prev) => prev.filter((item) => desiredPlayerSelectionKey(item) !== selectionKey));
     autoPlannerRef.current.key = "";

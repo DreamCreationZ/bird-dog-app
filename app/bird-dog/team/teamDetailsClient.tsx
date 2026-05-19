@@ -353,6 +353,13 @@ function desiredSelectionKey(player: CrossTeamCartPlayer) {
   return player.selectionKey || player.playerId;
 }
 
+function cartPlayerDedupeKey(player: CrossTeamCartPlayer) {
+  const stable = String(desiredSelectionKey(player) || "").trim();
+  if (stable) return `id:${stable}`;
+  const identity = cartPlayerIdentityKey(player);
+  return identity ? `identity:${identity}` : "";
+}
+
 function cartPlayerIdentityKey(player: Pick<CrossTeamCartPlayer, "name" | "hometown">) {
   const name = normalizeSearchText(player.name || "");
   const hometown = normalizeSearchText(player.hometown || "");
@@ -364,9 +371,9 @@ function cartPlayerIdentityKey(player: Pick<CrossTeamCartPlayer, "name" | "homet
 function dedupeCartPlayersByIdentity(rows: CrossTeamCartPlayer[]) {
   const deduped = new Map<string, CrossTeamCartPlayer>();
   rows.forEach((item) => {
-    const identity = cartPlayerIdentityKey(item) || desiredSelectionKey(item);
-    if (!deduped.has(identity)) {
-      deduped.set(identity, item);
+    const dedupeKey = cartPlayerDedupeKey(item) || cartPlayerIdentityKey(item) || desiredSelectionKey(item);
+    if (!deduped.has(dedupeKey)) {
+      deduped.set(dedupeKey, item);
     }
   });
   return Array.from(deduped.values());
@@ -410,9 +417,9 @@ function mergeRosterCartStorage(keys: string[]) {
     if (!key) return;
     const rows = readRosterCartStorage(key);
     rows.forEach((item) => {
-      const identity = cartPlayerIdentityKey(item) || desiredSelectionKey(item);
-      if (!merged.has(identity)) {
-        merged.set(identity, item);
+      const dedupeKey = cartPlayerDedupeKey(item) || cartPlayerIdentityKey(item) || desiredSelectionKey(item);
+      if (!merged.has(dedupeKey)) {
+        merged.set(dedupeKey, item);
       }
     });
   });
@@ -805,45 +812,49 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     () => rosterCartStorageKey(cartCompany, cartInventorySlug),
     [cartCompany, cartInventorySlug]
   );
-  const cartStorageReadKeys = useMemo(() => {
+  const cartStorageLegacyKeys = useMemo(() => {
     const candidates = [
-      cartStorageKey,
+      rosterCartStorageKey(cartCompany),
       ROSTER_CART_GLOBAL_KEY,
       legacyRosterCartStorageKey(cartCompany, cartInventorySlug),
-      legacyRosterCartStorageKey(cartCompany),
-      legacyRosterCartStorageKey("PG", cartInventorySlug),
-      legacyRosterCartStorageKey("PBR", cartInventorySlug),
-      legacyRosterCartStorageKey("PG"),
-      legacyRosterCartStorageKey("PBR")
+      legacyRosterCartStorageKey(cartCompany)
     ];
     return Array.from(new Set(candidates.filter(Boolean)));
-  }, [cartCompany, cartInventorySlug, cartStorageKey]);
-  const cartStorageWriteKeys = useMemo(() => {
-    const candidates = [
-      cartStorageKey,
-      ROSTER_CART_GLOBAL_KEY,
-      legacyRosterCartStorageKey(cartCompany, cartInventorySlug)
-    ];
-    return Array.from(new Set(candidates.filter(Boolean)));
-  }, [cartCompany, cartInventorySlug, cartStorageKey]);
-  const cartStorageSyncKeys = useMemo(
-    () => Array.from(new Set([...cartStorageReadKeys, ...cartStorageWriteKeys])),
-    [cartStorageReadKeys, cartStorageWriteKeys]
-  );
+  }, [cartCompany, cartInventorySlug]);
 
   const persistCrossTeamCart = useMemo(
     () => (rows: CrossTeamCartPlayer[]) => {
-      cartStorageSyncKeys.forEach((key) => writeRosterCartStorage(key, rows));
+      if (cartStorageKey) {
+        writeRosterCartStorage(cartStorageKey, rows);
+      }
+      cartStorageLegacyKeys.forEach((key) => {
+        if (!key || key === cartStorageKey) return;
+        try {
+          window.localStorage.removeItem(key);
+        } catch {
+          // Ignore storage cleanup errors.
+        }
+      });
     },
-    [cartStorageSyncKeys]
+    [cartStorageKey, cartStorageLegacyKeys]
   );
 
   useEffect(() => {
-    const merged = mergeRosterCartStorage(cartStorageReadKeys);
+    let merged: CrossTeamCartPlayer[] = [];
+    try {
+      const canonicalRaw = cartStorageKey ? window.localStorage.getItem(cartStorageKey) : null;
+      if (canonicalRaw != null) {
+        merged = cartStorageKey ? readRosterCartStorage(cartStorageKey) : [];
+      } else {
+        merged = mergeRosterCartStorage([cartStorageKey, ...cartStorageLegacyKeys].filter(Boolean));
+      }
+    } catch {
+      merged = mergeRosterCartStorage([cartStorageKey, ...cartStorageLegacyKeys].filter(Boolean));
+    }
     setCrossTeamCartPlayers(merged);
-    // Normalize all storage aliases to one consistent source-of-truth value.
+    // Keep only canonical key active so removed players cannot reappear from stale aliases.
     persistCrossTeamCart(merged);
-  }, [cartStorageReadKeys, persistCrossTeamCart]);
+  }, [cartStorageKey, cartStorageLegacyKeys, persistCrossTeamCart]);
 
   useEffect(() => {
     let mounted = true;
@@ -1112,7 +1123,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     }
   }
 
-  async function fetchTeamDetailsRemote(timeoutMs = 9000) {
+  async function fetchTeamDetailsRemote(timeoutMs = 4500) {
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     const timeoutId = controller
       ? window.setTimeout(() => controller.abort(), timeoutMs)

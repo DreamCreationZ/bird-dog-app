@@ -558,6 +558,30 @@ function asIsoDate(value: string) {
   return new Date().toISOString().slice(0, 10);
 }
 
+function withTimeout<T>(task: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let settled = false;
+  return new Promise<T | null>((resolve) => {
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
+    }, timeoutMs);
+    task
+      .then((value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      });
+  });
+}
+
 async function resolvePbrEventHint(input: {
   inventorySlug: string;
   tournament: Tournament | null;
@@ -720,11 +744,11 @@ export async function POST(req: NextRequest) {
             teamUrl
           });
           if (eventHint) {
-            const livePbr = await tryFetchPbrLiveTeamData({
+            const livePbr = await withTimeout(tryFetchPbrLiveTeamData({
               eventHint,
               targetTeamName: targetTeamName || teamName,
               fallbackIsoDate: asIsoDate(tournament.date)
-            }).catch(() => ({ schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[], teamUrl: "" }));
+            }), 3000) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[], teamUrl: "" };
 
             if (livePbr.schedule.length || livePbr.roster.length) {
               const mergedRosterMap = new Map<string, TeamRosterRow>(
@@ -763,11 +787,11 @@ export async function POST(req: NextRequest) {
         if (shouldEnrichFromLive) {
           const fallbackTeamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName: targetTeamName || teamName, eventId });
           if (fallbackTeamUrl) {
-            const live = await scrapePgTeamLive(fallbackTeamUrl, {
+            const live = await withTimeout(scrapePgTeamLive(fallbackTeamUrl, {
               teamName: targetTeamName || teamName,
               eventId,
               fastMode: true
-            });
+            }), 2800) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[] };
             if (live.schedule.length || live.roster.length) {
               const mergedRosterMap = new Map<string, {
                 no: string;
@@ -825,11 +849,11 @@ export async function POST(req: NextRequest) {
 
       const fallbackTeamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName: targetTeamName || teamName, eventId });
       if (fallbackTeamUrl) {
-        const live = await scrapePgTeamLive(fallbackTeamUrl, {
+        const live = await withTimeout(scrapePgTeamLive(fallbackTeamUrl, {
           teamName: targetTeamName || teamName,
           eventId,
           fastMode: true
-        });
+        }), 2800) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[] };
         if (live.schedule.length || live.roster.length) {
           return NextResponse.json({ ok: true, source: "pg_live_fallback", ...live, teamUrl: fallbackTeamUrl });
         }
@@ -852,7 +876,10 @@ export async function POST(req: NextRequest) {
     if (!teamUrl) {
       return NextResponse.json({ error: "Team URL could not be resolved." }, { status: 404 });
     }
-    const data = await scrapePgTeamLive(teamUrl, { teamName, eventId, fastMode: searchOnly });
+    const data = await withTimeout(scrapePgTeamLive(teamUrl, { teamName, eventId, fastMode: searchOnly }), 6000);
+    if (!data) {
+      return NextResponse.json({ error: "Live team sync timed out. Please retry." }, { status: 504 });
+    }
     return NextResponse.json({ ok: true, ...data });
   } catch (error) {
     return NextResponse.json({ error: "Failed to load team details", detail: String(error) }, { status: 500 });

@@ -10,11 +10,17 @@ import { fetchPgTournamentCatalog } from "@/lib/birddog/pgTournamentCatalog";
 
 const FALLBACK_UNLOCK_COOKIE = "bird_dog_fallback_unlocks";
 const LIVE_CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
+const LAST_GOOD_INVENTORY_TTL_MS = 30 * 60 * 1000;
 
 type LiveCatalogCache = {
   fetchedAt: number;
   pg: InventoryItem[];
   pbr: InventoryItem[];
+};
+
+type LastGoodInventoryCache = {
+  savedAt: number;
+  inventory: InventoryItem[];
 };
 
 function getLiveCatalogCache() {
@@ -27,6 +33,17 @@ function getLiveCatalogCache() {
     };
   }
   return g.__BIRD_DOG_LIVE_CATALOG_CACHE__;
+}
+
+function getLastGoodInventoryCache() {
+  const g = globalThis as unknown as { __BIRD_DOG_LAST_GOOD_INVENTORY_CACHE__?: LastGoodInventoryCache };
+  if (!g.__BIRD_DOG_LAST_GOOD_INVENTORY_CACHE__) {
+    g.__BIRD_DOG_LAST_GOOD_INVENTORY_CACHE__ = {
+      savedAt: 0,
+      inventory: []
+    };
+  }
+  return g.__BIRD_DOG_LAST_GOOD_INVENTORY_CACHE__;
 }
 
 function fallbackUnlockedSlugs(req: NextRequest) {
@@ -196,23 +213,24 @@ export async function GET(req: NextRequest) {
       });
     }
     const seedMetaBySlug = new Map(INVENTORY_SEED.map((item) => [item.slug, item]));
-    await withTimeoutFallback(seedCircuitInventory(), 3500, null);
-    const groupedEvents = await withTimeoutFallback(
+    const groupedEventsPromise = withTimeoutFallback(
       fetchPgGroupedEvents("23065").catch(() => []),
-      4500,
+      1500,
       [] as Awaited<ReturnType<typeof fetchPgGroupedEvents>>
     );
-    const [inventory, unlockedSlugs] = await Promise.all([
+    await withTimeoutFallback(seedCircuitInventory(), 1500, null);
+    const [inventory, unlockedSlugs, groupedEvents] = await Promise.all([
       withTimeoutFallback(
         listCircuitInventory(),
-        8000,
+        4000,
         [] as Awaited<ReturnType<typeof listCircuitInventory>>
       ),
       withTimeoutFallback(
         listOrgUnlocks(session.orgId),
-        5000,
+        3000,
         [] as string[]
-      )
+      ),
+      groupedEventsPromise
     ]);
     if (!inventory.length) {
       return NextResponse.json({
@@ -233,12 +251,12 @@ export async function GET(req: NextRequest) {
       const [nextLivePg, nextLivePbr] = await Promise.all([
         withTimeoutFallback(
           fetchPgTournamentCatalog().then((result) => result.items as InventoryItem[]),
-          7000,
+          2500,
           liveCatalogCache.pg
         ),
         withTimeoutFallback(
           fetchPbrTournamentCatalog().then((result) => result.items as InventoryItem[]),
-          7000,
+          2500,
           liveCatalogCache.pbr
         )
       ]);
@@ -252,9 +270,17 @@ export async function GET(req: NextRequest) {
     }
 
     let mergedInventory = applyLiveInventory(inventory as InventoryItem[], livePg, livePbr);
+    const lastGoodInventory = getLastGoodInventoryCache();
+    const hasFreshLastGood =
+      lastGoodInventory.inventory.length > 0
+      && Date.now() - lastGoodInventory.savedAt < LAST_GOOD_INVENTORY_TTL_MS;
     if (!livePg.length && !livePbr.length && isSeedOnlyInventory(mergedInventory)) {
       // Avoid flashing stale seeded tournaments as if they were current live events.
-      mergedInventory = [];
+      mergedInventory = hasFreshLastGood ? lastGoodInventory.inventory : [];
+    }
+    if (mergedInventory.length) {
+      lastGoodInventory.savedAt = Date.now();
+      lastGoodInventory.inventory = mergedInventory;
     }
     const unlockedSet = new Set([...unlockedSlugs, ...cookieUnlockedSet]);
 
@@ -283,6 +309,10 @@ export async function GET(req: NextRequest) {
     });
   } catch (error) {
     const detail = String(error || "");
+    const lastGoodInventory = getLastGoodInventoryCache();
+    const hasFreshLastGood =
+      lastGoodInventory.inventory.length > 0
+      && Date.now() - lastGoodInventory.savedAt < LAST_GOOD_INVENTORY_TTL_MS;
     const missingConfig = detail.includes("Missing environment variable: SUPABASE_URL")
       || detail.includes("Missing environment variable: SUPABASE_SERVICE_ROLE_KEY");
     if (missingConfig) {
@@ -296,9 +326,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       subscribed: forceUnlocked || cookieUnlockedSet.size > 0,
       fallback: true,
-      warning: "Failed to read inventory from database. Showing seeded tournaments.",
+      warning: hasFreshLastGood
+        ? "Live sync failed briefly. Showing last successful tournament snapshot."
+        : "Failed to read inventory from database. Showing seeded tournaments.",
       detail,
-      inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, cookieUnlockedSet)
+      inventory: hasFreshLastGood
+        ? mapInventoryForResponse(lastGoodInventory.inventory, forceUnlocked, cookieUnlockedSet)
+        : mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, cookieUnlockedSet)
     });
   }
 }
