@@ -180,6 +180,11 @@ type HotelSuggestion = {
   placeId: string;
 };
 
+type StateArrivalInput = {
+  arrivalLocation: string;
+  arrivalTime: string;
+};
+
 type TeamRef = NonNullable<Tournament["teams"]>[number];
 
 type InlineTeamNoteTarget = {
@@ -253,6 +258,7 @@ type CoachGameCandidate = {
   gameNo: string;
   startMs: number;
   endMs: number;
+  stateCode: string;
   locationLabel: string;
   locationQuery: string;
   homeTeam: string;
@@ -1205,7 +1211,7 @@ function travelModeByText(from: string, to: string): TravelEstimate {
   }
   return {
     mode: "Ground transfer",
-    minutes: 3 * 60 + 30
+    minutes: 75
   };
 }
 
@@ -1464,6 +1470,8 @@ export default function BirdDogPage() {
   const [desiredPlayerId, setDesiredPlayerId] = useState("");
   const [myGeneratedPlan, setMyGeneratedPlan] = useState<PlanItem[]>([]);
   const [smartRouteHint, setSmartRouteHint] = useState("");
+  const [flightBooked, setFlightBooked] = useState<"yes" | "no">("no");
+  const [stateArrivalInputs, setStateArrivalInputs] = useState<Record<string, StateArrivalInput>>({});
   const [planWorkflowStatus, setPlanWorkflowStatus] = useState<PlanWorkflowStatus>("draft");
   const [planWorkflowNote, setPlanWorkflowNote] = useState("");
   const [focusGeneratedScheduleRequested, setFocusGeneratedScheduleRequested] = useState(false);
@@ -1684,6 +1692,28 @@ export default function BirdDogPage() {
     });
     return map;
   }, [desiredPlayers, games]);
+  const eventStateCode = useMemo(
+    () => extractUsStateCode(String(selectedInventory?.displayCity || selectedTournament?.city || "")),
+    [selectedInventory?.displayCity, selectedTournament?.city]
+  );
+  const requiredStateCodes = useMemo(() => {
+    const states = new Set<string>();
+    desiredPlayers.forEach((player) => {
+      const matchedGame = games.find((game) =>
+        teamsLookEquivalent(player.team, game.homeTeam) || teamsLookEquivalent(player.team, game.awayTeam)
+      );
+      const fromGame = matchedGame
+        ? extractUsStateCode(
+          `${normalizedVenueLabel(matchedGame)}, ${String(selectedInventory?.displayCity || selectedTournament?.city || "").trim()}`
+        )
+        : "";
+      const fromHometown = extractUsStateCode(player.hometown || "");
+      const resolved = fromGame || fromHometown || eventStateCode;
+      if (resolved) states.add(resolved);
+    });
+    if (!states.size && eventStateCode) states.add(eventStateCode);
+    return Array.from(states.values());
+  }, [desiredPlayers, games, selectedInventory?.displayCity, selectedTournament?.city, eventStateCode]);
   const selectedTournamentTeams = selectedTournament?.teams || [];
   const teamsByNormalizedName = useMemo(() => {
     const map = new Map<string, TeamRef>();
@@ -2077,6 +2107,24 @@ export default function BirdDogPage() {
       return Array.from(merged.values());
     });
   }, [teamRosterCartPlayers]);
+
+  useEffect(() => {
+    if (!requiredStateCodes.length) {
+      setStateArrivalInputs({});
+      return;
+    }
+    setStateArrivalInputs((prev) => {
+      const next: Record<string, StateArrivalInput> = {};
+      requiredStateCodes.forEach((stateCode) => {
+        const existing = prev[stateCode];
+        next[stateCode] = existing || {
+          arrivalLocation: String(selectedInventory?.displayCity || selectedTournament?.city || "").trim(),
+          arrivalTime: ""
+        };
+      });
+      return next;
+    });
+  }, [requiredStateCodes, selectedInventory?.displayCity, selectedTournament?.city]);
 
   useEffect(() => {
     if (!queryStateApplied || !user || loadingHarvest || typeof window === "undefined") return;
@@ -3289,6 +3337,19 @@ export default function BirdDogPage() {
     });
   }
 
+  function updateStateArrivalInput(stateCode: string, patch: Partial<StateArrivalInput>) {
+    const normalized = String(stateCode || "").trim().toUpperCase();
+    if (!normalized) return;
+    setStateArrivalInputs((prev) => ({
+      ...prev,
+      [normalized]: {
+        arrivalLocation: String(prev[normalized]?.arrivalLocation || "").trim(),
+        arrivalTime: String(prev[normalized]?.arrivalTime || "").trim(),
+        ...patch
+      }
+    }));
+  }
+
   function toggleSmartPlayerSelection(item: SmartPlayerResult) {
     const selectionKey = smartPlayerSelectionKey(item.teamId, item.playerId);
     setDesiredPlayersAndPersist((prev) => {
@@ -3383,7 +3444,11 @@ export default function BirdDogPage() {
       const normalized = normalizeSmartSearch(team.name || "");
       return normalized === teamName || normalized.includes(teamName) || teamName.includes(normalized);
     });
-    return String(teamMatch?.from || player.team || "Tournament Venue").trim();
+    const teamFrom = String(teamMatch?.from || "").trim();
+    const eventCity = String(selectedInventory?.displayCity || selectedTournament?.city || "").trim();
+    if (teamFrom && extractUsStateCode(teamFrom)) return teamFrom;
+    if (eventCity) return eventCity;
+    return "Tournament Venue";
   }
 
   function teamsLookEquivalent(a: string, b: string) {
@@ -3401,9 +3466,24 @@ export default function BirdDogPage() {
   }
 
   function gameLocationQuery(game: Game) {
-    const field = String(game.field || "Field TBD").trim() || "Field TBD";
+    const field = normalizedVenueLabel(game);
     const city = String(selectedInventory?.displayCity || selectedTournament?.city || "").trim();
     return city ? `${field}, ${city}` : field;
+  }
+
+  function normalizedVenueLabel(game: Game) {
+    const rawField = String(game.field || "").trim();
+    const eventCity = String(selectedInventory?.displayCity || selectedTournament?.city || "").trim();
+    if (!rawField) return eventCity || "Tournament Venue";
+    const rawNorm = normalizeSmartSearch(rawField);
+    const homeNorm = normalizeSmartSearch(String(game.homeTeam || ""));
+    const awayNorm = normalizeSmartSearch(String(game.awayTeam || ""));
+    const sameAsHome = rawNorm && homeNorm && (rawNorm === homeNorm || rawNorm.includes(homeNorm) || homeNorm.includes(rawNorm));
+    const sameAsAway = rawNorm && awayNorm && (rawNorm === awayNorm || rawNorm.includes(awayNorm) || awayNorm.includes(rawNorm));
+    if (sameAsHome || sameAsAway || /^(team|pool|winner|loser)\b/i.test(rawField)) {
+      return eventCity || "Tournament Venue";
+    }
+    return rawField;
   }
 
   function buildCoachGameCandidates(targetPlayers: DesiredPlayer[]): CoachGameCandidate[] {
@@ -3426,11 +3506,14 @@ export default function BirdDogPage() {
       });
       return Array.from(grouped.values()).slice(0, 24).map((item, index) => {
         const startMs = baselineStartMs + index * 75 * 60 * 1000;
+        const fallbackState = extractUsStateCode(item.destination)
+          || extractUsStateCode(String(selectedInventory?.displayCity || selectedTournament?.city || ""));
         return {
           key: `fallback:${index}`,
           gameNo: `#${index + 1}`,
           startMs,
           endMs: startMs + GAME_MINUTES * 60 * 1000,
+          stateCode: fallbackState,
           locationLabel: item.destination,
           locationQuery: item.destination,
           homeTeam: item.players[0]?.team || "Team A",
@@ -3452,12 +3535,17 @@ export default function BirdDogPage() {
       const startAt = Date.parse(String(game.startTime || ""));
       const hasValidStart = Number.isFinite(startAt);
       const startMs = hasValidStart ? startAt : (baselineStartMs + index * 90 * 60 * 1000);
+      const venueLabel = normalizedVenueLabel(game);
+      const stateCode = extractUsStateCode(
+        `${venueLabel}, ${String(selectedInventory?.displayCity || selectedTournament?.city || "").trim()}`
+      ) || extractUsStateCode(String(selectedInventory?.displayCity || selectedTournament?.city || ""));
       return {
         key: String(game.id || `game:${index}`),
         gameNo: extractGameNoLabel(game, index),
         startMs,
         endMs: startMs + GAME_MINUTES * 60 * 1000,
-        locationLabel: String(game.field || "Field TBD").trim() || "Field TBD",
+        stateCode,
+        locationLabel: venueLabel,
         locationQuery: gameLocationQuery(game),
         homeTeam: String(game.homeTeam || "Team A"),
         awayTeam: String(game.awayTeam || "Team B"),
@@ -3479,6 +3567,7 @@ export default function BirdDogPage() {
         gameNo: `#U${index + 1}`,
         startMs,
         endMs: startMs + GAME_MINUTES * 60 * 1000,
+        stateCode: extractUsStateCode(destination) || extractUsStateCode(String(selectedInventory?.displayCity || selectedTournament?.city || "")),
         locationLabel: destination,
         locationQuery: destination,
         homeTeam: player.team || "Team A",
@@ -3491,7 +3580,11 @@ export default function BirdDogPage() {
     return candidates.sort((a, b) => a.startMs - b.startMs);
   }
 
-  async function buildOptimizedCoachPlan(targetPlayers: DesiredPlayer[], preferredSourceText?: string) {
+  async function buildOptimizedCoachPlan(
+    targetPlayers: DesiredPlayer[],
+    preferredSourceText?: string,
+    arrivalByStateInput?: Record<string, StateArrivalInput>
+  ) {
     const candidates = buildCoachGameCandidates(targetPlayers).slice(0, 48);
     const geocoded = await Promise.all(candidates.map(async (candidate) => ({
       ...candidate,
@@ -3500,6 +3593,20 @@ export default function BirdDogPage() {
 
     const startLabel = String(preferredSourceText || airportStartLabel || scheduleForm.flightSource || "Event arrival hub").trim();
     const startPoint = await geocodeForRoute(startLabel);
+    const arrivalStateRows = Object.entries(arrivalByStateInput || {})
+      .map(([stateCode, value]) => ({
+        stateCode: String(stateCode || "").trim().toUpperCase(),
+        arrivalLocation: String(value?.arrivalLocation || "").trim(),
+        arrivalMs: Date.parse(String(value?.arrivalTime || ""))
+      }))
+      .filter((row) => row.stateCode && row.arrivalLocation && Number.isFinite(row.arrivalMs));
+    const arrivalRowsWithGeo = await Promise.all(arrivalStateRows.map(async (row) => ({
+      ...row,
+      point: await geocodeForRoute(row.arrivalLocation)
+    })));
+    const arrivalByState = new Map(
+      arrivalRowsWithGeo.map((row) => [row.stateCode, row])
+    );
     const parsedArrival = Date.parse(String(scheduleForm.flightArrivalTime || ""));
     const gameStarts = geocoded
       .map((candidate) => candidate.startMs)
@@ -3521,6 +3628,7 @@ export default function BirdDogPage() {
 
     let prevLabel = startPoint?.label || startLabel;
     let prevPoint = startPoint;
+    let prevStateCode = extractUsStateCode(prevLabel) || eventStateCode;
     let blockedReason = "";
     let smartReorderHint = "";
     const MIN_VIEW_MINUTES = 20;
@@ -3530,6 +3638,11 @@ export default function BirdDogPage() {
       let best: {
         candidate: CoachGameCandidate;
         travel: TravelEstimate;
+        fromLabel: string;
+        fromPoint: GeoLocation | null;
+        fromStateCode: string;
+        arrivalGateMs: number;
+        switchedState: boolean;
         departMs: number;
         arriveMs: number;
         watchStartMs: number;
@@ -3548,6 +3661,23 @@ export default function BirdDogPage() {
           .filter((key) => unseenPlayers.has(key));
         if (!newCoverage.length) continue;
 
+        const candidateStateCode = candidate.stateCode || extractUsStateCode(candidate.locationQuery) || extractUsStateCode(candidate.locationLabel) || eventStateCode;
+        let fromLabel = prevLabel;
+        let fromPoint = prevPoint;
+        let fromStateCode = prevStateCode;
+        let arrivalGateMs = cursorMs;
+        let switchedState = false;
+        const stateArrival = candidateStateCode ? arrivalByState.get(candidateStateCode) : null;
+        if (stateArrival && candidateStateCode && fromStateCode && candidateStateCode !== fromStateCode) {
+          fromLabel = stateArrival.point?.label || stateArrival.arrivalLocation;
+          fromPoint = stateArrival.point || null;
+          fromStateCode = candidateStateCode;
+          arrivalGateMs = Math.max(cursorMs, stateArrival.arrivalMs);
+          switchedState = true;
+        } else if (stateArrival) {
+          arrivalGateMs = Math.max(cursorMs, stateArrival.arrivalMs);
+        }
+
         const destinationLabel = candidate.point?.label || candidate.locationLabel;
         let travelEstimate: TravelEstimate = {
           mode: "Ground transfer",
@@ -3555,20 +3685,20 @@ export default function BirdDogPage() {
           advisory: "Estimated from fallback routing."
         };
 
-        const sameLocationByText = normalizeLocationText(prevLabel) === normalizeLocationText(destinationLabel);
+        const sameLocationByText = normalizeLocationText(fromLabel) === normalizeLocationText(destinationLabel);
         if (sameLocationByText) {
           travelEstimate = { mode: "On-site", minutes: 0, advisory: "Already at this venue." };
-        } else if (prevPoint?.lat != null && prevPoint?.lng != null && candidate.point?.lat != null && candidate.point?.lng != null) {
-          const km = distanceKm(prevPoint.lat, prevPoint.lng, candidate.point.lat, candidate.point.lng);
+        } else if (fromPoint?.lat != null && fromPoint?.lng != null && candidate.point?.lat != null && candidate.point?.lng != null) {
+          const km = distanceKm(fromPoint.lat, fromPoint.lng, candidate.point.lat, candidate.point.lng);
           travelEstimate = km <= 0.6
             ? { mode: "On-site", minutes: 0, advisory: "Already at this venue." }
             : travelModeByDistance(km);
         } else {
-          travelEstimate = travelModeByText(prevLabel, destinationLabel);
+          travelEstimate = travelModeByText(fromLabel, destinationLabel);
         }
 
         if (travelEstimate.minutes > MAX_FEASIBLE_TRAVEL_MINUTES) continue;
-        const departMs = cursorMs;
+        const departMs = arrivalGateMs;
         const arriveMs = departMs + travelEstimate.minutes * 60 * 1000;
         const watchStartMs = Math.max(arriveMs, candidate.startMs - PRE_GAME_BUFFER_MINUTES * 60 * 1000);
         const remainingMinutes = Math.floor((candidate.endMs - watchStartMs) / (60 * 1000));
@@ -3597,6 +3727,11 @@ export default function BirdDogPage() {
           best = {
             candidate,
             travel: travelEstimate,
+            fromLabel,
+            fromPoint,
+            fromStateCode,
+            arrivalGateMs,
+            switchedState,
             departMs,
             arriveMs,
             watchStartMs,
@@ -3622,10 +3757,18 @@ export default function BirdDogPage() {
         `Reach by ${formatPlanClock(best.arriveMs)} (${best.travel.mode}, ${formatEta(best.travel.minutes)})`
       ].filter(Boolean).join(" · ");
 
+      if (best.switchedState && best.fromStateCode) {
+        travelPlan.push({
+          at: new Date(best.arrivalGateMs).toISOString(),
+          title: `Arrive in ${best.fromStateCode}`,
+          detail: best.fromLabel
+        });
+      }
+
       const legNo = visitedStops.length + 1;
       travelPlan.push({
         at: new Date(best.departMs).toISOString(),
-        title: `Travel ${legNo}: ${prevLabel} -> ${destinationLabel}`,
+        title: `Travel ${legNo}: ${best.fromLabel} -> ${destinationLabel}`,
         detail: travelDetail
       });
 
@@ -3648,6 +3791,7 @@ export default function BirdDogPage() {
       cursorMs = departVenueMs + 15 * 60 * 1000;
       prevLabel = destinationLabel;
       prevPoint = best.candidate.point || null;
+      prevStateCode = best.candidate.stateCode || extractUsStateCode(destinationLabel) || prevStateCode;
 
       visitedStops.push({ ...best.candidate, watchStartMs: best.watchStartMs, reason: best.reason });
     }
@@ -3783,14 +3927,42 @@ export default function BirdDogPage() {
     if (options?.keepActiveTab !== false) {
       setActiveTab("myPlayersSchedule");
     }
+    const requiredStates = requiredStateCodes.length ? requiredStateCodes : (eventStateCode ? [eventStateCode] : []);
+    const currentCoachState = extractUsStateCode(String(airportStartLabel || scheduleForm.flightSource || ""));
+    const needsArrivalAnswers = flightBooked === "yes" || requiredStates.some((code) => code && code !== currentCoachState);
+    const arrivalPayloadByState: Record<string, StateArrivalInput> = {};
+    if (needsArrivalAnswers) {
+      for (const stateCode of requiredStates) {
+        const row = stateArrivalInputs[stateCode];
+        const arrivalLocation = String(row?.arrivalLocation || "").trim();
+        const arrivalTime = String(row?.arrivalTime || "").trim();
+        if (!arrivalLocation || !arrivalTime) {
+          const msg = `Please enter arrival city and arrival time for ${stateCode} before creating schedule.`;
+          setPlayerSearchStatus(msg);
+          setPlanWorkflowNote(msg);
+          return;
+        }
+        arrivalPayloadByState[stateCode] = { arrivalLocation, arrivalTime };
+      }
+    }
+    const earliestArrival = Object.entries(arrivalPayloadByState)
+      .map(([stateCode, row]) => ({
+        stateCode,
+        ...row,
+        atMs: Date.parse(String(row.arrivalTime || ""))
+      }))
+      .filter((row) => Number.isFinite(row.atMs))
+      .sort((a, b) => a.atMs - b.atMs)[0];
     const firstPlayerStart = destinationForPlayer(selectedPlayers[0]) || "";
-    const resolvedSource = String(airportStartLabel || firstPlayerStart || "Event arrival hub").trim();
+    const resolvedSource = String(earliestArrival?.arrivalLocation || airportStartLabel || firstPlayerStart || "Event arrival hub").trim();
+    const plannedArrivalInput = String(earliestArrival?.arrivalTime || scheduleForm.flightArrivalTime || "").trim();
     clearSmartScheduleInsights();
     const instantFlightDestination = scheduleForm.flightDestination || firstPlayerStart;
     const instantForm = {
       ...scheduleForm,
       flightSource: resolvedSource,
       flightDestination: instantFlightDestination,
+      flightArrivalTime: plannedArrivalInput,
       hotelName: ""
     };
     const instantPlan = buildInstantRecommendation(selectedPlayers, resolvedSource);
@@ -3800,7 +3972,7 @@ export default function BirdDogPage() {
     setPlanWorkflowNote("Generating recommendation...");
     setPlayerSearchStatus(`Generating schedule for ${selectedPlayers.length} selected players...`);
     try {
-      const optimized = await buildOptimizedCoachPlan(selectedPlayers, resolvedSource);
+      const optimized = await buildOptimizedCoachPlan(selectedPlayers, resolvedSource, arrivalPayloadByState);
       const hotelHubDestination = optimized.hotelHubDestination || optimized.firstDestination || firstPlayerStart || "";
       if (optimized.smartReorderHint) {
         setSmartRouteHint(optimized.smartReorderHint);
@@ -3838,7 +4010,7 @@ export default function BirdDogPage() {
         ...scheduleForm,
         flightSource: resolvedSource || optimized.sourceLabel || "Event arrival hub",
         flightDestination: destination,
-        flightArrivalTime: scheduleForm.flightArrivalTime || toInputDateTime(finalPlan[0]?.at || new Date().toISOString()),
+        flightArrivalTime: plannedArrivalInput || scheduleForm.flightArrivalTime || toInputDateTime(finalPlan[0]?.at || new Date().toISOString()),
         hotelName,
         notes: scheduleForm.notes || (
           isFeasible
@@ -5198,11 +5370,46 @@ export default function BirdDogPage() {
           <p className="muted" style={{ marginTop: 0 }}>
             Selected players: {desiredPlayers.length}
           </p>
-          {smartRouteHint ? (
-            <p className="muted" style={{ marginTop: 0 }}>
-              {smartRouteHint}
+          <div className="panel" style={{ marginTop: 8, marginBottom: 8 }}>
+            <h4 style={{ marginTop: 0, marginBottom: 6 }}>Coach Travel Inputs</h4>
+            <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
+              Real planner uses these answers before creating route.
             </p>
-          ) : null}
+            <div className="row wrap" style={{ gap: 8, alignItems: "center" }}>
+              <label htmlFor="flight-booked" style={{ minWidth: 170 }}>Is your flight booked?</label>
+              <select
+                id="flight-booked"
+                value={flightBooked}
+                onChange={(event) => setFlightBooked(event.target.value === "yes" ? "yes" : "no")}
+              >
+                <option value="no">No</option>
+                <option value="yes">Yes</option>
+              </select>
+            </div>
+            {requiredStateCodes.length ? (
+              <div style={{ marginTop: 8 }}>
+                <p className="muted" style={{ marginTop: 0, marginBottom: 6 }}>
+                  Enter arrival location/time for each event state.
+                </p>
+                {requiredStateCodes.map((stateCode) => (
+                  <div key={stateCode} className="row wrap" style={{ gap: 8, marginBottom: 8, alignItems: "center" }}>
+                    <strong style={{ minWidth: 54 }}>{stateCode}</strong>
+                    <input
+                      value={stateArrivalInputs[stateCode]?.arrivalLocation || ""}
+                      onChange={(event) => updateStateArrivalInput(stateCode, { arrivalLocation: event.target.value })}
+                      placeholder={`Arrival city/airport for ${stateCode}`}
+                      style={{ minWidth: 280, flex: "1 1 320px" }}
+                    />
+                    <input
+                      type="datetime-local"
+                      value={stateArrivalInputs[stateCode]?.arrivalTime || ""}
+                      onChange={(event) => updateStateArrivalInput(stateCode, { arrivalTime: event.target.value })}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
           {scheduleForm.hotelName ? (
             <p className="muted" style={{ marginTop: 0 }}>
               Recommended hotel: {scheduleForm.hotelName}
