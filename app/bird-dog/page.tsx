@@ -591,13 +591,42 @@ function legacyRosterCartStorageKey(company: "PG" | "PBR", inventorySlug?: strin
   return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}`;
 }
 
+function normalizePlayerIdentityPart(value: string) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function desiredPlayerIdentityKey(item: DesiredPlayer) {
+  const name = normalizePlayerIdentityPart(item.name || "");
+  const hometown = normalizePlayerIdentityPart(item.hometown || "");
+  if (name && hometown) return `${name}::${hometown}`;
+  if (name) return name;
+  return String(item.selectionKey || item.playerId);
+}
+
+function dedupeDesiredPlayersByIdentity(rows: DesiredPlayer[]) {
+  const deduped = new Map<string, DesiredPlayer>();
+  rows.forEach((item) => {
+    const key = desiredPlayerIdentityKey(item);
+    if (!deduped.has(key)) {
+      deduped.set(key, item);
+    }
+  });
+  return Array.from(deduped.values());
+}
+
 function mergeRosterCartStorage(keys: string[]) {
   const merged = new Map<string, DesiredPlayer>();
   keys.forEach((key) => {
     if (!key) return;
     const rows = readRosterCartStorage(key);
     rows.forEach((item) => {
-      merged.set(String(item.selectionKey || item.playerId), item);
+      const identity = desiredPlayerIdentityKey(item);
+      if (!merged.has(identity)) {
+        merged.set(identity, item);
+      }
     });
   });
   return Array.from(merged.values());
@@ -621,7 +650,7 @@ function readRosterCartStorage(key: string) {
   const raw = safeLocalGet(key);
   const parsed = parseJsonSafe<Array<Record<string, unknown>>>(raw, []);
   if (!Array.isArray(parsed)) return [] as DesiredPlayer[];
-  return parsed
+  const rows = parsed
     .map((item) => ({
       playerId: String(item?.playerId || ""),
       selectionKey: item?.selectionKey ? String(item.selectionKey) : undefined,
@@ -630,10 +659,11 @@ function readRosterCartStorage(key: string) {
       hometown: item?.hometown ? String(item.hometown) : undefined
     }))
     .filter((item) => item.playerId && item.name && item.team);
+  return dedupeDesiredPlayersByIdentity(rows);
 }
 
 function writeRosterCartStorage(key: string, rows: DesiredPlayer[]) {
-  safeLocalSet(key, JSON.stringify(rows));
+  safeLocalSet(key, JSON.stringify(dedupeDesiredPlayersByIdentity(rows)));
 }
 
 function readLegacyRosterCartStorage() {
@@ -660,7 +690,7 @@ function readDesiredPlayersStorage(key: string) {
   if (raw == null) return null as DesiredPlayer[] | null;
   const parsed = parseJsonSafe<Array<Record<string, unknown>>>(raw, []);
   if (!Array.isArray(parsed)) return [] as DesiredPlayer[];
-  return parsed
+  const rows = parsed
     .map((item) => ({
       playerId: String(item?.playerId || ""),
       selectionKey: item?.selectionKey ? String(item.selectionKey) : undefined,
@@ -669,11 +699,12 @@ function readDesiredPlayersStorage(key: string) {
       hometown: item?.hometown ? String(item.hometown) : undefined
     }))
     .filter((item) => item.playerId && item.name && item.team);
+  return dedupeDesiredPlayersByIdentity(rows);
 }
 
 function writeDesiredPlayersStorage(key: string, rows: DesiredPlayer[]) {
   if (!key) return;
-  safeLocalSet(key, JSON.stringify(rows));
+  safeLocalSet(key, JSON.stringify(dedupeDesiredPlayersByIdentity(rows)));
 }
 
 function readLegacyDesiredPlayersStorage(orgId: string, userId: string) {
@@ -1829,9 +1860,10 @@ export default function BirdDogPage() {
 
   function setDesiredPlayersAndPersist(nextState: SetStateAction<DesiredPlayer[]>) {
     setDesiredPlayers((prev) => {
-      const next = typeof nextState === "function"
+      const nextRaw = typeof nextState === "function"
         ? (nextState as (previous: DesiredPlayer[]) => DesiredPlayer[])(prev)
         : nextState;
+      const next = dedupeDesiredPlayersByIdentity(nextRaw);
       writeDesiredPlayersStorage(desiredPlayersStorageKey, next);
       return next;
     });

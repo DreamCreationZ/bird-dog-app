@@ -337,6 +337,25 @@ function desiredSelectionKey(player: CrossTeamCartPlayer) {
   return player.selectionKey || player.playerId;
 }
 
+function cartPlayerIdentityKey(player: Pick<CrossTeamCartPlayer, "name" | "hometown">) {
+  const name = normalizeSearchText(player.name || "");
+  const hometown = normalizeSearchText(player.hometown || "");
+  if (name && hometown) return `${name}::${hometown}`;
+  if (name) return name;
+  return "";
+}
+
+function dedupeCartPlayersByIdentity(rows: CrossTeamCartPlayer[]) {
+  const deduped = new Map<string, CrossTeamCartPlayer>();
+  rows.forEach((item) => {
+    const identity = cartPlayerIdentityKey(item) || desiredSelectionKey(item);
+    if (!deduped.has(identity)) {
+      deduped.set(identity, item);
+    }
+  });
+  return Array.from(deduped.values());
+}
+
 function normalizeStorageScope(value: string) {
   const normalized = String(value || "")
     .toLowerCase()
@@ -375,7 +394,10 @@ function mergeRosterCartStorage(keys: string[]) {
     if (!key) return;
     const rows = readRosterCartStorage(key);
     rows.forEach((item) => {
-      merged.set(desiredSelectionKey(item), item);
+      const identity = cartPlayerIdentityKey(item) || desiredSelectionKey(item);
+      if (!merged.has(identity)) {
+        merged.set(identity, item);
+      }
     });
   });
   return Array.from(merged.values());
@@ -388,7 +410,7 @@ function readRosterCartStorage(key: string): CrossTeamCartPlayer[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as Array<Record<string, unknown>>;
     if (!Array.isArray(parsed)) return [];
-    return parsed
+    const rows = parsed
       .map((item) => ({
         playerId: String(item?.playerId || ""),
         selectionKey: item?.selectionKey ? String(item.selectionKey) : undefined,
@@ -399,6 +421,7 @@ function readRosterCartStorage(key: string): CrossTeamCartPlayer[] {
         sourceTeamName: item?.sourceTeamName ? String(item.sourceTeamName) : undefined
       }))
       .filter((item) => item.playerId && item.name && item.team);
+    return dedupeCartPlayersByIdentity(rows);
   } catch {
     return [];
   }
@@ -407,7 +430,7 @@ function readRosterCartStorage(key: string): CrossTeamCartPlayer[] {
 function writeRosterCartStorage(key: string, rows: CrossTeamCartPlayer[]) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(key, JSON.stringify(rows));
+    window.localStorage.setItem(key, JSON.stringify(dedupeCartPlayersByIdentity(rows)));
   } catch {
     // Ignore storage write errors.
   }
@@ -1719,13 +1742,18 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     }
 
     const merged = new Map<string, CrossTeamCartPlayer>();
+    const identitySet = new Set<string>();
+    const duplicateNames: string[] = [];
     crossTeamCartPlayers.forEach((item) => {
       merged.set(desiredSelectionKey(item), item);
+      const identity = cartPlayerIdentityKey(item);
+      if (identity) identitySet.add(identity);
     });
+    let addedCount = 0;
     selectedRoster.forEach((row) => {
       const rowKey = rosterRowKey(row);
       const selectionKey = `team:${initialParams.teamId}:${rowKey}`;
-      merged.set(selectionKey, {
+      const candidate: CrossTeamCartPlayer = {
         playerId: selectionKey,
         selectionKey,
         name: row.name || "-",
@@ -1733,17 +1761,43 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
         hometown: row.hometown || "",
         sourceTeamId: initialParams.teamId || "",
         sourceTeamName: initialParams.teamName || row.team || ""
-      });
+      };
+      const identity = cartPlayerIdentityKey(candidate);
+      if (identity && identitySet.has(identity)) {
+        duplicateNames.push(candidate.name);
+        return;
+      }
+      if (identity) identitySet.add(identity);
+      merged.set(selectionKey, candidate);
+      addedCount += 1;
     });
-    const next = Array.from(merged.values());
+    const next = dedupeCartPlayersByIdentity(Array.from(merged.values()));
     setCrossTeamCartPlayers(next);
     // Persist immediately before navigation so auto-create on dashboard always has fresh cart data.
     persistCrossTeamCart(next);
 
     if (announce) {
-      setPlannerStatus(
-        `Added ${selectedRoster.length} player(s) from ${initialParams.teamName || "this team"} to final cart. Open another team to keep adding.`
-      );
+      const duplicateCount = duplicateNames.length;
+      if (addedCount > 0 && duplicateCount > 0) {
+        setPlannerStatus(
+          `Added ${addedCount} player(s). ${duplicateCount} already existed in your players list and were not added again.`
+        );
+      } else if (duplicateCount > 0) {
+        setPlannerStatus(
+          `${duplicateCount} player(s) already existed in your players list. No duplicates were added.`
+        );
+      } else {
+        setPlannerStatus(
+          `Added ${addedCount} player(s) from ${initialParams.teamName || "this team"} to final cart. Open another team to keep adding.`
+        );
+      }
+      if (duplicateCount > 0 && typeof window !== "undefined") {
+        const preview = Array.from(new Set(duplicateNames)).slice(0, 3).join(", ");
+        const suffix = duplicateCount > 3 ? " and more" : "";
+        window.alert(
+          `${duplicateCount} player(s) already exist in your players list${preview ? `: ${preview}${suffix}` : ""}.`
+        );
+      }
     }
 
     return next;
