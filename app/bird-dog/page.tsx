@@ -1048,10 +1048,11 @@ function applyHotelFirstRoutePlan(
   };
 
   const nextPlan = [...plan];
+  const originalFirstTravelDetail = String(firstTravel.detail || "").trim();
   nextPlan[firstTravelIndex] = {
     ...firstTravel,
     title: `Travel 2: ${hotelLabel} -> ${parsedFirst.to}`,
-    detail: `Leave by ${formatPlanClock(firstDepartMs)} · ${String(firstTravel.detail || "").trim() || "Head to your first selected player game."}`
+    detail: originalFirstTravelDetail || "Head to your first selected player game."
   };
 
   return renumberTravelLegs([
@@ -1204,8 +1205,7 @@ function travelModeByText(from: string, to: string): TravelEstimate {
   }
   return {
     mode: "Ground transfer",
-    minutes: 3 * 60 + 30,
-    advisory: "Estimated from location text."
+    minutes: 3 * 60 + 30
   };
 }
 
@@ -1464,7 +1464,6 @@ export default function BirdDogPage() {
   const [desiredPlayerId, setDesiredPlayerId] = useState("");
   const [myGeneratedPlan, setMyGeneratedPlan] = useState<PlanItem[]>([]);
   const [smartRouteHint, setSmartRouteHint] = useState("");
-  const [recommendedHotelHub, setRecommendedHotelHub] = useState("");
   const [planWorkflowStatus, setPlanWorkflowStatus] = useState<PlanWorkflowStatus>("draft");
   const [planWorkflowNote, setPlanWorkflowNote] = useState("");
   const [focusGeneratedScheduleRequested, setFocusGeneratedScheduleRequested] = useState(false);
@@ -3284,7 +3283,6 @@ export default function BirdDogPage() {
 
   function clearSmartScheduleInsights() {
     setSmartRouteHint("");
-    setRecommendedHotelHub("");
     setScheduleForm((prev) => {
       if (!prev.hotelName) return prev;
       return { ...prev, hotelName: "" };
@@ -3525,7 +3523,6 @@ export default function BirdDogPage() {
     let prevPoint = startPoint;
     let blockedReason = "";
     let smartReorderHint = "";
-    let firstReason = "";
     const MIN_VIEW_MINUTES = 20;
     const PRE_GAME_BUFFER_MINUTES = 10;
 
@@ -3622,16 +3619,14 @@ export default function BirdDogPage() {
         .map((player) => `${player.name} (${player.team})`);
       const travelDetail = [
         `Leave by ${formatPlanClock(best.departMs)}`,
-        `Reach by ${formatPlanClock(best.arriveMs)} (${best.travel.mode}, ${formatEta(best.travel.minutes)})`,
-        best.reason,
-        best.travel.advisory
+        `Reach by ${formatPlanClock(best.arriveMs)} (${best.travel.mode}, ${formatEta(best.travel.minutes)})`
       ].filter(Boolean).join(" · ");
 
       const legNo = visitedStops.length + 1;
       travelPlan.push({
         at: new Date(best.departMs).toISOString(),
         title: `Travel ${legNo}: ${prevLabel} -> ${destinationLabel}`,
-        detail: `${travelDetail} · Smart reason: ${best.reason}.`
+        detail: travelDetail
       });
 
       if (best.waitMinutes >= 20) {
@@ -3655,7 +3650,6 @@ export default function BirdDogPage() {
       prevPoint = best.candidate.point || null;
 
       visitedStops.push({ ...best.candidate, watchStartMs: best.watchStartMs, reason: best.reason });
-      if (!firstReason) firstReason = best.reason;
     }
 
     if (unseenPlayers.size > 0) {
@@ -3676,7 +3670,7 @@ export default function BirdDogPage() {
     if (visitedStops.length) {
       const firstStop = visitedStops[0];
       const firstPlayers = firstStop.matchedPlayers.map((player) => player.name).slice(0, 3).join(", ");
-      smartReorderHint = `Smart recommendation: start with ${firstPlayers || "first selected players"} because ${firstReason}.`;
+      smartReorderHint = `Recommended first stop: ${firstPlayers || "first selected players"} (based on match timing and travel).`;
     }
 
     const stopsWithPoints = visitedStops.filter((stop) => Boolean(stop.point));
@@ -3735,7 +3729,7 @@ export default function BirdDogPage() {
     } catch {
       // Ignore and use fallback label.
     }
-    return `Recommended hotel near ${cleanDestination}`;
+    return "";
   }
 
   function buildInstantRecommendation(targetPlayers: DesiredPlayer[], sourceOverride?: string): PlanItem[] {
@@ -3804,11 +3798,10 @@ export default function BirdDogPage() {
     setMyGeneratedPlan(instantPlan);
     setAndPersistPlanWorkflowStatus("pending_approval");
     setPlanWorkflowNote("Generating recommendation...");
-    setPlayerSearchStatus(`Generating smart route for ${selectedPlayers.length} selected players...`);
+    setPlayerSearchStatus(`Generating schedule for ${selectedPlayers.length} selected players...`);
     try {
       const optimized = await buildOptimizedCoachPlan(selectedPlayers, resolvedSource);
       const hotelHubDestination = optimized.hotelHubDestination || optimized.firstDestination || firstPlayerStart || "";
-      setRecommendedHotelHub(hotelHubDestination);
       if (optimized.smartReorderHint) {
         setSmartRouteHint(optimized.smartReorderHint);
       } else if (selectedPlayers.length > 1) {
@@ -3872,14 +3865,12 @@ export default function BirdDogPage() {
           `Recommendation generated with feasibility warning. ${optimized.blockedReason || "At least one leg is not feasible in the next 12 hours."}`
         );
       } else {
-        const locationStatus = `Route starts from your event arrival point and hotel hub.`;
-        const hotelStatus = hotelHubDestination
-          ? ` Recommended hotel hub: ${hotelHubDestination}.`
-          : "";
-        const unresolvedStatus = optimized.unresolvedStops
-          ? ` ${optimized.unresolvedStops} destination(s) could not be geocoded; fallback travel estimates were used.`
-          : "";
-        setPlayerSearchStatus(`Optimized route generated. ${locationStatus}${unresolvedStatus}${hotelStatus} Hotel recommendation added.`);
+        const resolvedHotel = String(hotelName || "").trim();
+        setPlayerSearchStatus(
+          resolvedHotel
+            ? `Schedule created. Recommended hotel: ${resolvedHotel}.`
+            : "Schedule created."
+        );
       }
     } catch {
       const emergencyPlan: PlanItem[] = instantPlan;
@@ -5212,10 +5203,9 @@ export default function BirdDogPage() {
               {smartRouteHint}
             </p>
           ) : null}
-          {recommendedHotelHub ? (
+          {scheduleForm.hotelName ? (
             <p className="muted" style={{ marginTop: 0 }}>
-              Hotel hub (nearest for selected players): {recommendedHotelHub}
-              {scheduleForm.hotelName ? ` · Recommended stay: ${scheduleForm.hotelName}` : ""}
+              Recommended hotel: {scheduleForm.hotelName}
             </p>
           ) : null}
           <div className="table-wrap" style={{ marginTop: 6 }}>
