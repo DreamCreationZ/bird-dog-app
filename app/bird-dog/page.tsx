@@ -282,6 +282,7 @@ const LOCAL_SCHEDULE_FALLBACK_KEY = "bird_dog:local_schedule_fallback:v1";
 const PLAN_WORKFLOW_STATUS_KEY_PREFIX = "bird_dog:plan_workflow_status:v1";
 const DESIRED_PLAYERS_STORAGE_KEY_PREFIX = "bird_dog:desired_players:v1";
 const ROSTER_CART_STORAGE_KEY_PREFIX = "bird_dog:roster_cart:v3";
+const ROSTER_CART_GLOBAL_KEY = "bird_dog:roster_cart:v3:global";
 const INVENTORY_CACHE_STORAGE_KEY_PREFIX = "bird_dog:inventory_cache:v2";
 const BOOKING_REVIEW_DRAFT_KEY = "bird_dog:booking_review_draft:v1";
 const BOOKING_SUMMARY_KEY = "bird_dog:booking_summary:v1";
@@ -1587,14 +1588,23 @@ export default function BirdDogPage() {
   const teamRosterCartReadKeys = useMemo(() => {
     const candidates = [
       teamRosterCartStorageKey,
-      legacyRosterCartStorageKey(company, selectedInventorySlug)
+      rosterCartStorageKey({ company }),
+      ROSTER_CART_GLOBAL_KEY,
+      legacyRosterCartStorageKey(company, selectedInventorySlug),
+      legacyRosterCartStorageKey(company)
     ];
     return Array.from(new Set(candidates.filter(Boolean)));
   }, [company, selectedInventorySlug, teamRosterCartStorageKey]);
-  const teamRosterCartWriteKeys = useMemo(
-    () => Array.from(new Set([teamRosterCartStorageKey])),
-    [teamRosterCartStorageKey]
-  );
+  const teamRosterCartWriteKeys = useMemo(() => {
+    const candidates = [
+      teamRosterCartStorageKey,
+      rosterCartStorageKey({ company }),
+      ROSTER_CART_GLOBAL_KEY,
+      legacyRosterCartStorageKey(company, selectedInventorySlug),
+      legacyRosterCartStorageKey(company)
+    ];
+    return Array.from(new Set(candidates.filter(Boolean)));
+  }, [company, selectedInventorySlug, teamRosterCartStorageKey]);
   const teamRosterCartSyncKeys = useMemo(
     () => Array.from(new Set([...teamRosterCartReadKeys, ...teamRosterCartWriteKeys])),
     [teamRosterCartReadKeys, teamRosterCartWriteKeys]
