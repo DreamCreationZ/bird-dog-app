@@ -770,6 +770,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   const plannerCacheLoadedRef = useRef(false);
   const coachProfileHydratedRef = useRef(false);
   const coachLocationTriedRef = useRef(false);
+  const menuContainerRef = useRef<HTMLDivElement | null>(null);
 
   const teamRequestPayload = useMemo(() => ({
     inventorySlug: initialParams.inventorySlug,
@@ -918,6 +919,28 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     if (param === "1") setIncludeCompletedGames(true);
     if (param === "0") setIncludeCompletedGames(false);
   }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (!menuContainerRef.current?.contains(target)) {
+        setMenuOpen(false);
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [menuOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2615,37 +2638,39 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
           {inlineMode ? "Close" : "Back"}
         </button>
         {!inlineMode ? (
-          <button
-            className="secondary menu-trigger"
-            type="button"
-            aria-label="Open navigation menu"
-            onClick={() => setMenuOpen((prev) => !prev)}
-          >
-            ☰
-          </button>
-        ) : null}
-        {!inlineMode && menuOpen ? (
-          <div className="menu-dropdown">
-            <div className="menu-brand">
-              <img src="/branding/a-point-scout-icon.svg?v=20260508a" alt="APOINT SCOUT" />
-              <div className="menu-brand-copy">
-                <p>APOINT SCOUT</p>
-                <p>{String(sessionTheme?.orgName || "Apoint Scout Admin")}</p>
-              </div>
-            </div>
-            <button type="button" onClick={() => openAppTab("tournaments")}>Tournament Dashboard</button>
-            <button type="button" onClick={() => openAppTab("notes")}>Tournament Schedule</button>
-            <button type="button" className="active" onClick={() => openAppTab("myPlayersSchedule")}>My Players & Schedule</button>
-            <button type="button" onClick={() => openAppTab("profile")}>My Profile</button>
+          <div className="menu-anchor" ref={menuContainerRef}>
             <button
+              className="secondary menu-trigger"
               type="button"
-              onClick={() => {
-                setMenuOpen(false);
-                void logout();
-              }}
+              aria-label="Open navigation menu"
+              onClick={() => setMenuOpen((prev) => !prev)}
             >
-              Log Out
+              ☰
             </button>
+            {menuOpen ? (
+              <div className="menu-dropdown">
+                <div className="menu-brand">
+                  <img src="/branding/a-point-scout-icon.svg?v=20260508a" alt="APOINT SCOUT" />
+                  <div className="menu-brand-copy">
+                    <p>APOINT SCOUT</p>
+                    <p>{String(sessionTheme?.orgName || "Apoint Scout Admin")}</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => openAppTab("tournaments")}>Tournament Dashboard</button>
+                <button type="button" onClick={() => openAppTab("notes")}>Tournament Schedule</button>
+                <button type="button" className="active" onClick={() => openAppTab("myPlayersSchedule")}>My Players & Schedule</button>
+                <button type="button" onClick={() => openAppTab("profile")}>My Profile</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    void logout();
+                  }}
+                >
+                  Log Out
+                </button>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </section>

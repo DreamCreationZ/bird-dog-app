@@ -5760,12 +5760,28 @@ export default function BirdDogPage() {
               Planner builds route from your answers.
             </p>
             <div className="panel" style={{ marginBottom: 8 }}>
-              <div className="row wrap" style={{ alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div
+                className="row wrap"
+                style={{ alignItems: "center", justifyContent: "space-between", gap: 8, cursor: "pointer" }}
+                role="button"
+                tabIndex={0}
+                aria-expanded={questionOpen.flight}
+                onClick={() => setQuestionOpen((prev) => ({ ...prev, flight: !prev.flight }))}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setQuestionOpen((prev) => ({ ...prev, flight: !prev.flight }));
+                  }
+                }}
+              >
                 <strong>1. Is your flight booked?</strong>
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => setQuestionOpen((prev) => ({ ...prev, flight: !prev.flight }))}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setQuestionOpen((prev) => ({ ...prev, flight: !prev.flight }));
+                  }}
                 >
                   {questionOpen.flight ? "▲" : "▼"}
                 </button>
@@ -5789,12 +5805,28 @@ export default function BirdDogPage() {
             </div>
             {requiredStateCodes.length ? (
               <div className="panel" style={{ marginBottom: 8 }}>
-                <div className="row wrap" style={{ alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <div
+                  className="row wrap"
+                  style={{ alignItems: "center", justifyContent: "space-between", gap: 8, cursor: "pointer" }}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={questionOpen.arrival}
+                  onClick={() => setQuestionOpen((prev) => ({ ...prev, arrival: !prev.arrival }))}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setQuestionOpen((prev) => ({ ...prev, arrival: !prev.arrival }));
+                    }
+                  }}
+                >
                   <strong>2. When will you reach each event state?</strong>
                   <button
                     type="button"
                     className="secondary"
-                    onClick={() => setQuestionOpen((prev) => ({ ...prev, arrival: !prev.arrival }))}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setQuestionOpen((prev) => ({ ...prev, arrival: !prev.arrival }));
+                    }}
                   >
                     {questionOpen.arrival ? "▲" : "▼"}
                   </button>
@@ -5826,12 +5858,28 @@ export default function BirdDogPage() {
               </div>
             ) : null}
             <div className="panel" style={{ marginBottom: 0 }}>
-              <div className="row wrap" style={{ alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div
+                className="row wrap"
+                style={{ alignItems: "center", justifyContent: "space-between", gap: 8, cursor: "pointer" }}
+                role="button"
+                tabIndex={0}
+                aria-expanded={questionOpen.hotel}
+                onClick={() => setQuestionOpen((prev) => ({ ...prev, hotel: !prev.hotel }))}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setQuestionOpen((prev) => ({ ...prev, hotel: !prev.hotel }));
+                  }
+                }}
+              >
                 <strong>3. Is your hotel booked?</strong>
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => setQuestionOpen((prev) => ({ ...prev, hotel: !prev.hotel }))}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setQuestionOpen((prev) => ({ ...prev, hotel: !prev.hotel }));
+                  }}
                 >
                   {questionOpen.hotel ? "▲" : "▼"}
                 </button>
