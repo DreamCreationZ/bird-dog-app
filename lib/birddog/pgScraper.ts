@@ -245,6 +245,38 @@ function parseParticipatingTeams(html: string) {
   return teams;
 }
 
+function mergeParsedTeams(primary: ParsedTeam[], fallback: ParsedTeam[]) {
+  const byKey = new Map<string, ParsedTeam>();
+  const makeKey = (team: ParsedTeam) => {
+    const hrefTeamNum = team.href?.match(/[?&]team=(\d+)/i)?.[1] || "";
+    const idKey = (team.id || "").toLowerCase();
+    const hrefKey = hrefTeamNum ? `team-${hrefTeamNum}` : "";
+    const nameKey = normalizeTeam(team.name);
+    return idKey || hrefKey || nameKey;
+  };
+
+  const push = (team: ParsedTeam) => {
+    const key = makeKey(team);
+    if (!key) return;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, team);
+      return;
+    }
+    byKey.set(key, {
+      id: team.id || existing.id,
+      name: team.name || existing.name,
+      from: team.from || existing.from,
+      record: team.record || existing.record,
+      href: team.href || existing.href
+    });
+  };
+
+  primary.forEach(push);
+  fallback.forEach(push);
+  return Array.from(byKey.values());
+}
+
 function gamesFromTeams(teams: ParsedTeam[], date: string): Tournament["games"] {
   const out: Tournament["games"] = [];
   for (let i = 0; i < teams.length; i += 2) {
@@ -365,12 +397,28 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
   const name = readTitle(html);
   const id = readEventId(target, hint);
   const date = parseDate(html);
+  const eventNum = numericEventId(target);
   let games = parseGames(html);
-  const teams = parseParticipatingTeams(html);
+  let teams = parseParticipatingTeams(html);
+
+  // TournamentSchedule page often does not include the full participating-team table.
+  // Pull TournamentTeams explicitly and merge to guarantee complete team list.
+  if (eventNum) {
+    const teamsUrl = `https://www.perfectgame.org/events/TournamentTeams.aspx?event=${eventNum}`;
+    const teamsPage = await fetchHtml(teamsUrl).catch(() => null);
+    if (teamsPage) {
+      const teamsFromDedicatedPage = parseParticipatingTeams(teamsPage.html);
+      if (teamsFromDedicatedPage.length) {
+        teams = teams.length
+          ? mergeParsedTeams(teamsFromDedicatedPage, teams)
+          : teamsFromDedicatedPage;
+      }
+    }
+  }
+
   const teamPlayers = await enrichPlayersFromTeamPages(teams);
 
   if (!games.length) {
-    const eventNum = numericEventId(target);
     if (eventNum) {
       const scheduleUrl = `https://www.perfectgame.org/events/TournamentSchedule.aspx?event=${eventNum}`;
       const schedule = await fetchHtml(scheduleUrl).catch(() => null);
