@@ -123,6 +123,8 @@ type DesiredPlayer = {
   name: string;
   team: string;
   hometown?: string;
+  sourceTeamId?: string;
+  sourceTeamName?: string;
 };
 
 type CoachSchedule = {
@@ -695,7 +697,9 @@ function readRosterCartStorage(key: string) {
       selectionKey: item?.selectionKey ? String(item.selectionKey) : undefined,
       name: String(item?.name || ""),
       team: String(item?.team || ""),
-      hometown: item?.hometown ? String(item.hometown) : undefined
+      hometown: item?.hometown ? String(item.hometown) : undefined,
+      sourceTeamId: item?.sourceTeamId ? String(item.sourceTeamId) : undefined,
+      sourceTeamName: item?.sourceTeamName ? String(item.sourceTeamName) : undefined
     }))
     .filter((item) => item.playerId && item.name && item.team);
   return dedupeDesiredPlayersByIdentity(rows);
@@ -735,7 +739,9 @@ function readDesiredPlayersStorage(key: string) {
       selectionKey: item?.selectionKey ? String(item.selectionKey) : undefined,
       name: String(item?.name || ""),
       team: String(item?.team || ""),
-      hometown: item?.hometown ? String(item.hometown) : undefined
+      hometown: item?.hometown ? String(item.hometown) : undefined,
+      sourceTeamId: item?.sourceTeamId ? String(item.sourceTeamId) : undefined,
+      sourceTeamName: item?.sourceTeamName ? String(item.sourceTeamName) : undefined
     }))
     .filter((item) => item.playerId && item.name && item.team);
   return dedupeDesiredPlayersByIdentity(rows);
@@ -1749,8 +1755,9 @@ export default function BirdDogPage() {
         .map((game) => {
           const startMs = Date.parse(String(game.startTime || ""));
           if (!Number.isFinite(startMs)) return null;
-          if (!teamsLookEquivalent(player.team, game.homeTeam) && !teamsLookEquivalent(player.team, game.awayTeam)) return null;
-          const opponent = teamsLookEquivalent(player.team, game.homeTeam) ? game.awayTeam : game.homeTeam;
+          const side = playerMatchSideForGame(player, game);
+          if (!side) return null;
+          const opponent = side === "home" ? game.awayTeam : game.homeTeam;
           return {
             startMs,
             opponent: String(opponent || "TBD"),
@@ -1779,7 +1786,7 @@ export default function BirdDogPage() {
     const states = new Set<string>();
     desiredPlayers.forEach((player) => {
       const matchedGame = games.find((game) =>
-        teamsLookEquivalent(player.team, game.homeTeam) || teamsLookEquivalent(player.team, game.awayTeam)
+        Boolean(playerMatchSideForGame(player, game))
       );
       const fromGame = matchedGame
         ? extractUsStateCode(
@@ -2945,7 +2952,9 @@ export default function BirdDogPage() {
           selectionKey: item?.selectionKey ? String(item.selectionKey) : undefined,
           name: String(item?.name || ""),
           team: String(item?.team || ""),
-          hometown: item?.hometown ? String(item.hometown) : undefined
+          hometown: item?.hometown ? String(item.hometown) : undefined,
+          sourceTeamId: item?.sourceTeamId ? String(item.sourceTeamId) : undefined,
+          sourceTeamName: item?.sourceTeamName ? String(item.sourceTeamName) : undefined
         }))
         .filter((item) => item.playerId && item.name && item.team)
       : [];
@@ -3648,7 +3657,9 @@ export default function BirdDogPage() {
         selectionKey,
         name: item.name,
         team: item.teamName,
-        hometown: item.hometown
+        hometown: item.hometown,
+        sourceTeamId: item.teamId,
+        sourceTeamName: item.teamName
       }];
     });
     autoPlannerRef.current.key = "";
@@ -3799,6 +3810,45 @@ export default function BirdDogPage() {
     return overlap >= 2 || ratio >= 0.6;
   }
 
+  function normalizeTeamIdValue(value: unknown) {
+    return String(value ?? "").trim().toLowerCase();
+  }
+
+  function gameTeamId(game: Game, side: "home" | "away") {
+    const raw = game as unknown as Record<string, unknown>;
+    if (side === "home") {
+      return normalizeTeamIdValue(raw.homeTeamId || raw.home_team_id || raw.team1Id || raw.team_1_id);
+    }
+    return normalizeTeamIdValue(raw.awayTeamId || raw.away_team_id || raw.team2Id || raw.team_2_id);
+  }
+
+  function playerMatchSideForGame(player: DesiredPlayer, game: Game): "home" | "away" | null {
+    const playerTeamId = normalizeTeamIdValue(player.sourceTeamId || "");
+    if (playerTeamId) {
+      const homeId = gameTeamId(game, "home");
+      const awayId = gameTeamId(game, "away");
+      if (homeId && playerTeamId === homeId) return "home";
+      if (awayId && playerTeamId === awayId) return "away";
+    }
+
+    const strictSource = normalizeSmartSearch(player.sourceTeamName || "");
+    const strictTeam = normalizeSmartSearch(player.team || "");
+    const home = normalizeSmartSearch(game.homeTeam || "");
+    const away = normalizeSmartSearch(game.awayTeam || "");
+    if (strictSource && strictSource === home) return "home";
+    if (strictSource && strictSource === away) return "away";
+    if (strictTeam && strictTeam === home) return "home";
+    if (strictTeam && strictTeam === away) return "away";
+
+    if (teamsLookEquivalent(player.team, game.homeTeam) || teamsLookEquivalent(player.sourceTeamName || "", game.homeTeam)) {
+      return "home";
+    }
+    if (teamsLookEquivalent(player.team, game.awayTeam) || teamsLookEquivalent(player.sourceTeamName || "", game.awayTeam)) {
+      return "away";
+    }
+    return null;
+  }
+
   function gameLocationQuery(game: Game) {
     const field = normalizedVenueLabel(game);
     const city = String(selectedInventory?.displayCity || selectedTournament?.city || "").trim();
@@ -3861,8 +3911,7 @@ export default function BirdDogPage() {
     const matchedPlayerKeys = new Set<string>();
     const mapped: Array<CoachGameCandidate | null> = games.map((game, index): CoachGameCandidate | null => {
       const matchedPlayers = targetPlayers.filter((player) =>
-        teamsLookEquivalent(player.team, game.homeTeam)
-        || teamsLookEquivalent(player.team, game.awayTeam)
+        Boolean(playerMatchSideForGame(player, game))
       );
       if (!matchedPlayers.length) return null;
       matchedPlayers.forEach((player) => matchedPlayerKeys.add(desiredPlayerSelectionKey(player)));
@@ -3982,7 +4031,6 @@ export default function BirdDogPage() {
     let smartReorderHint = "";
     const MIN_VIEW_MINUTES = 20;
     const PRE_GAME_BUFFER_MINUTES = 10;
-    const MAX_ALLOWED_LATE_MINUTES = 15;
 
     while (unseenPlayers.size > 0 && usedGameKeys.size < geocoded.length) {
       let best: {
@@ -4066,7 +4114,6 @@ export default function BirdDogPage() {
         if (remainingMinutes < MIN_VIEW_MINUTES) continue;
 
         const lateByMinutes = Math.max(0, Math.floor((watchStartMs - candidate.startMs) / (60 * 1000)));
-        if (lateByMinutes > MAX_ALLOWED_LATE_MINUTES) continue;
         const waitMinutes = Math.max(0, Math.floor((candidate.startMs - arriveMs) / (60 * 1000)));
         const minutesToEndAtArrival = Math.max(0, Math.floor((candidate.endMs - arriveMs) / (60 * 1000)));
         const urgency = Math.max(0, 240 - minutesToEndAtArrival);
@@ -4312,7 +4359,7 @@ export default function BirdDogPage() {
         .map((game) => {
           const startMs = Date.parse(String(game.startTime || ""));
           if (!Number.isFinite(startMs)) return null;
-          if (!teamsLookEquivalent(player.team, game.homeTeam) && !teamsLookEquivalent(player.team, game.awayTeam)) return null;
+          if (!playerMatchSideForGame(player, game)) return null;
           const venueLabel = normalizedVenueLabel(game);
           const stateCode = extractUsStateCode(
             `${venueLabel}, ${String(selectedInventory?.displayCity || selectedTournament?.city || "").trim()}`
