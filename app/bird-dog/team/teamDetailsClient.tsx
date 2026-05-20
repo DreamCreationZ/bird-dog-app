@@ -775,6 +775,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     teamId: initialParams.teamId,
     teamUrl: initialParams.teamUrl,
     teamName: initialParams.teamName,
+    tournamentName: initialParams.tournamentName,
     eventId: initialParams.eventId,
     tournamentId: initialParams.returnTournamentId
   }), [
@@ -783,6 +784,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     initialParams.returnTournamentId,
     initialParams.teamId,
     initialParams.teamName,
+    initialParams.tournamentName,
     initialParams.teamUrl
   ]);
 

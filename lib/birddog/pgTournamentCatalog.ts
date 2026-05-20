@@ -6,7 +6,7 @@ const PG_SCHEDULE_URL = `${PG_BASE_URL}/Schedule/Default.aspx`;
 const PG_ROOT_GROUP_URL = `${PG_BASE_URL}/Schedule/FeaturedGroups.aspx?PrtID=333`;
 
 const CACHE_TTL_MS = 60 * 1000;
-const DISCOVERY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const DISCOVERY_CACHE_TTL_MS = 10 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 12 * 1000;
 const MAX_FID_PAGES = 120;
 const MAX_PRT_PAGES = 32;

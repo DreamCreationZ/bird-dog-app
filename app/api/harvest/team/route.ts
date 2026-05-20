@@ -133,6 +133,13 @@ function slugifyText(value: string) {
     .slice(0, 220);
 }
 
+function stripPbrTournamentSuffix(value: string) {
+  return cleanText(value)
+    .replace(/\s*-\s*prep baseball tournaments/i, "")
+    .replace(/\s*-\s*\d{2}\/\d{2}\/\d{4}\s*-\s*\d{2}\/\d{2}\/\d{4}$/i, "")
+    .trim();
+}
+
 function toAbsolutePbrUrl(href: string) {
   const raw = String(href || "").trim();
   if (!raw) return "";
@@ -147,6 +154,62 @@ function toPbrEventBase(url: string) {
   if (!raw) return "";
   const match = raw.match(/^(https?:\/\/[^/]+\/events\/[^/?#]+)/i);
   return match ? match[1] : "";
+}
+
+const PBR_EVENT_HINT_CACHE_TTL_MS = 20 * 60 * 1000;
+
+type PbrEventHintCacheEntry = {
+  fetchedAt: number;
+  value: string;
+};
+
+function getPbrEventHintCache() {
+  const g = globalThis as unknown as {
+    __BIRD_DOG_PBR_EVENT_HINT_CACHE__?: Record<string, PbrEventHintCacheEntry>;
+  };
+  if (!g.__BIRD_DOG_PBR_EVENT_HINT_CACHE__) {
+    g.__BIRD_DOG_PBR_EVENT_HINT_CACHE__ = {};
+  }
+  return g.__BIRD_DOG_PBR_EVENT_HINT_CACHE__;
+}
+
+function pbrEventHintCacheKeys(input: {
+  inventorySlug: string;
+  tournamentName: string;
+  teamUrl: string;
+}) {
+  const keys = new Set<string>();
+  const slug = cleanText(input.inventorySlug);
+  if (slug) keys.add(`slug:${slug.toLowerCase()}`);
+  const tournamentName = cleanText(input.tournamentName);
+  if (tournamentName) keys.add(`name:${normalize(tournamentName)}`);
+  const fromUrl = toPbrEventBase(input.teamUrl);
+  if (fromUrl) keys.add(`url:${fromUrl.toLowerCase()}`);
+  return Array.from(keys);
+}
+
+function readCachedPbrEventHint(keys: string[]) {
+  const cache = getPbrEventHintCache();
+  const now = Date.now();
+  for (const key of keys) {
+    const entry = cache[key];
+    if (!entry) continue;
+    if (now - entry.fetchedAt > PBR_EVENT_HINT_CACHE_TTL_MS) {
+      delete cache[key];
+      continue;
+    }
+    if (entry.value) return entry.value;
+  }
+  return "";
+}
+
+function writeCachedPbrEventHint(keys: string[], value: string) {
+  if (!value) return;
+  const cache = getPbrEventHintCache();
+  const next: PbrEventHintCacheEntry = { fetchedAt: Date.now(), value };
+  keys.forEach((key) => {
+    cache[key] = next;
+  });
 }
 
 function formatDayLabelFromDate(date: Date) {
@@ -636,24 +699,23 @@ async function resolvePbrEventHint(input: {
   inventorySlug: string;
   tournament: Tournament | null;
   teamUrl: string;
+  tournamentName: string;
 }) {
   const fromTeamUrl = toPbrEventBase(input.teamUrl);
   if (fromTeamUrl) return fromTeamUrl;
 
-  const catalog = await fetchPbrTournamentCatalog().then((result) => result.items).catch(() => []);
-  if (!catalog.length) return "";
-
-  const bySlug = catalog.find((item) => item.slug === input.inventorySlug);
-  if (bySlug?.harvestHint) return bySlug.harvestHint;
-
-  const tournamentName = normalize(input.tournament?.name || "");
-  if (tournamentName) {
-    const byName = catalog.find((item) => {
-      const itemName = normalize(item.name);
-      return itemName === tournamentName || itemName.includes(tournamentName) || tournamentName.includes(itemName);
-    });
-    if (byName?.harvestHint) return byName.harvestHint;
-  }
+  const preferredName = stripPbrTournamentSuffix(
+    input.tournament?.name
+    || input.tournamentName
+    || ""
+  );
+  const cacheKeys = pbrEventHintCacheKeys({
+    inventorySlug: input.inventorySlug,
+    tournamentName: preferredName,
+    teamUrl: input.teamUrl
+  });
+  const cachedHint = readCachedPbrEventHint(cacheKeys);
+  if (cachedHint) return cachedHint;
 
   const candidateSlugs = new Set<string>();
   const rawInventorySlug = String(input.inventorySlug || "").replace(/^pbr-live-/i, "");
@@ -676,11 +738,8 @@ async function resolvePbrEventHint(input: {
     }
   }
 
-  const tournamentNameClean = String(input.tournament?.name || "")
-    .replace(/\s*-\s*prep baseball tournaments/i, "")
-    .trim();
-  if (tournamentNameClean) {
-    const nameSlug = slugifyText(tournamentNameClean);
+  if (preferredName) {
+    const nameSlug = slugifyText(preferredName);
     if (nameSlug) {
       candidateSlugs.add(nameSlug);
       candidateSlugs.add(nameSlug.replace(/-\d{2}-\d{2}-\d{4}-\d{2}-\d{2}-\d{4}$/i, ""));
@@ -706,7 +765,34 @@ async function resolvePbrEventHint(input: {
       }
     }).catch(() => null), 2200);
     if (probe && probe.ok) {
+      writeCachedPbrEventHint(cacheKeys, eventBase);
       return eventBase;
+    }
+  }
+
+  const catalog = await withTimeout(
+    fetchPbrTournamentCatalog().then((result) => result.items).catch(() => []),
+    2200
+  );
+  if (Array.isArray(catalog) && catalog.length) {
+    const bySlug = catalog.find((item) => item.slug === input.inventorySlug);
+    if (bySlug?.harvestHint) {
+      const eventBase = toPbrEventBase(bySlug.harvestHint) || bySlug.harvestHint;
+      writeCachedPbrEventHint(cacheKeys, eventBase);
+      return eventBase;
+    }
+
+    const wanted = normalize(preferredName);
+    if (wanted) {
+      const byName = catalog.find((item) => {
+        const itemName = normalize(item.name);
+        return itemName === wanted || itemName.includes(wanted) || wanted.includes(itemName);
+      });
+      if (byName?.harvestHint) {
+        const eventBase = toPbrEventBase(byName.harvestHint) || byName.harvestHint;
+        writeCachedPbrEventHint(cacheKeys, eventBase);
+        return eventBase;
+      }
     }
   }
 
@@ -803,6 +889,7 @@ export async function POST(req: NextRequest) {
   const teamName = String(body?.teamName || "").trim();
   const eventId = String(body?.eventId || "").trim();
   const tournamentId = String(body?.tournamentId || "").trim();
+  const tournamentName = String(body?.tournamentName || "").trim();
   const searchOnly = body?.searchOnly === true || String(body?.searchOnly || "") === "true";
 
   if (!inventorySlug) {
@@ -872,7 +959,8 @@ export async function POST(req: NextRequest) {
           const eventHint = await resolvePbrEventHint({
             inventorySlug,
             tournament,
-            teamUrl
+            teamUrl,
+            tournamentName
           });
           if (eventHint) {
             const livePbr = await withTimeout(tryFetchPbrLiveTeamData({

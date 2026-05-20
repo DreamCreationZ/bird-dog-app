@@ -11,6 +11,30 @@ import { Game, Tournament } from "@/lib/birddog/types";
 
 type ParticipatingTeam = NonNullable<Tournament["teams"]>[number];
 
+function withTimeout<T>(task: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let settled = false;
+  return new Promise<T | null>((resolve) => {
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
+    }, timeoutMs);
+    task
+      .then((value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      });
+  });
+}
+
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -74,6 +98,13 @@ function slugify(value: string) {
     .slice(0, 240);
 }
 
+function stripPbrTournamentSuffix(value: string) {
+  return cleanText(value)
+    .replace(/\s*-\s*prep baseball tournaments/i, "")
+    .replace(/\s*-\s*\d{2}\/\d{2}\/\d{4}\s*-\s*\d{2}\/\d{2}\/\d{4}$/i, "")
+    .trim();
+}
+
 function toAbsolutePbrUrl(href: string) {
   const raw = String(href || "").trim();
   if (!raw) return "";
@@ -87,6 +118,62 @@ function toPbrEventBase(url: string) {
   if (!raw) return "";
   const match = raw.match(/^(https?:\/\/[^/]+\/events\/[^/?#]+)/i);
   return match ? match[1] : "";
+}
+
+const PBR_EVENT_HINT_CACHE_TTL_MS = 20 * 60 * 1000;
+
+type PbrEventHintCacheEntry = {
+  fetchedAt: number;
+  value: string;
+};
+
+function getPbrEventHintCache() {
+  const g = globalThis as unknown as {
+    __BIRD_DOG_OPEN_PBR_EVENT_HINT_CACHE__?: Record<string, PbrEventHintCacheEntry>;
+  };
+  if (!g.__BIRD_DOG_OPEN_PBR_EVENT_HINT_CACHE__) {
+    g.__BIRD_DOG_OPEN_PBR_EVENT_HINT_CACHE__ = {};
+  }
+  return g.__BIRD_DOG_OPEN_PBR_EVENT_HINT_CACHE__;
+}
+
+function pbrEventHintCacheKeys(input: {
+  inventorySlug: string;
+  preferredName: string;
+  tournamentHint: string;
+}) {
+  const keys = new Set<string>();
+  const slug = cleanText(input.inventorySlug);
+  if (slug) keys.add(`slug:${slug.toLowerCase()}`);
+  const preferred = cleanText(input.preferredName);
+  if (preferred) keys.add(`name:${normalize(preferred)}`);
+  const fromHint = toPbrEventBase(input.tournamentHint);
+  if (fromHint) keys.add(`url:${fromHint.toLowerCase()}`);
+  return Array.from(keys);
+}
+
+function readCachedPbrEventHint(keys: string[]) {
+  const cache = getPbrEventHintCache();
+  const now = Date.now();
+  for (const key of keys) {
+    const entry = cache[key];
+    if (!entry) continue;
+    if (now - entry.fetchedAt > PBR_EVENT_HINT_CACHE_TTL_MS) {
+      delete cache[key];
+      continue;
+    }
+    if (entry.value) return entry.value;
+  }
+  return "";
+}
+
+function writeCachedPbrEventHint(keys: string[], value: string) {
+  if (!value) return;
+  const cache = getPbrEventHintCache();
+  const next: PbrEventHintCacheEntry = { fetchedAt: Date.now(), value };
+  keys.forEach((key) => {
+    cache[key] = next;
+  });
 }
 
 function toIsoDate(raw: string) {
@@ -321,8 +408,16 @@ function parsePbrGamesFromPayload(payloads: Array<Record<string, unknown> | null
         }
       }
 
-      if (!map.has(gameId)) {
-        map.set(gameId, {
+      const dedupeKey = [
+        startTime,
+        normalizeTeam(homeTeam),
+        normalizeTeam(awayTeam),
+        cleanText(location).toLowerCase(),
+        cleanText(ageDiv).toLowerCase()
+      ].join("|");
+
+      if (!map.has(dedupeKey)) {
+        map.set(dedupeKey, {
           id: gameId,
           field: location || "Field TBD",
           fieldLocation: { x: 0, y: 0 },
@@ -338,7 +433,16 @@ function parsePbrGamesFromPayload(payloads: Array<Record<string, unknown> | null
           homeScore,
           awayScore
         });
+        return;
       }
+
+      const existing = map.get(dedupeKey)!;
+      if (!existing.homeScore && homeScore) existing.homeScore = homeScore;
+      if (!existing.awayScore && awayScore) existing.awayScore = awayScore;
+      if (!existing.ageDiv && ageDiv) existing.ageDiv = ageDiv;
+      if (!existing.dayLabel && dayLabel) existing.dayLabel = dayLabel;
+      if (!existing.timeLabel && timeLabel) existing.timeLabel = timeLabel;
+      if (!existing.gameNo && displayGameNo) existing.gameNo = displayGameNo;
     });
   });
 
@@ -353,13 +457,76 @@ async function resolvePbrTournamentHint(input: {
   const direct = toPbrEventBase(input.tournamentHint) || toPbrEventBase(toAbsolutePbrUrl(input.tournamentHint));
   if (direct) return direct;
 
-  const catalog = await fetchPbrTournamentCatalog().then((result) => result.items).catch(() => []);
-  if (!catalog.length) return "";
+  const preferredName = stripPbrTournamentSuffix(input.preferredName || input.tournamentHint || "");
+  const cacheKeys = pbrEventHintCacheKeys({
+    inventorySlug: input.inventorySlug,
+    preferredName,
+    tournamentHint: input.tournamentHint
+  });
+  const cachedHint = readCachedPbrEventHint(cacheKeys);
+  if (cachedHint) return cachedHint;
+
+  const candidateSlugs = new Set<string>();
+  const rawInventorySlug = String(input.inventorySlug || "").replace(/^pbr-live-/i, "");
+  if (rawInventorySlug) {
+    candidateSlugs.add(rawInventorySlug);
+    const parts = rawInventorySlug.split("-").filter(Boolean);
+    if (parts.length >= 5) {
+      const n = parts.length;
+      const yyyy = parts[n - 3];
+      const mm = parts[n - 2];
+      const dd = parts[n - 1];
+      if (/^\d{4}$/.test(yyyy) && /^\d{2}$/.test(mm) && /^\d{2}$/.test(dd)) {
+        const prefix = parts.slice(0, n - 3);
+        candidateSlugs.add([...prefix, mm, dd, yyyy].join("-"));
+        if (prefix.length >= 2 && /^[a-z]{2}$/i.test(prefix[prefix.length - 1])) {
+          const noState = prefix.slice(0, -1);
+          candidateSlugs.add([...noState, mm, dd, yyyy].join("-"));
+        }
+      }
+    }
+  }
+
+  const nameSlug = slugify(preferredName);
+  if (nameSlug) {
+    candidateSlugs.add(nameSlug);
+    candidateSlugs.add(nameSlug.replace(/-\d{2}-\d{2}-\d{4}-\d{2}-\d{2}-\d{4}$/i, ""));
+  }
+
+  const userAgent =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+  for (const slug of candidateSlugs) {
+    const cleanSlug = String(slug || "").replace(/^-+|-+$/g, "");
+    if (!cleanSlug) continue;
+    const eventBase = `https://tournaments.prepbaseballreport.com/events/${cleanSlug}`;
+    const teamsUrl = `${eventBase}/teams`;
+    const probe = await withTimeout(fetch(teamsUrl, {
+      cache: "no-store",
+      headers: {
+        "User-Agent": userAgent,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      }
+    }).catch(() => null), 2000);
+    if (probe && probe.ok) {
+      writeCachedPbrEventHint(cacheKeys, eventBase);
+      return eventBase;
+    }
+  }
+
+  const catalog = await withTimeout(
+    fetchPbrTournamentCatalog().then((result) => result.items).catch(() => []),
+    2200
+  );
+  if (!Array.isArray(catalog) || !catalog.length) return "";
 
   const bySlug = catalog.find((item) => item.slug === input.inventorySlug);
-  if (bySlug?.harvestHint) return toPbrEventBase(bySlug.harvestHint) || bySlug.harvestHint;
+  if (bySlug?.harvestHint) {
+    const eventBase = toPbrEventBase(bySlug.harvestHint) || bySlug.harvestHint;
+    writeCachedPbrEventHint(cacheKeys, eventBase);
+    return eventBase;
+  }
 
-  const wanted = normalize(input.preferredName || input.tournamentHint);
+  const wanted = normalize(preferredName);
   if (!wanted) return "";
 
   const byName = catalog.find((item) => {
@@ -367,7 +534,9 @@ async function resolvePbrTournamentHint(input: {
     return name === wanted || name.includes(wanted) || wanted.includes(name);
   });
   if (!byName?.harvestHint) return "";
-  return toPbrEventBase(byName.harvestHint) || byName.harvestHint;
+  const eventBase = toPbrEventBase(byName.harvestHint) || byName.harvestHint;
+  writeCachedPbrEventHint(cacheKeys, eventBase);
+  return eventBase;
 }
 
 async function buildPbrLiveTournament(input: {
@@ -518,7 +687,68 @@ export async function POST(req: NextRequest) {
     const dataMode = (process.env.BIRD_DOG_DATA_MODE || "imported").toLowerCase();
     const allowLiveScrape = process.env.BIRD_DOG_ALLOW_PG_LIVE_SCRAPE === "true";
 
+    const pgLiveHint = tournamentHint || inventoryHarvestHint({
+      slug: inventorySlug,
+      name: selected?.name || seedMeta?.name || "Perfect Game Tournament",
+      company: "PG"
+    });
+
+    const liveFirstPg = async () => {
+      if (company !== "PG") return null as Tournament | null;
+      const liveTournament = await withTimeout(scrapePgTournamentLive(pgLiveHint), 22000);
+      if (!liveTournament) return null;
+      if (!hasSupabaseConfig) return liveTournament;
+      const dbId = await upsertHarvestedTournament({
+        orgId: session.orgId,
+        company,
+        tournament: liveTournament
+      }).catch(() => "");
+      if (!dbId) return liveTournament;
+      const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
+      return hydrated || liveTournament;
+    };
+
+    const liveFirstPbr = async () => {
+      if (company !== "PBR") return null as Tournament | null;
+      const liveTournament = await withTimeout(buildPbrLiveTournament({
+        inventorySlug,
+        tournamentHint,
+        preferredName: selected?.name || seedMeta?.name || ""
+      }), 22000);
+      if (!liveTournament) return null;
+      if (!hasSupabaseConfig) return liveTournament;
+      const dbId = await upsertHarvestedTournament({
+        orgId: session.orgId,
+        company,
+        tournament: liveTournament
+      }).catch(() => "");
+      if (!dbId) return liveTournament;
+      const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
+      return hydrated || liveTournament;
+    };
+
     if (dataMode !== "live" || !allowLiveScrape) {
+      if (company === "PG") {
+        const livePgTournament = await liveFirstPg().catch(() => null);
+        if (livePgTournament) {
+          return NextResponse.json({
+            ok: true,
+            tournament: livePgTournament,
+            source: "pg_live_preferred"
+          });
+        }
+      }
+      if (company === "PBR") {
+        const livePbrTournament = await liveFirstPbr().catch(() => null);
+        if (livePbrTournament) {
+          return NextResponse.json({
+            ok: true,
+            tournament: livePbrTournament,
+            source: "pbr_live_preferred"
+          });
+        }
+      }
+
       if (hasSupabaseConfig && tournamentId) {
         const tournamentById = await getHarvestedTournament(session.orgId, tournamentId);
         if (tournamentById) {
@@ -745,7 +975,7 @@ export async function POST(req: NextRequest) {
       }, { status: 409 });
     }
 
-    const scrapedTournament = await scrapePgTournamentLive(tournamentHint);
+    const scrapedTournament = await scrapePgTournamentLive(pgLiveHint);
     if (!hasSupabaseConfig) {
       return NextResponse.json({
         ok: true,

@@ -9,7 +9,7 @@ import { fetchPbrTournamentCatalog } from "@/lib/birddog/pbrTournamentCatalog";
 import { fetchPgTournamentCatalog } from "@/lib/birddog/pgTournamentCatalog";
 
 const FALLBACK_UNLOCK_COOKIE = "bird_dog_fallback_unlocks";
-const LIVE_CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
+const LIVE_CATALOG_CACHE_TTL_MS = 45 * 1000;
 const LAST_GOOD_INVENTORY_TTL_MS = 30 * 60 * 1000;
 
 type LiveCatalogCache = {
@@ -233,7 +233,8 @@ function applyLiveInventory(
     return [...mappedLive, ...fallbackBase];
   };
 
-  const nextPg = mergeLiveWithBase(livePg, basePg);
+  // PG should mirror live website catalog when available.
+  const nextPg = livePg.length ? livePg : basePg;
   const nextPbr = mergeLiveWithBase(livePbr, basePbr);
 
   const staticOther = baseInventory.filter((item) => item.company !== "PG" && item.company !== "PBR");
@@ -344,32 +345,32 @@ export async function GET(req: NextRequest) {
       });
     }
     const liveCatalogCache = getLiveCatalogCache();
-    const hasFreshLiveCache =
+    const hasFreshPbrCache =
       Date.now() - liveCatalogCache.fetchedAt < LIVE_CATALOG_CACHE_TTL_MS
-      && (liveCatalogCache.pg.length > 0 || liveCatalogCache.pbr.length > 0);
+      && liveCatalogCache.pbr.length > 0;
 
-    let livePg = hasFreshLiveCache ? liveCatalogCache.pg : [];
-    let livePbr = hasFreshLiveCache ? liveCatalogCache.pbr : [];
-    if (!hasFreshLiveCache) {
-      const [nextLivePg, nextLivePbr] = await Promise.all([
-        withTimeoutFallback(
-          fetchPgTournamentCatalog().then((result) => result.items as InventoryItem[]),
-          2500,
-          liveCatalogCache.pg
-        ),
-        withTimeoutFallback(
+    // Force-refresh PG catalog each request so dashboard stays aligned with website.
+    const [nextLivePg, nextLivePbr] = await Promise.all([
+      withTimeoutFallback(
+        fetchPgTournamentCatalog(true).then((result) => result.items as InventoryItem[]),
+        9000,
+        liveCatalogCache.pg
+      ),
+      hasFreshPbrCache
+        ? Promise.resolve(liveCatalogCache.pbr)
+        : withTimeoutFallback(
           fetchPbrTournamentCatalog().then((result) => result.items as InventoryItem[]),
-          2500,
+          3000,
           liveCatalogCache.pbr
         )
-      ]);
-      livePg = nextLivePg;
-      livePbr = nextLivePbr;
-      if (livePg.length > 0 || livePbr.length > 0) {
-        liveCatalogCache.fetchedAt = Date.now();
-        liveCatalogCache.pg = livePg;
-        liveCatalogCache.pbr = livePbr;
-      }
+    ]);
+
+    const livePg = nextLivePg;
+    const livePbr = nextLivePbr;
+    if (livePg.length > 0 || livePbr.length > 0) {
+      liveCatalogCache.fetchedAt = Date.now();
+      liveCatalogCache.pg = livePg;
+      liveCatalogCache.pbr = livePbr;
     }
 
     let mergedInventory = applyLiveInventory(inventory as InventoryItem[], livePg, livePbr);
