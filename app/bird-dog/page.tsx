@@ -6251,7 +6251,7 @@ export default function BirdDogPage() {
             </p>
           ) : null}
           <div className="table-wrap" style={{ marginTop: 6 }}>
-            <table className="roster-table">
+            <table className="roster-table planner-player-table">
               <thead>
                 <tr>
                   <th>Order</th>
@@ -6264,11 +6264,11 @@ export default function BirdDogPage() {
               <tbody>
                 {desiredPlayers.length ? desiredPlayers.map((player, index) => (
                   <tr key={desiredPlayerSelectionKey(player)}>
-                    <td>{index + 1}</td>
-                    <td>{player.name}</td>
-                    <td>{player.team}</td>
-                    <td>{playerTeamTimingBySelectionKey.get(desiredPlayerSelectionKey(player)) || "Time TBD"}</td>
-                    <td className="action-cell">
+                    <td data-label="Order">{index + 1}</td>
+                    <td data-label="Player">{player.name}</td>
+                    <td data-label="Team">{player.team}</td>
+                    <td data-label="Playing Time">{playerTeamTimingBySelectionKey.get(desiredPlayerSelectionKey(player)) || "Time TBD"}</td>
+                    <td className="action-cell" data-label="Action">
                       <button
                         type="button"
                         className="secondary"
@@ -6296,7 +6296,7 @@ export default function BirdDogPage() {
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan={5}>No players selected yet. Open any team from Tournament Schedule and add players from Team Roster.</td>
+                    <td className="empty-cell" colSpan={5}>No players selected yet. Open any team from Tournament Schedule and add players from Team Roster.</td>
                   </tr>
                 )}
               </tbody>
@@ -6311,7 +6311,7 @@ export default function BirdDogPage() {
             <h4 style={{ marginTop: 0, marginBottom: 6 }}>Coach Schedule Preview</h4>
             {myGeneratedPlan.length ? (
               <div className="table-wrap">
-                <table className="roster-table">
+                <table className="roster-table planner-preview-table">
                   <thead>
                     <tr>
                       <th>#</th>
@@ -6323,10 +6323,10 @@ export default function BirdDogPage() {
                   <tbody>
                     {myGeneratedPlan.map((step, idx) => (
                       <tr key={`${step.at}-${idx}`}>
-                        <td>{idx + 1}</td>
-                        <td>{formatTournamentGameDateTime(Date.parse(String(step.at || "")))}</td>
-                        <td>{step.title}</td>
-                        <td>
+                        <td data-label="#">{idx + 1}</td>
+                        <td data-label="Time">{formatTournamentGameDateTime(Date.parse(String(step.at || "")))}</td>
+                        <td data-label="Step">{step.title}</td>
+                        <td data-label="Details">
                           <span>{step.detail}</span>
                           {sanitizePlanMapUrl(step.mapUrl) ? (
                             <>
