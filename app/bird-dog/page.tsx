@@ -480,6 +480,10 @@ function sanitizeInventoryRows(rows: unknown): InventoryTournament[] {
     .filter((item) => item.slug && item.name);
 }
 
+function keepOnlyLivePgRows(rows: InventoryTournament[]) {
+  return rows.filter((item) => item.company !== "PG" || item.slug.startsWith("pg-live-"));
+}
+
 function readInventoryCacheSnapshot(user: SessionUser | null, maxAgeMs = 10 * 60 * 1000) {
   const key = inventoryCacheStorageKey(user);
   if (!key) return null as InventoryCacheSnapshot | null;
@@ -2589,10 +2593,11 @@ export default function BirdDogPage() {
     if (isLatestRequest()) setOpenError("");
     const cachedSnapshot = readInventoryCacheSnapshot(user);
     const inMemoryInventory = inventoryRef.current;
-    const keepStableInventory = (message: string) => {
-      const fallbackRows = inMemoryInventory.length
+    const keepStableInventory = (message: string, options?: { filterNonLivePg?: boolean }) => {
+      const baseRows = inMemoryInventory.length
         ? inMemoryInventory
         : (cachedSnapshot?.inventory?.length ? cachedSnapshot.inventory : []);
+      const fallbackRows = options?.filterNonLivePg ? keepOnlyLivePgRows(baseRows) : baseRows;
       if (isLatestRequest()) {
         setInventory(fallbackRows);
         if (cachedSnapshot?.subscribed) {
@@ -2607,11 +2612,17 @@ export default function BirdDogPage() {
     try {
       res = await fetch("/api/inventory", { cache: "no-store" });
     } catch {
-      return keepStableInventory("Tournament sync is temporarily unavailable. Showing last synced tournaments.");
+      return keepStableInventory(
+        "Tournament sync is temporarily unavailable. Showing last synced tournaments.",
+        { filterNonLivePg: true }
+      );
     }
 
     if (!res.ok) {
-      return keepStableInventory(`Unable to sync tournaments right now (${res.status}). Showing last synced tournaments.`);
+      return keepStableInventory(
+        `Unable to sync tournaments right now (${res.status}). Showing last synced tournaments.`,
+        { filterNonLivePg: true }
+      );
     }
 
     const data = await res.json().catch(() => ({}));
@@ -2619,7 +2630,10 @@ export default function BirdDogPage() {
     const nextSubscribed = Boolean(data?.subscribed);
 
     if (!nextInventory.length) {
-      return keepStableInventory("Tournament sync returned no rows. Showing last synced tournaments.");
+      return keepStableInventory(
+        "Tournament sync returned no rows. Showing last synced tournaments.",
+        { filterNonLivePg: true }
+      );
     }
 
     if (!isLatestRequest()) {

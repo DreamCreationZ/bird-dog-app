@@ -209,7 +209,6 @@ function applyLiveInventory(
   livePg: InventoryItem[],
   livePbr: InventoryItem[]
 ) {
-  const basePg = baseInventory.filter((item) => item.company === "PG");
   const basePbr = baseInventory.filter((item) => item.company === "PBR");
 
   const mapLiveItem = (item: InventoryItem, baseRows: InventoryItem[]) => {
@@ -233,8 +232,8 @@ function applyLiveInventory(
     return [...mappedLive, ...fallbackBase];
   };
 
-  // PG should mirror live website catalog when available.
-  const nextPg = livePg.length ? livePg : basePg;
+  // PG should mirror live website catalog. Do not fall back to stale seeded rows.
+  const nextPg = livePg;
   const nextPbr = mergeLiveWithBase(livePbr, basePbr);
 
   const staticOther = baseInventory.filter((item) => item.company !== "PG" && item.company !== "PBR");
@@ -387,13 +386,17 @@ export async function GET(req: NextRequest) {
       lastGoodInventory.savedAt = Date.now();
       lastGoodInventory.inventory = mergedInventory;
     }
+    const hasPgRows = mergedInventory.some((item) => item.company === "PG");
+    const warmupWarning = !hasPgRows
+      ? "PG tournaments are still syncing from the live site. Please refresh in a few seconds."
+      : undefined;
     const unlockedSet = new Set([...unlockedSlugs, ...cookieUnlockedSet]);
 
     return NextResponse.json({
       subscribed: forceUnlocked || unlockedSet.size > 0,
-      warning: mergedInventory.length
+      warning: warmupWarning || (mergedInventory.length
         ? undefined
-        : "Live tournament sync is still warming up. Please refresh in a few seconds.",
+        : "Live tournament sync is still warming up. Please refresh in a few seconds."),
       inventory: mergedInventory.map((item) => {
         const match = item.company === "PG" ? bestGroupedEventMatch(item.name, groupedEvents) : null;
         const seedMeta = seedMetaBySlug.get(item.slug);

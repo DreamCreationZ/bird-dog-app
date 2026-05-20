@@ -972,13 +972,13 @@ export async function POST(req: NextRequest) {
           });
         }
 
-        if (isPbrTournament && !searchOnly) {
-          const eventHint = await resolvePbrEventHint({
+        if (isPbrTournament && !searchOnly && (!importedReady || !importedDetailed)) {
+          const eventHint = await withTimeout(resolvePbrEventHint({
             inventorySlug,
             tournament,
             teamUrl,
             tournamentName
-          });
+          }), 2200) || "";
           if (eventHint) {
             const livePbr = await withTimeout(tryFetchPbrLiveTeamData({
               eventHint,
