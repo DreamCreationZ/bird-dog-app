@@ -34,6 +34,7 @@ export type PgTeamRosterRow = {
 type EventScoreboardRow = {
   gameNo: string;
   field: string;
+  time: string;
   homeTeam: string;
   awayTeam: string;
   recapUrl: string;
@@ -155,8 +156,14 @@ function parseGames(html: string) {
 }
 
 function toAbsolutePgUrl(href: string) {
-  if (/^https?:\/\//i.test(href)) return href;
-  return `https://www.perfectgame.org${href.startsWith("/") ? "" : "/"}${href}`;
+  const raw = String(href || "").trim();
+  if (!raw) return "";
+  try {
+    return new URL(raw, "https://www.perfectgame.org").toString();
+  } catch {
+    if (/^https?:\/\//i.test(raw)) return raw;
+    return `https://www.perfectgame.org${raw.startsWith("/") ? "" : "/"}${raw}`;
+  }
 }
 
 function normalizeTeamPageUrl(url: string) {
@@ -297,6 +304,109 @@ function gamesFromTeams(teams: ParsedTeam[], date: string): Tournament["games"] 
   return out;
 }
 
+function normalizeScheduleDateValue(value: string) {
+  const dateMatch = cleanText(value).match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
+  return dateMatch?.[1] || "";
+}
+
+function extractDateParamFromUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    return normalizeScheduleDateValue(parsed.searchParams.get("Date") || "");
+  } catch {
+    const raw = String(url || "").match(/[?&]Date=([^&]+)/i)?.[1] || "";
+    try {
+      return normalizeScheduleDateValue(decodeURIComponent(raw));
+    } catch {
+      return normalizeScheduleDateValue(raw);
+    }
+  }
+}
+
+function usDateAndTimeToIso(dateValue: string, timeValue: string) {
+  const dateMatch = normalizeScheduleDateValue(dateValue).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!dateMatch) return "";
+  const month = Number(dateMatch[1]);
+  const day = Number(dateMatch[2]);
+  const year = Number(dateMatch[3]);
+
+  let hour = 9;
+  let minute = 0;
+  const timeMatch = cleanText(timeValue).match(/(\d{1,2})\s*:\s*(\d{2})\s*(AM|PM)/i);
+  if (timeMatch) {
+    const rawHour = Number(timeMatch[1]) % 12;
+    minute = Number(timeMatch[2]);
+    hour = timeMatch[3].toUpperCase() === "PM" ? rawHour + 12 : rawHour;
+  }
+
+  return new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0)).toISOString();
+}
+
+async function buildTournamentGamesFromScoreboardPages(input: {
+  eventNum: string;
+  firstScheduleHtml: string;
+  firstTargetUrl: string;
+}): Promise<Tournament["games"]> {
+  const currentDate = extractDateParamFromUrl(input.firstTargetUrl);
+  const scheduleDates = extractScheduleDatesFromHtml(input.firstScheduleHtml)
+    .map((value) => normalizeScheduleDateValue(value))
+    .filter(Boolean);
+  const allDates = Array.from(new Set([currentDate, ...scheduleDates].filter(Boolean)));
+  if (!allDates.length) return [];
+
+  const eventUrl = `https://www.perfectgame.org/events/TournamentSchedule.aspx?event=${input.eventNum}`;
+  const pagesByDate = new Map<string, string>();
+  if (currentDate) {
+    pagesByDate.set(currentDate, input.firstScheduleHtml);
+  } else {
+    pagesByDate.set(allDates[0], input.firstScheduleHtml);
+  }
+
+  for (const dateValue of allDates) {
+    if (pagesByDate.has(dateValue)) continue;
+    const page = await fetchHtml(`${eventUrl}&Date=${encodeURIComponent(dateValue)}`).catch(() => null);
+    if (page?.html) pagesByDate.set(dateValue, page.html);
+  }
+
+  const orderedDates = [...allDates].sort((left, right) => {
+    const l = Date.parse(normalizeScheduleDateValue(left));
+    const r = Date.parse(normalizeScheduleDateValue(right));
+    if (!Number.isNaN(l) && !Number.isNaN(r)) return l - r;
+    return left.localeCompare(right);
+  });
+
+  const out: Tournament["games"] = [];
+  const seen = new Set<string>();
+  for (const dateValue of orderedDates) {
+    const pageHtml = pagesByDate.get(dateValue) || "";
+    if (!pageHtml) continue;
+    const rows = parseEventScoreboardRows(pageHtml);
+    rows.forEach((row, index) => {
+      const startTime = usDateAndTimeToIso(dateValue, row.time || "");
+      const dedupeKey = [
+        normalizeScheduleDateValue(dateValue),
+        cleanText(row.time || ""),
+        normalizeTeam(row.homeTeam),
+        normalizeTeam(row.awayTeam),
+        cleanText(row.field || "")
+      ].join("|");
+      if (seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+      out.push({
+        id: `pg-event-${input.eventNum}-game-${row.gameNo || index + 1}`,
+        field: row.field || "Field TBD",
+        fieldLocation: { x: out.length + 1, y: out.length + 1 },
+        startTime: startTime || new Date().toISOString(),
+        homeTeam: row.homeTeam || "Team A",
+        awayTeam: row.awayTeam || "Team B",
+        players: []
+      });
+    });
+  }
+
+  return out.sort((a, b) => Date.parse(a.startTime) - Date.parse(b.startTime));
+}
+
 async function fetchHtml(target: string) {
   const raw = process.env.RESIDENTIAL_PROXY_TEMPLATE_URLS || "";
   const proxies = raw.split(",").map((item) => item.trim()).filter(Boolean);
@@ -417,6 +527,17 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
   }
 
   const teamPlayers = await enrichPlayersFromTeamPages(teams);
+
+  if (eventNum) {
+    const scheduleGames = await buildTournamentGamesFromScoreboardPages({
+      eventNum,
+      firstScheduleHtml: html,
+      firstTargetUrl: target
+    }).catch(() => [] as Tournament["games"]);
+    if (scheduleGames.length) {
+      games = scheduleGames;
+    }
+  }
 
   if (!games.length) {
     if (eventNum) {
@@ -673,29 +794,35 @@ function inferEventIdFromTeamHtml(html: string) {
 
 function parseEventScoreboardRows(html: string): EventScoreboardRow[] {
   const out: EventScoreboardRow[] = [];
-  const visitorMatches = [...html.matchAll(/id="[^"]*lblVisitorName_(\d+)"[^>]*>([\s\S]*?)<\/span>/gi)];
+  const gameLinks = [...html.matchAll(/id="[^"]*hlDiamondKastGames_(\d+)"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)];
 
-  for (const match of visitorMatches) {
+  for (const match of gameLinks) {
     const idx = match[1];
-    const awayTeam = cleanText(match[2]);
+    const gameUrl = toAbsolutePgUrl(match[2] || "");
+    const linkText = cleanText(match[3] || "");
+    const gameNoFromLink = linkText.match(/Gm#\s*([0-9]+)/i)?.[1] || "";
+    const awayTeam = cleanText(
+      html.match(new RegExp(`id="[^"]*lblVisitorName_${idx}"[^>]*>([\\s\\S]*?)<\\/span>`, "i"))?.[1] || ""
+    );
     if (!awayTeam) continue;
 
     const homeMatch = html.match(new RegExp(`id="[^"]*lblHomeTeamName_${idx}"[^>]*>([\\s\\S]*?)<\\/span>`, "i"));
     const fieldMatch = html.match(new RegExp(`id="[^"]*lblTournamentName_${idx}"[^>]*>([\\s\\S]*?)<\\/span>`, "i"));
-    const recapMatch = html.match(new RegExp(`id="[^"]*hlDiamondKastRecap_${idx}"[^>]*href="([^"]+)"`, "i"));
+    const timeMatch = html.match(new RegExp(`id="[^"]*lblGameDateTime_${idx}"[^>]*>([\\s\\S]*?)<\\/span>`, "i"));
 
     const homeTeam = cleanText(homeMatch?.[1] || "");
     const field = cleanText(fieldMatch?.[1] || "Field TBD");
-    const recapUrl = recapMatch?.[1] ? toAbsolutePgUrl(recapMatch[1]) : "";
-    if (!homeTeam || !recapUrl) continue;
+    const time = cleanText(timeMatch?.[1] || "");
+    if (!homeTeam || !gameUrl) continue;
 
-    const gameNo = recapUrl.match(/gameid=(\d+)/i)?.[1] || idx;
+    const gameNo = gameNoFromLink || gameUrl.match(/gameid=(\d+)/i)?.[1] || idx;
     out.push({
       gameNo,
       field: field || "Field TBD",
+      time,
       homeTeam,
       awayTeam,
-      recapUrl
+      recapUrl: gameUrl
     });
   }
 
@@ -714,7 +841,7 @@ function extractScheduleDatesFromHtml(html: string): string[] {
 function parseScheduleFromRecapHtml(html: string, fallback: EventScoreboardRow): PgTeamScheduleRow {
   const dateTime = cleanText(html.match(/id="[^"]*lblGameDateTime"[^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
   const date = dateTime.match(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/)?.[0] || "";
-  const time = dateTime.match(/\b\d{1,2}:\d{2}\s*(?:AM|PM)\b/i)?.[0] || "";
+  const time = dateTime.match(/\b\d{1,2}:\d{2}\s*(?:AM|PM)\b/i)?.[0] || fallback.time || "";
   const recapField = cleanText(html.match(/id="[^"]*lblField"[^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
   const recapBallpark = cleanText(
     html.match(/id="[^"]*(?:hlBallpark|hlBallPark|hlFacility|hlLocation)[^"]*"[^>]*>([\s\S]*?)<\/a>/i)?.[1]
@@ -817,6 +944,7 @@ export async function scrapePgTeamLive(
             const enriched = parseScheduleFromRecapHtml(recap.html, {
               gameNo: row.gameNo,
               field: row.field,
+              time: row.time,
               homeTeam: row.homeTeam,
               awayTeam: row.awayTeam,
               recapUrl: row.recapUrl as string
