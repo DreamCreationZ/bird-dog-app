@@ -1926,22 +1926,12 @@ export default function BirdDogPage() {
 
   function readTeamRosterCartCanonical() {
     if (!teamRosterCartStorageKey) return [] as DesiredPlayer[];
-    const canonicalRaw = safeLocalGet(teamRosterCartStorageKey);
+    const canonicalRows = readRosterCartStorage(teamRosterCartStorageKey);
     const aliasRows = mergeRosterCartStorage(teamRosterCartLegacyKeys);
-    if (canonicalRaw != null) {
-      const canonicalRows = readRosterCartStorage(teamRosterCartStorageKey);
-      if (canonicalRows.length || !aliasRows.length) {
-        return canonicalRows;
-      }
-      const repaired = dedupeDesiredPlayersByIdentity([...canonicalRows, ...aliasRows]);
-      writeRosterCartStorage(teamRosterCartStorageKey, repaired);
-      pruneLegacyTeamRosterCartAliases();
-      return repaired;
-    }
-    const migrated = dedupeDesiredPlayersByIdentity(aliasRows);
-    writeRosterCartStorage(teamRosterCartStorageKey, migrated);
+    const merged = dedupeDesiredPlayersByIdentity([...canonicalRows, ...aliasRows]);
+    writeRosterCartStorage(teamRosterCartStorageKey, merged);
     pruneLegacyTeamRosterCartAliases();
-    return migrated;
+    return merged;
   }
 
   function setTeamRosterCartAndPersist(nextState: SetStateAction<DesiredPlayer[]>) {

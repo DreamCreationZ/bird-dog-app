@@ -852,21 +852,8 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
 
   useEffect(() => {
     const aliasRows = mergeRosterCartStorage(cartStorageLegacyKeys);
-    let merged: CrossTeamCartPlayer[] = [];
     const canonicalRows = cartStorageKey ? readRosterCartStorage(cartStorageKey) : [];
-    let canonicalExists = false;
-    try {
-      canonicalExists = cartStorageKey ? window.localStorage.getItem(cartStorageKey) != null : false;
-    } catch {
-      canonicalExists = false;
-    }
-    if (canonicalExists) {
-      merged = canonicalRows.length
-        ? canonicalRows
-        : dedupeCartPlayersByIdentity([...canonicalRows, ...aliasRows]);
-    } else {
-      merged = dedupeCartPlayersByIdentity([...canonicalRows, ...aliasRows]);
-    }
+    const merged = dedupeCartPlayersByIdentity([...canonicalRows, ...aliasRows]);
     setCrossTeamCartPlayers(merged);
     // Keep only canonical key active so removed players cannot reappear from stale aliases.
     persistCrossTeamCart(merged);
