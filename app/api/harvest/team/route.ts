@@ -527,8 +527,24 @@ function parsePbrRosterRows(html: string) {
   return fallback;
 }
 
-function parsePbrTeamPageUrl(teamsHtml: string, targetTeamName: string) {
+function parsePbrTeamPageUrl(teamsHtml: string, targetTeamName: string, targetTeamId = "") {
   const links = [...teamsHtml.matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)];
+  const teamUuid = cleanText(
+    String(targetTeamId || "")
+      .replace(/^pbr-team-/i, "")
+      .match(/^([a-f0-9-]{8,})$/i)?.[1] || ""
+  );
+  if (teamUuid) {
+    for (const link of links) {
+      const href = cleanText(link[1] || "");
+      if (!/\/team\/details\//i.test(href)) continue;
+      const hrefUuid = cleanText(href.match(/\/team\/details\/\d+\/([a-f0-9-]{8,})/i)?.[1] || "");
+      if (hrefUuid && hrefUuid.toLowerCase() === teamUuid.toLowerCase()) {
+        return toAbsolutePbrUrl(href);
+      }
+    }
+  }
+
   const targetKey = normalize(targetTeamName);
   const targetTokens = teamTokens(targetTeamName);
   let best: { href: string; score: number } | null = null;
@@ -561,6 +577,7 @@ function parsePbrTeamPageUrl(teamsHtml: string, targetTeamName: string) {
 
 async function tryFetchPbrLiveTeamData(input: {
   eventHint: string;
+  targetTeamId: string;
   targetTeamName: string;
   fallbackIsoDate: string;
 }) {
@@ -643,7 +660,7 @@ async function tryFetchPbrLiveTeamData(input: {
   }).catch(() => null);
   const teamsHtml = teamsRes && teamsRes.ok ? await teamsRes.text() : "";
   if (teamsHtml) {
-    teamUrl = parsePbrTeamPageUrl(teamsHtml, input.targetTeamName);
+    teamUrl = parsePbrTeamPageUrl(teamsHtml, input.targetTeamName, input.targetTeamId);
   }
   if (teamUrl) {
     const teamRes = await fetch(teamUrl, {
@@ -965,6 +982,7 @@ export async function POST(req: NextRequest) {
           if (eventHint) {
             const livePbr = await withTimeout(tryFetchPbrLiveTeamData({
               eventHint,
+              targetTeamId: teamId,
               targetTeamName: targetTeamName || teamName,
               fallbackIsoDate: asIsoDate(tournament.date)
             }), 3000) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[], teamUrl: "" };

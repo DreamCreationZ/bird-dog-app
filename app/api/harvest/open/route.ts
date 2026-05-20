@@ -302,12 +302,18 @@ function parsePbrTeamsFromPayload(payloads: Array<Record<string, unknown> | null
         const name = cleanText(String(row[`team_name_${suffix}`] || ""));
         if (!name) return;
         if (/pool\s+[a-z]\s+place|division\s+place|winner\s*#/i.test(name)) return;
-        const key = normalizeTeam(name);
-        if (!key) return;
-        const uuid = cleanText(String(row[`team_${suffix}_uuid`] || ""));
         const link = toAbsolutePbrUrl(String(row[`team_link_${suffix}`] || ""));
-        const id = uuid || `pbr-team-${slugify(name)}`;
-        if (!map.has(key)) {
+        const uuid = cleanText(
+          String(row[`team_${suffix}_uuid`] || "")
+          || link.match(/#([a-f0-9-]{8,})/i)?.[1]
+          || link.match(/\/team\/details\/\d+\/([a-f0-9-]{8,})/i)?.[1]
+          || ""
+        );
+        const id = uuid ? `pbr-team-${uuid}` : `pbr-team-${slugify(name)}`;
+        const key = (id || "").toLowerCase() || (link || "").toLowerCase() || `name:${normalizeTeam(name)}`;
+        if (!key) return;
+        const existing = map.get(key);
+        if (!existing) {
           map.set(key, {
             id,
             name,
@@ -315,11 +321,9 @@ function parsePbrTeamsFromPayload(payloads: Array<Record<string, unknown> | null
             record: "",
             href: link || undefined
           });
-        } else if (link) {
-          const existing = map.get(key)!;
-          if (!existing.href) existing.href = link;
-          if (!existing.id && id) existing.id = id;
+          return;
         }
+        if (!existing.href && link) existing.href = link;
       };
       addTeam("1");
       addTeam("2");
@@ -337,13 +341,18 @@ function parsePbrTeamsFromTeamsHtml(html: string) {
     if (!link) continue;
     const name = cleanText(link[2] || "");
     if (!name || /team|register/i.test(name.toLowerCase())) continue;
-    const key = normalizeTeam(name);
-    if (!key) continue;
     const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((cell) => cleanText(cell[1] || ""));
     const from = cells.find((cell) => /,\s*[A-Z]{2}\b/.test(cell)) || "";
     const record = cells.find((cell) => /^\d+\s*-\s*\d+(\s*-\s*\d+)?$/.test(cell)) || "";
     const href = toAbsolutePbrUrl(link[1] || "");
-    const id = cleanText(href.match(/#([a-f0-9-]{8,})/i)?.[1] || "") || `pbr-team-${slugify(name)}`;
+    const uuid = cleanText(
+      href.match(/\/team\/details\/\d+\/([a-f0-9-]{8,})/i)?.[1]
+      || href.match(/#([a-f0-9-]{8,})/i)?.[1]
+      || ""
+    );
+    const id = uuid ? `pbr-team-${uuid}` : `pbr-team-${slugify(name)}`;
+    const key = (id || "").toLowerCase() || (href || "").toLowerCase() || `name:${normalizeTeam(name)}`;
+    if (!key) continue;
     if (!out.has(key)) {
       out.set(key, {
         id,
@@ -364,6 +373,22 @@ function parsePbrGamesFromPayload(payloads: Array<Record<string, unknown> | null
       const homeTeam = cleanText(String(row.team_name_1 || ""));
       const awayTeam = cleanText(String(row.team_name_2 || ""));
       if (!homeTeam && !awayTeam) return;
+      const homeTeamHref = toAbsolutePbrUrl(String(row.team_link_1 || ""));
+      const awayTeamHref = toAbsolutePbrUrl(String(row.team_link_2 || ""));
+      const homeTeamUuid = cleanText(
+        String(row.team_1_uuid || "")
+        || homeTeamHref.match(/#([a-f0-9-]{8,})/i)?.[1]
+        || homeTeamHref.match(/\/team\/details\/\d+\/([a-f0-9-]{8,})/i)?.[1]
+        || ""
+      );
+      const awayTeamUuid = cleanText(
+        String(row.team_2_uuid || "")
+        || awayTeamHref.match(/#([a-f0-9-]{8,})/i)?.[1]
+        || awayTeamHref.match(/\/team\/details\/\d+\/([a-f0-9-]{8,})/i)?.[1]
+        || ""
+      );
+      const homeTeamId = homeTeamUuid ? `pbr-team-${homeTeamUuid}` : "";
+      const awayTeamId = awayTeamUuid ? `pbr-team-${awayTeamUuid}` : "";
       const location = cleanText(String(row.location || row.field_name || "Field TBD"));
       const gameExternal = cleanText(String(row.schedule_game_id || row.game_number || index + 1));
       const displayGameNo = cleanText(String(row.game_number || ""));
@@ -411,7 +436,9 @@ function parsePbrGamesFromPayload(payloads: Array<Record<string, unknown> | null
       const dedupeKey = [
         startTime,
         normalizeTeam(homeTeam),
+        (homeTeamId || "").toLowerCase(),
         normalizeTeam(awayTeam),
+        (awayTeamId || "").toLowerCase(),
         cleanText(location).toLowerCase(),
         cleanText(ageDiv).toLowerCase()
       ].join("|");
@@ -425,6 +452,10 @@ function parsePbrGamesFromPayload(payloads: Array<Record<string, unknown> | null
           homeTeam: homeTeam || "TBD",
           awayTeam: awayTeam || "TBD",
           players: [],
+          homeTeamId,
+          awayTeamId,
+          homeTeamHref,
+          awayTeamHref,
           gameNo: displayGameNo,
           timeLabel,
           dateLabel: dateRaw,
@@ -443,6 +474,10 @@ function parsePbrGamesFromPayload(payloads: Array<Record<string, unknown> | null
       if (!existing.dayLabel && dayLabel) existing.dayLabel = dayLabel;
       if (!existing.timeLabel && timeLabel) existing.timeLabel = timeLabel;
       if (!existing.gameNo && displayGameNo) existing.gameNo = displayGameNo;
+      if (!existing.homeTeamId && homeTeamId) existing.homeTeamId = homeTeamId;
+      if (!existing.awayTeamId && awayTeamId) existing.awayTeamId = awayTeamId;
+      if (!existing.homeTeamHref && homeTeamHref) existing.homeTeamHref = homeTeamHref;
+      if (!existing.awayTeamHref && awayTeamHref) existing.awayTeamHref = awayTeamHref;
     });
   });
 
@@ -562,6 +597,13 @@ async function buildPbrLiveTournament(input: {
   if (!context.eventId) return null;
 
   const payloads: Array<Record<string, unknown> | null> = [];
+  const seenDivisionKeys = new Set<string>();
+  const pushPayload = (key: string, payload: Record<string, unknown> | null) => {
+    if (!payload) return;
+    if (seenDivisionKeys.has(key)) return;
+    seenDivisionKeys.add(key);
+    payloads.push(payload);
+  };
   const allPayload = await fetchPbrSchedulePayload({
     eventId: context.eventId,
     scheduleAjaxUrl: context.scheduleAjaxUrl,
@@ -570,28 +612,28 @@ async function buildPbrLiveTournament(input: {
     eventPriceId: "0",
     scheduleId: "0"
   });
-  if (allPayload) payloads.push(allPayload);
+  pushPayload("0|0", allPayload);
 
-  if (!payloads.length || parsePbrScheduleRows(payloads[0]).length === 0) {
-    const divisionEntries = Object.entries(context.divisions)
-      .filter(([key, division]) => key !== "0" && safeString(division?.event_price_id || key))
-      .map(([key, division]) => ({
-        eventPriceId: safeString(division?.event_price_id || key),
-        scheduleId: safeString(division?.schedule_id || "")
-      }))
-      .filter((item) => item.eventPriceId && item.scheduleId);
+  const divisionEntries = Object.entries(context.divisions)
+    .filter(([key, division]) => key !== "0" && safeString(division?.event_price_id || key))
+    .map(([key, division]) => ({
+      eventPriceId: safeString(division?.event_price_id || key),
+      scheduleId: safeString(division?.schedule_id || "")
+    }))
+    .filter((item) => item.eventPriceId && item.scheduleId);
 
-    for (const division of divisionEntries) {
-      const payload = await fetchPbrSchedulePayload({
-        eventId: context.eventId,
-        scheduleAjaxUrl: context.scheduleAjaxUrl,
-        eventBase: context.eventBase,
-        csrfToken: context.csrfToken,
-        eventPriceId: division.eventPriceId,
-        scheduleId: division.scheduleId
-      });
-      if (payload) payloads.push(payload);
-    }
+  for (const division of divisionEntries) {
+    const divisionKey = `${division.eventPriceId}|${division.scheduleId}`;
+    if (seenDivisionKeys.has(divisionKey)) continue;
+    const payload = await fetchPbrSchedulePayload({
+      eventId: context.eventId,
+      scheduleAjaxUrl: context.scheduleAjaxUrl,
+      eventBase: context.eventBase,
+      csrfToken: context.csrfToken,
+      eventPriceId: division.eventPriceId,
+      scheduleId: division.scheduleId
+    });
+    pushPayload(divisionKey, payload);
   }
 
   const teamsRes = await fetch(`${eventBase}/teams`, {

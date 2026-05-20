@@ -223,9 +223,13 @@ type TournamentScheduleRowView = {
   location: string;
   ageDiv: string;
   homeTeam: string;
+  homeTeamId?: string;
+  homeTeamHref?: string;
   homeScore: string;
   awayScore: string;
   awayTeam: string;
+  awayTeamId?: string;
+  awayTeamHref?: string;
 };
 
 type TournamentPlayerIndexRow = {
@@ -1712,9 +1716,13 @@ export default function BirdDogPage() {
         location: String(game.field || "Field TBD"),
         ageDiv: pickAgeDivision(game),
         homeTeam,
+        homeTeamId: String(rawGame.homeTeamId || "").trim() || undefined,
+        homeTeamHref: String(rawGame.homeTeamHref || "").trim() || undefined,
         homeScore: pickGameScore(game, "home"),
         awayScore: pickGameScore(game, "away"),
-        awayTeam
+        awayTeam,
+        awayTeamId: String(rawGame.awayTeamId || "").trim() || undefined,
+        awayTeamHref: String(rawGame.awayTeamHref || "").trim() || undefined
       };
     });
 
@@ -1809,6 +1817,24 @@ export default function BirdDogPage() {
     [hotelBooked, requiredStateCodes, stateHotelInputs]
   );
   const selectedTournamentTeams = selectedTournament?.teams || [];
+  const teamsById = useMemo(() => {
+    const map = new Map<string, TeamRef>();
+    selectedTournamentTeams.forEach((team) => {
+      const key = String(team.id || "").trim().toLowerCase();
+      if (!key) return;
+      if (!map.has(key)) map.set(key, team);
+    });
+    return map;
+  }, [selectedTournamentTeams]);
+  const teamsByHref = useMemo(() => {
+    const map = new Map<string, TeamRef>();
+    selectedTournamentTeams.forEach((team) => {
+      const key = String(team.href || "").trim().toLowerCase();
+      if (!key) return;
+      if (!map.has(key)) map.set(key, team);
+    });
+    return map;
+  }, [selectedTournamentTeams]);
   const teamsByNormalizedName = useMemo(() => {
     const map = new Map<string, TeamRef>();
     selectedTournamentTeams.forEach((team) => {
@@ -3305,9 +3331,22 @@ export default function BirdDogPage() {
     router.push(`/bird-dog/team?${params.toString()}`);
   }
 
-  function resolveTeamForRosterOpen(teamName: string) {
+  function resolveTeamForRosterOpen(teamName: string, teamId?: string, teamHref?: string) {
     const cleaned = String(teamName || "").trim();
     if (!cleaned || isRosterPlaceholderTeamName(cleaned)) return null;
+
+    const cleanHref = String(teamHref || "").trim().toLowerCase();
+    if (cleanHref) {
+      const byHref = teamsByHref.get(cleanHref);
+      if (byHref) return byHref;
+    }
+
+    const cleanId = String(teamId || "").trim().toLowerCase();
+    if (cleanId) {
+      const byId = teamsById.get(cleanId);
+      if (byId) return byId;
+    }
+
     const normalized = normalizeSmartSearch(cleaned);
     if (!normalized) return null;
 
@@ -3335,6 +3374,14 @@ export default function BirdDogPage() {
     }
 
     if (best && best.score >= 0.5) return best.team;
+    if (cleanHref || cleanId) {
+      return {
+        id: cleanId || `pbr-team-${normalized.replace(/\s+/g, "-")}`,
+        name: cleaned,
+        from: "",
+        href: cleanHref || undefined
+      } satisfies TeamRef;
+    }
     return null;
   }
 
@@ -3361,6 +3408,7 @@ export default function BirdDogPage() {
         teamId: team.id,
         teamUrl: team.href || "",
         teamName: team.name,
+        tournamentName: selectedTournament?.name || tournamentViewTitle || "",
         eventId: currentEventNumber(),
         tournamentId: selectedTournamentId,
         searchOnly: true
@@ -5576,8 +5624,8 @@ export default function BirdDogPage() {
                       </thead>
                       <tbody>
                         {group.rows.map((row) => {
-                          const homeTeam = resolveTeamForRosterOpen(row.homeTeam);
-                          const awayTeam = resolveTeamForRosterOpen(row.awayTeam);
+                          const homeTeam = resolveTeamForRosterOpen(row.homeTeam, row.homeTeamId, row.homeTeamHref);
+                          const awayTeam = resolveTeamForRosterOpen(row.awayTeam, row.awayTeamId, row.awayTeamHref);
                           return (
                             <tr key={row.key}>
                               <td>{row.time}</td>
