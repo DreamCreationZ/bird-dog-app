@@ -4005,6 +4005,7 @@ export default function BirdDogPage() {
     let smartReorderHint = "";
     const MIN_VIEW_MINUTES = 20;
     const PRE_GAME_BUFFER_MINUTES = 10;
+    const MAX_ALLOWED_LATE_MINUTES = 15;
 
     while (unseenPlayers.size > 0 && usedGameKeys.size < geocoded.length) {
       let best: {
@@ -4084,8 +4085,9 @@ export default function BirdDogPage() {
         const remainingMinutes = Math.floor((candidate.endMs - watchStartMs) / (60 * 1000));
         if (remainingMinutes < MIN_VIEW_MINUTES) continue;
 
-        const waitMinutes = Math.max(0, Math.floor((candidate.startMs - arriveMs) / (60 * 1000)));
         const lateByMinutes = Math.max(0, Math.floor((watchStartMs - candidate.startMs) / (60 * 1000)));
+        if (lateByMinutes > MAX_ALLOWED_LATE_MINUTES) continue;
+        const waitMinutes = Math.max(0, Math.floor((candidate.startMs - arriveMs) / (60 * 1000)));
         const minutesToEndAtArrival = Math.max(0, Math.floor((candidate.endMs - arriveMs) / (60 * 1000)));
         const urgency = Math.max(0, 240 - minutesToEndAtArrival);
         const startsSoon = Math.max(0, 120 - Math.max(0, Math.floor((candidate.startMs - arriveMs) / (60 * 1000))));
@@ -4487,19 +4489,14 @@ export default function BirdDogPage() {
       const isFeasible = !optimized.blockedReason;
       const primaryState = earliestArrival?.stateCode || requiredStates[0] || "";
       const bookedHotelName = primaryState ? String(hotelPayloadByState[primaryState]?.hotelName || "").trim() : "";
-      const hotelName = isFeasible
+      const wantsHotelRouting = isFeasible && hotelBooked === "yes";
+      const hotelName = wantsHotelRouting
         ? (bookedHotelName || scheduleForm.hotelName.trim() || await suggestHotelForDestination(hotelHubDestination || destination))
         : "";
-      const withHotelPlan = isFeasible
+      const withHotelPlan = wantsHotelRouting
         ? withHotelReturnLeg(optimized.plan, hotelName)
         : optimized.plan;
-      const finalPlanBase = isFeasible
-        ? applyHotelFirstRoutePlan(withHotelPlan, {
-          startLabel: resolvedSource,
-          hotelName,
-          hotelAreaHint: hotelHubDestination || destination || eventLocationHint || ""
-        })
-        : withHotelPlan;
+      const finalPlanBase = withHotelPlan;
       const finalPlan = applyHotelStayMilestones(
         finalPlanBase,
         Object.entries(hotelPayloadByState).map(([stateCode, row]) => ({
@@ -4518,7 +4515,9 @@ export default function BirdDogPage() {
         hotelName,
         notes: scheduleForm.notes || (
           isFeasible
-            ? "Auto-generated coach route with travel + hotel recommendation."
+            ? (wantsHotelRouting && hotelName
+              ? "Auto-generated coach route with travel + hotel recommendation."
+              : "Auto-generated coach route from selected players.")
             : ""
         )
       };
@@ -6011,6 +6010,10 @@ export default function BirdDogPage() {
                       const value = event.target.value === "yes" ? "yes" : "no";
                       setHotelBooked(value);
                       if (value === "no") {
+                        setScheduleForm((prev) => {
+                          if (!prev.hotelName) return prev;
+                          return { ...prev, hotelName: "" };
+                        });
                         setStateHotelInputs((prev) => {
                           const next: Record<string, StateHotelInput> = {};
                           Object.keys(prev).forEach((stateCode) => {
@@ -6054,7 +6057,7 @@ export default function BirdDogPage() {
               ) : null}
             </div>
           </div>
-          {scheduleForm.hotelName ? (
+          {hotelBooked === "yes" && scheduleForm.hotelName ? (
             <p className="muted" style={{ marginTop: 0 }}>
               Recommended hotel: {scheduleForm.hotelName}
             </p>
