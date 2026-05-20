@@ -4287,10 +4287,15 @@ export default function BirdDogPage() {
       }
 
       if (best.waitMinutes >= 20) {
+        const onSiteBuffer = isSameStop && best.travel.minutes === 0;
         travelPlan.push({
           at: new Date(best.arriveMs).toISOString(),
-          title: `Arrive early at ${destinationLabel}`,
-          detail: `Early buffer ~${best.waitMinutes} min before first pitch.`
+          title: onSiteBuffer
+            ? `Stay on-site at ${destinationLabel}`
+            : `Arrive early at ${destinationLabel}`,
+          detail: onSiteBuffer
+            ? `On-site buffer ~${best.waitMinutes} min before first pitch. No additional travel needed.`
+            : `Early buffer ~${best.waitMinutes} min before first pitch.`
         });
       }
 
