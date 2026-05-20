@@ -393,6 +393,42 @@ function normalizeCompany(value: string | null | undefined): "PG" | "PBR" | "" {
   return "";
 }
 
+function companyLabel(value: "PG" | "PBR") {
+  return value === "PBR" ? "PBR" : "PG";
+}
+
+function sourceLabel(value: "PG" | "PBR") {
+  return value === "PBR" ? "Prep Baseball Report" : "Perfect Game";
+}
+
+function inferCompanyFromContext(input: {
+  inventorySlug?: string;
+  teamUrl?: string;
+  tournamentName?: string;
+}): "PG" | "PBR" | "" {
+  const inventory = String(input.inventorySlug || "").toLowerCase();
+  if (inventory.startsWith("pbr-") || inventory.includes("pbr-live")) return "PBR";
+  if (inventory.startsWith("pg-") || inventory.includes("pg-live")) return "PG";
+
+  const joined = `${input.teamUrl || ""} ${input.tournamentName || ""}`.toLowerCase();
+  if (
+    joined.includes("prepbaseballreport")
+    || joined.includes("prep baseball")
+    || joined.includes("prepbaseball")
+    || joined.includes("tournaments.prepbaseballreport.com")
+  ) {
+    return "PBR";
+  }
+  if (
+    joined.includes("perfectgame")
+    || joined.includes("perfect game")
+    || joined.includes("search.perfectgame.org")
+  ) {
+    return "PG";
+  }
+  return "";
+}
+
 function rosterCartStorageKey(company: string, inventorySlug?: string, tournamentId?: string) {
   const scopeSeed = inventorySlug || tournamentId || "";
   const scoped = normalizeStorageScope(scopeSeed);
@@ -806,8 +842,20 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
       );
       if (fromQuery) return fromQuery;
     }
+    const inferred = inferCompanyFromContext({
+      inventorySlug: initialParams.returnInventorySlug || initialParams.inventorySlug,
+      teamUrl: initialParams.teamUrl,
+      tournamentName: initialParams.tournamentName
+    });
+    if (inferred) return inferred;
     return "PG";
-  }, [initialParams.returnCompany]);
+  }, [
+    initialParams.inventorySlug,
+    initialParams.returnCompany,
+    initialParams.returnInventorySlug,
+    initialParams.teamUrl,
+    initialParams.tournamentName
+  ]);
   const cartInventorySlug = useMemo(
     () => initialParams.returnInventorySlug || initialParams.inventorySlug || "",
     [initialParams.inventorySlug, initialParams.returnInventorySlug]
@@ -1293,13 +1341,19 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
 
   function resolveReturnCompany(qs?: URLSearchParams) {
     const search = qs || new URLSearchParams(window.location.search);
-    return normalizeCompany(
+    const explicit = normalizeCompany(
       initialParams.returnCompany
       || search.get("returnCompany")
       || search.get("company")
       || search.get("provider")
       || ""
     );
+    if (explicit) return explicit;
+    return inferCompanyFromContext({
+      inventorySlug: initialParams.returnInventorySlug || initialParams.inventorySlug,
+      teamUrl: initialParams.teamUrl,
+      tournamentName: initialParams.tournamentName
+    });
   }
 
   function goBackOneStep() {
@@ -2138,19 +2192,19 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
 
     if (removed.length) {
       pushMonitorAlert({
-        id: `pg-remove-${Date.now()}`,
+        id: `schedule-remove-${Date.now()}`,
         kind: "pg_change",
         severity: "high",
-        title: "PG schedule change detected",
-        detail: `${removed.length} game(s) disappeared from Perfect Game. Likely cancellation/reschedule. Approve regenerate to modify your coach travel plan.`
+        title: `${companyLabel(cartCompany)} schedule change detected`,
+        detail: `${removed.length} game(s) disappeared from ${sourceLabel(cartCompany)}. Likely cancellation/reschedule. Approve regenerate to modify your coach travel plan.`
       });
     }
     if (changed.length) {
       pushMonitorAlert({
-        id: `pg-change-${Date.now()}`,
+        id: `schedule-change-${Date.now()}`,
         kind: "pg_change",
         severity: "medium",
-        title: "PG game timing/location updated",
+        title: `${companyLabel(cartCompany)} game timing/location updated`,
         detail: `${changed.length} game(s) changed date/time/field. Approve regenerate to keep bookings aligned.`
       });
     }
@@ -2173,7 +2227,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
         scheduleFingerprintRef.current = nextFingerprint;
         writeTeamDetailsCache(teamDetailsCacheKey(initialParams), { schedule: data.schedule, roster: mergedRoster });
         if (approvedPlan) {
-          setPlannerStatus("Perfect Game updated this team schedule. Approve regenerate to modify travel bookings.");
+          setPlannerStatus(`${sourceLabel(cartCompany)} updated this team schedule. Approve regenerate to modify travel bookings.`);
         }
       }
       await checkWeatherRisks(data.schedule);
@@ -2213,7 +2267,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     await runLiveMonitorSync();
     await generateCoachSchedule();
     setApprovedPlan(false);
-    setPlannerStatus("Plan regenerated from latest PG/weather updates. Review and click Approve Recommendation to modify bookings.");
+    setPlannerStatus(`Plan regenerated from latest ${companyLabel(cartCompany)}/weather updates. Review and click Approve Recommendation to modify bookings.`);
   }
 
   async function generateCoachSchedule() {
