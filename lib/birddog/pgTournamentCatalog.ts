@@ -465,6 +465,22 @@ function sortItems(items: PgCatalogItem[]) {
   });
 }
 
+function catalogItemScore(item: PgCatalogItem) {
+  let score = 0;
+  if (normalizeSpace(item.displayDate)) score += 4;
+  if (normalizeSpace(item.displayTeams)) score += 3;
+  if (normalizeSpace(item.displayCity)) score += 2;
+  if (normalizeSpace(item.harvestHint)) score += 1;
+  return score;
+}
+
+function catalogDedupeKey(item: PgCatalogItem) {
+  const normalizedName = normalizeSpace(item.name).toLowerCase();
+  const isoStart = startIsoFromDisplayDate(item.displayDate, item.name) || normalizeSpace(item.displayDate).toLowerCase();
+  const city = normalizeSpace(item.displayCity).toLowerCase();
+  return `${normalizedName}::${isoStart}::${city}`;
+}
+
 async function fetchPgFromSource(forceDiscoveryRefresh = false) {
   const { featuredIds, groupedIds } = await discoverCatalogIds(forceDiscoveryRefresh);
 
@@ -499,14 +515,17 @@ async function fetchPgFromSource(forceDiscoveryRefresh = false) {
       : Promise.resolve([] as PgCatalogItem[][])
   ]);
 
-  const byHint = new Map<string, PgCatalogItem>();
+  const byTournament = new Map<string, PgCatalogItem>();
   [...featuredPages.flat(), ...groupedPages.flat()].forEach((item) => {
-    const key = item.harvestHint.toLowerCase();
-    if (!byHint.has(key)) byHint.set(key, item);
+    const key = catalogDedupeKey(item);
+    const existing = byTournament.get(key);
+    if (!existing || catalogItemScore(item) > catalogItemScore(existing)) {
+      byTournament.set(key, item);
+    }
   });
 
-  if (!byHint.size) return [];
-  return sortItems(Array.from(byHint.values())).slice(0, MAX_CATALOG_ITEMS);
+  if (!byTournament.size) return [];
+  return sortItems(Array.from(byTournament.values())).slice(0, MAX_CATALOG_ITEMS);
 }
 
 export async function fetchPgTournamentCatalog(forceRefresh = false) {
