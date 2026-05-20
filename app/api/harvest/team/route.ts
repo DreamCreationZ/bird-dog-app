@@ -947,9 +947,10 @@ export async function POST(req: NextRequest) {
             : null)
         : null;
 
-      const targetTeamName = teamName
-        || tournament?.teams?.find((team) => team.id === teamId)?.name
-        || "";
+      const teamNameFromTournamentId = tournament?.teams?.find((team) => team.id === teamId)?.name || "";
+      // Prefer canonical team name from the imported tournament for this teamId.
+      // Query-string teamName can be shortened and can miss roster/schedule matches.
+      const targetTeamName = teamNameFromTournamentId || teamName || "";
 
       if (tournament && targetTeamName) {
         const imported = importedRowsForTeam(tournament, targetTeamName);
