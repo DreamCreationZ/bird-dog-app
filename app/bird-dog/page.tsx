@@ -59,6 +59,7 @@ type PlanItem = {
   at: string;
   title: string;
   detail: string;
+  mapUrl?: string;
 };
 
 type PlanWorkflowStatus = "draft" | "pending_approval" | "approved";
@@ -1172,6 +1173,8 @@ type TravelEstimate = {
   mode: string;
   minutes: number;
   advisory?: string;
+  distanceKm?: number;
+  delayMinutes?: number;
 };
 const MAX_FEASIBLE_TRAVEL_HOURS = 12;
 const MAX_FEASIBLE_TRAVEL_MINUTES = MAX_FEASIBLE_TRAVEL_HOURS * 60;
@@ -1200,6 +1203,36 @@ function formatPlanClock(valueMs: number) {
     minute: "2-digit",
     hour12: true
   });
+}
+
+function mapsDirectionsUrl(fromLabel: string, toLabel: string, fromPoint?: GeoLocation | null, toPoint?: GeoLocation | null) {
+  const origin = fromPoint?.lat != null && fromPoint?.lng != null
+    ? `${fromPoint.lat},${fromPoint.lng}`
+    : fromLabel;
+  const destination = toPoint?.lat != null && toPoint?.lng != null
+    ? `${toPoint.lat},${toPoint.lng}`
+    : toLabel;
+  const params = new URLSearchParams({
+    api: "1",
+    origin,
+    destination,
+    travelmode: "driving"
+  });
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
+}
+
+function mapsSearchUrl(label: string, point?: GeoLocation | null) {
+  const query = point?.lat != null && point?.lng != null
+    ? `${point.lat},${point.lng}`
+    : label;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
+function sanitizePlanMapUrl(value: string | undefined) {
+  const clean = String(value || "").trim();
+  if (!clean) return "";
+  if (!/^https:\/\/www\.google\.com\/maps\//i.test(clean)) return "";
+  return clean;
 }
 
 const MONTH_TOKEN_TO_INDEX: Record<string, number> = {
@@ -3805,13 +3838,16 @@ export default function BirdDogPage() {
     return null;
   }
 
-  async function fetchLiveRouteEstimate(origin: GeoLocation, destination: GeoLocation): Promise<TravelEstimate | null> {
+  async function fetchLiveRouteEstimate(origin: GeoLocation, destination: GeoLocation, departAtMs?: number): Promise<TravelEstimate | null> {
     try {
       const url = new URL("/api/maps/route-time", window.location.origin);
       url.searchParams.set("originLat", String(origin.lat));
       url.searchParams.set("originLng", String(origin.lng));
       url.searchParams.set("destLat", String(destination.lat));
       url.searchParams.set("destLng", String(destination.lng));
+      if (Number.isFinite(departAtMs)) {
+        url.searchParams.set("departAt", new Date(Number(departAtMs)).toISOString());
+      }
       const res = await fetch(url.toString(), { cache: "no-store" });
       if (!res.ok) return null;
       const data = await res.json().catch(() => ({}));
@@ -3819,10 +3855,14 @@ export default function BirdDogPage() {
       if (!Number.isFinite(minutes) || minutes <= 0) return null;
       const mode = String(data?.mode || "").trim() || "Drive / Cab";
       const advisory = String(data?.advisory || "").trim();
+      const distanceKm = Number(data?.distanceKm || NaN);
+      const delayMinutes = Number(data?.delayMinutes || NaN);
       return {
         mode,
         minutes: Math.max(1, Math.round(minutes)),
-        advisory: advisory || "Live route ETA"
+        advisory: advisory || "Live route ETA",
+        distanceKm: Number.isFinite(distanceKm) ? distanceKm : undefined,
+        delayMinutes: Number.isFinite(delayMinutes) ? Math.max(0, Math.round(delayMinutes)) : undefined
       } satisfies TravelEstimate;
     } catch {
       return null;
@@ -4193,9 +4233,10 @@ export default function BirdDogPage() {
           if (km <= 0.6) {
             travelEstimate = { mode: "On-site", minutes: 0, advisory: "Already at this venue." };
           } else {
-            const routeKey = `${fromPoint.lat.toFixed(4)},${fromPoint.lng.toFixed(4)}=>${candidate.point.lat.toFixed(4)},${candidate.point.lng.toFixed(4)}`;
+            const departBucket = Math.floor(arrivalGateMs / (15 * 60 * 1000));
+            const routeKey = `${fromPoint.lat.toFixed(4)},${fromPoint.lng.toFixed(4)}=>${candidate.point.lat.toFixed(4)},${candidate.point.lng.toFixed(4)}@${departBucket}`;
             if (!liveRouteCache.has(routeKey)) {
-              const liveEstimate = await fetchLiveRouteEstimate(fromPoint, candidate.point);
+              const liveEstimate = await fetchLiveRouteEstimate(fromPoint, candidate.point, arrivalGateMs);
               liveRouteCache.set(routeKey, liveEstimate);
             }
             const cachedLive = liveRouteCache.get(routeKey);
@@ -4263,9 +4304,20 @@ export default function BirdDogPage() {
       const coveragePlayers = best.candidate.matchedPlayers
         .filter((player) => best.newCoverageKeys.includes(desiredPlayerSelectionKey(player)))
         .map((player) => `${player.name} (${player.team})`);
+      const travelDistanceKm = typeof best.travel.distanceKm === "number" && Number.isFinite(best.travel.distanceKm)
+        ? best.travel.distanceKm
+        : null;
+      const etaAndDistance = travelDistanceKm != null
+        ? `${formatEta(best.travel.minutes)}, ${travelDistanceKm.toFixed(travelDistanceKm >= 10 ? 0 : 1)} km`
+        : formatEta(best.travel.minutes);
+      const trafficHint = Number.isFinite(best.travel.delayMinutes)
+        ? `Traffic +${best.travel.delayMinutes} min vs free-flow`
+        : "";
       const travelDetail = [
         `Leave by ${formatPlanClock(best.departMs)}`,
-        `Reach by ${formatPlanClock(best.arriveMs)} (${best.travel.mode}, ${formatEta(best.travel.minutes)})`
+        `Reach by ${formatPlanClock(best.arriveMs)} (${best.travel.mode}, ${etaAndDistance})`,
+        trafficHint,
+        best.travel.advisory || ""
       ].filter(Boolean).join(" · ");
       const isSameStop = normalizeLocationText(best.fromLabel) === normalizeLocationText(destinationLabel);
 
@@ -4282,7 +4334,8 @@ export default function BirdDogPage() {
         travelPlan.push({
           at: new Date(best.departMs).toISOString(),
           title: `Travel ${legNo}: ${best.fromLabel} -> ${destinationLabel}`,
-          detail: travelDetail
+          detail: travelDetail,
+          mapUrl: mapsDirectionsUrl(best.fromLabel, destinationLabel, best.fromPoint, best.candidate.point)
         });
       }
 
@@ -4302,7 +4355,8 @@ export default function BirdDogPage() {
       travelPlan.push({
         at: new Date(best.watchStartMs).toISOString(),
         title: `Scout Game ${best.candidate.gameNo}: ${best.candidate.homeTeam} vs ${best.candidate.awayTeam}`,
-        detail: `Prioritize players: ${coveragePlayers.join(", ") || "Selected players"} · Venue: ${best.candidate.locationLabel} · First pitch ${formatPlanClock(best.candidate.startMs)}`
+        detail: `Prioritize players: ${coveragePlayers.join(", ") || "Selected players"} · Venue: ${best.candidate.locationLabel} · First pitch ${formatPlanClock(best.candidate.startMs)}`,
+        mapUrl: mapsSearchUrl(best.candidate.locationLabel, best.candidate.point)
       });
 
       const watchMinutes = Math.min(60, Math.max(25, Math.floor((best.candidate.endMs - best.watchStartMs) / (60 * 1000) * 0.45)));
@@ -6272,7 +6326,17 @@ export default function BirdDogPage() {
                         <td>{idx + 1}</td>
                         <td>{formatTournamentGameDateTime(Date.parse(String(step.at || "")))}</td>
                         <td>{step.title}</td>
-                        <td>{step.detail}</td>
+                        <td>
+                          <span>{step.detail}</span>
+                          {sanitizePlanMapUrl(step.mapUrl) ? (
+                            <>
+                              <br />
+                              <a href={sanitizePlanMapUrl(step.mapUrl)} target="_blank" rel="noreferrer">
+                                Open in Maps
+                              </a>
+                            </>
+                          ) : null}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
