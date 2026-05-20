@@ -382,6 +382,7 @@ async function buildTournamentGamesFromScoreboardPages(input: {
     if (!pageHtml) continue;
     const rows = parseEventScoreboardRows(pageHtml);
     rows.forEach((row, index) => {
+      const dayKey = normalizeScheduleDateValue(dateValue).replace(/\D+/g, "") || "day";
       const startTime = usDateAndTimeToIso(dateValue, row.time || "");
       const dedupeKey = [
         normalizeScheduleDateValue(dateValue),
@@ -393,7 +394,7 @@ async function buildTournamentGamesFromScoreboardPages(input: {
       if (seen.has(dedupeKey)) return;
       seen.add(dedupeKey);
       out.push({
-        id: `pg-event-${input.eventNum}-game-${row.gameNo || index + 1}`,
+        id: `pg-event-${input.eventNum}-${dayKey}-game-${row.gameNo || index + 1}`,
         field: row.field || "Field TBD",
         fieldLocation: { x: out.length + 1, y: out.length + 1 },
         startTime: startTime || new Date().toISOString(),
@@ -794,30 +795,60 @@ function inferEventIdFromTeamHtml(html: string) {
 }
 
 function parseEventScoreboardRows(html: string): EventScoreboardRow[] {
-  const out: EventScoreboardRow[] = [];
-  const gameLinks = [...html.matchAll(/id="[^"]*hlDiamondKastGames_(\d+)"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)];
+  const dedupeRows = (rows: EventScoreboardRow[]) => {
+    const out: EventScoreboardRow[] = [];
+    const seen = new Set<string>();
+    const push = (row: EventScoreboardRow) => {
+      if (!row.homeTeam || !row.awayTeam) return;
+      const key = [
+        cleanText(row.time || ""),
+        normalizeTeam(row.homeTeam),
+        normalizeTeam(row.awayTeam)
+      ].join("|");
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(row);
+    };
+    rows.forEach(push);
+    return out;
+  };
 
-  for (const match of gameLinks) {
+  const legacyRows: EventScoreboardRow[] = [];
+  const pushLegacy = (row: EventScoreboardRow) => {
+    if (!row.homeTeam || !row.awayTeam) return;
+    legacyRows.push(row);
+  };
+
+  const cardRows: EventScoreboardRow[] = [];
+  const pushCard = (row: EventScoreboardRow) => {
+    if (!row.homeTeam || !row.awayTeam) return;
+    cardRows.push(row);
+  };
+
+  // Legacy scoreboard rows (visitor/home labels)
+  const legacyVisitorMatches = [...html.matchAll(/id="[^"]*lblVisitorName_(\d+)"[^>]*>([\s\S]*?)<\/span>/gi)];
+  for (const match of legacyVisitorMatches) {
     const idx = match[1];
-    const gameUrl = toAbsolutePgUrl(match[2] || "");
-    const linkText = cleanText(match[3] || "");
-    const gameNoFromLink = linkText.match(/Gm#\s*([0-9]+)/i)?.[1] || "";
-    const awayTeam = cleanText(
-      html.match(new RegExp(`id="[^"]*lblVisitorName_${idx}"[^>]*>([\\s\\S]*?)<\\/span>`, "i"))?.[1] || ""
-    );
+    const awayTeam = cleanText(match[2] || "");
     if (!awayTeam) continue;
 
-    const homeMatch = html.match(new RegExp(`id="[^"]*lblHomeTeamName_${idx}"[^>]*>([\\s\\S]*?)<\\/span>`, "i"));
-    const fieldMatch = html.match(new RegExp(`id="[^"]*lblTournamentName_${idx}"[^>]*>([\\s\\S]*?)<\\/span>`, "i"));
-    const timeMatch = html.match(new RegExp(`id="[^"]*lblGameDateTime_${idx}"[^>]*>([\\s\\S]*?)<\\/span>`, "i"));
-
-    const homeTeam = cleanText(homeMatch?.[1] || "");
-    const field = cleanText(fieldMatch?.[1] || "Field TBD");
-    const time = cleanText(timeMatch?.[1] || "");
-    if (!homeTeam || !gameUrl) continue;
-
+    const homeTeam = cleanText(
+      html.match(new RegExp(`id="[^"]*lblHomeTeamName_${idx}"[^>]*>([\\s\\S]*?)<\\/span>`, "i"))?.[1] || ""
+    );
+    const field = cleanText(
+      html.match(new RegExp(`id="[^"]*lblTournamentName_${idx}"[^>]*>([\\s\\S]*?)<\\/span>`, "i"))?.[1] || "Field TBD"
+    );
+    const time = cleanText(
+      html.match(new RegExp(`id="[^"]*lblGameDateTime_${idx}"[^>]*>([\\s\\S]*?)<\\/span>`, "i"))?.[1] || ""
+    );
+    const gameLinkMatch = html.match(
+      new RegExp(`id="[^"]*(?:hlDiamondKastGames|hlDiamondKastRecap)_${idx}"[^>]*href="([^"]+)"[^>]*>([\\s\\S]*?)<\\/a>`, "i")
+    );
+    const gameUrl = gameLinkMatch?.[1] ? toAbsolutePgUrl(gameLinkMatch[1]) : "";
+    const linkText = cleanText(gameLinkMatch?.[2] || "");
+    const gameNoFromLink = linkText.match(/Gm#\s*([0-9]+)/i)?.[1] || "";
     const gameNo = gameNoFromLink || gameUrl.match(/gameid=(\d+)/i)?.[1] || idx;
-    out.push({
+    pushLegacy({
       gameNo,
       field: field || "Field TBD",
       time,
@@ -827,7 +858,54 @@ function parseEventScoreboardRows(html: string): EventScoreboardRow[] {
     });
   }
 
-  return out;
+  // Card-based schedule rows used on many PG event pages (TS1_repSchedule)
+  const cardGameMatches = [...html.matchAll(/id="[^"]*repSchedule_lblGameNumber_(\d+)"[^>]*>([\s\S]*?)<\/span>/gi)];
+  for (const match of cardGameMatches) {
+    const idx = match[1];
+    const gameNo = cleanText(match[2] || "").match(/Gm#\s*([0-9]+)/i)?.[1] || idx;
+    const time = cleanText(
+      html.match(new RegExp(`id="[^"]*repSchedule_lblGameTime_${idx}"[^>]*>([\\s\\S]*?)<\\/span>`, "i"))?.[1] || ""
+    );
+    const awayTeam = cleanText(
+      html.match(new RegExp(`id="[^"]*repSchedule_hlVisitorTeamName_${idx}"[^>]*>([\\s\\S]*?)<\\/a>`, "i"))?.[1] || ""
+    );
+    const homeTeam = cleanText(
+      html.match(new RegExp(`id="[^"]*repSchedule_hlHomeTeam(?:Name)?_${idx}"[^>]*>([\\s\\S]*?)<\\/a>`, "i"))?.[1] || ""
+    );
+
+    const fieldPrefix = cleanText(
+      html.match(
+        new RegExp(`id="[^"]*repSchedule_pnlBallparkKnown_${idx}"[\\s\\S]*?<div>\\s*([\\s\\S]*?)\\s*<a[^>]*id="[^"]*repSchedule_hl(?:BallPark|Ballpark|Facility|Location)_${idx}"`, "i")
+      )?.[1] || ""
+    );
+    const ballpark = cleanText(
+      html.match(
+        new RegExp(`id="[^"]*repSchedule_hl(?:BallPark|Ballpark|Facility|Location)_${idx}"[^>]*>([\\s\\S]*?)<\\/a>`, "i")
+      )?.[1] || ""
+    );
+    const field = cleanText(`${fieldPrefix} ${ballpark}`).replace(/\s*@\s*$/, "").trim() || ballpark || "Field TBD";
+
+    const gameLink = html.match(
+      new RegExp(`id="[^"]*repSchedule_hlDiamondKast_${idx}"[^>]*href="([^"]+)"`, "i")
+    )?.[1];
+    const recapUrl = gameLink ? toAbsolutePgUrl(gameLink) : "";
+
+    pushCard({
+      gameNo,
+      field,
+      time,
+      homeTeam,
+      awayTeam,
+      recapUrl
+    });
+  }
+
+  const normalizedCardRows = dedupeRows(cardRows);
+  const normalizedLegacyRows = dedupeRows(legacyRows);
+  if (normalizedCardRows.length && normalizedCardRows.length >= normalizedLegacyRows.length) {
+    return normalizedCardRows;
+  }
+  return dedupeRows([...normalizedLegacyRows, ...normalizedCardRows]);
 }
 
 function extractScheduleDatesFromHtml(html: string): string[] {
