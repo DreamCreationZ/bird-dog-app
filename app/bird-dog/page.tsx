@@ -405,19 +405,29 @@ function toInputDateTime(iso: string | null) {
   if (!iso) return "";
   const date = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+}
+
+function parsePlannerDateTimeInputMs(value: string) {
+  const raw = String(value || "").trim();
+  if (!raw) return NaN;
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (match) {
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const hour = Number(match[4]);
+    const minute = Number(match[5]);
+    return Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  }
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : NaN;
 }
 
 function localInputToOffsetIso(localInput: string) {
-  if (!localInput) return "";
-  const date = new Date(localInput);
-  if (Number.isNaN(date.getTime())) return localInput;
-  const tzMin = -date.getTimezoneOffset();
-  const sign = tzMin >= 0 ? "+" : "-";
-  const abs = Math.abs(tzMin);
-  const hh = String(Math.floor(abs / 60)).padStart(2, "0");
-  const mm = String(abs % 60).padStart(2, "0");
-  return `${localInput}:00${sign}${hh}:${mm}`;
+  const parsedMs = parsePlannerDateTimeInputMs(localInput);
+  if (!Number.isFinite(parsedMs)) return localInput;
+  return new Date(parsedMs).toISOString();
 }
 
 function makeOrgKey(orgId: string, userId: string, key: string) {
@@ -1176,7 +1186,12 @@ function formatEta(minutes: number) {
 }
 
 function formatPlanClock(valueMs: number) {
-  return new Date(valueMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return new Date(valueMs).toLocaleTimeString(undefined, {
+    timeZone: "UTC",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  });
 }
 
 const MONTH_TOKEN_TO_INDEX: Record<string, number> = {
@@ -3929,7 +3944,7 @@ export default function BirdDogPage() {
       .map(([stateCode, value]) => ({
         stateCode: String(stateCode || "").trim().toUpperCase(),
         arrivalLocation: String(value?.arrivalLocation || "").trim(),
-        arrivalMs: Date.parse(String(value?.arrivalTime || ""))
+        arrivalMs: parsePlannerDateTimeInputMs(String(value?.arrivalTime || ""))
       }))
       .filter((row) => row.stateCode && row.arrivalLocation && Number.isFinite(row.arrivalMs));
     const arrivalRowsWithGeo = await Promise.all(arrivalStateRows.map(async (row) => ({
@@ -3939,7 +3954,7 @@ export default function BirdDogPage() {
     const arrivalByState = new Map(
       arrivalRowsWithGeo.map((row) => [row.stateCode, row])
     );
-    const parsedArrival = Date.parse(String(scheduleForm.flightArrivalTime || ""));
+    const parsedArrival = parsePlannerDateTimeInputMs(String(scheduleForm.flightArrivalTime || ""));
     const gameStarts = geocoded
       .map((candidate) => candidate.startMs)
       .filter((value) => Number.isFinite(value))
@@ -4268,12 +4283,12 @@ export default function BirdDogPage() {
     const arrivalByStateMs = new Map<string, number>();
     Object.entries(arrivalPayloadByState).forEach(([stateCode, row]) => {
       const normalized = String(stateCode || "").trim().toUpperCase();
-      const arrivalMs = Date.parse(String(row?.arrivalTime || ""));
+      const arrivalMs = parsePlannerDateTimeInputMs(String(row?.arrivalTime || ""));
       if (normalized && Number.isFinite(arrivalMs)) {
         arrivalByStateMs.set(normalized, arrivalMs);
       }
     });
-    const fallbackArrivalMs = Date.parse(String(fallbackArrivalInput || ""));
+    const fallbackArrivalMs = parsePlannerDateTimeInputMs(String(fallbackArrivalInput || ""));
 
     let evaluablePlayers = 0;
     const missedRows: Array<{ playerName: string; arrivalMs: number; gameStartMs: number }> = [];
@@ -4390,7 +4405,7 @@ export default function BirdDogPage() {
       .map(([stateCode, row]) => ({
         stateCode,
         ...row,
-        atMs: Date.parse(String(row.arrivalTime || ""))
+        atMs: parsePlannerDateTimeInputMs(String(row.arrivalTime || ""))
       }))
       .filter((row) => Number.isFinite(row.atMs))
       .sort((a, b) => a.atMs - b.atMs)[0];
@@ -6085,7 +6100,7 @@ export default function BirdDogPage() {
                     {myGeneratedPlan.map((step, idx) => (
                       <tr key={`${step.at}-${idx}`}>
                         <td>{idx + 1}</td>
-                        <td>{new Date(step.at).toLocaleString()}</td>
+                        <td>{formatTournamentGameDateTime(Date.parse(String(step.at || "")))}</td>
                         <td>{step.title}</td>
                         <td>{step.detail}</td>
                       </tr>
