@@ -549,7 +549,8 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
     }
   }
 
-  if (!games.length && teams.length) {
+  const allowSyntheticGames = process.env.BIRD_DOG_ALLOW_PG_SYNTHETIC_GAMES === "true";
+  if (!games.length && teams.length && allowSyntheticGames) {
     games = gamesFromTeams(teams, date);
   }
   games = attachPlayersToGamesByTeam(games, teamPlayers);
