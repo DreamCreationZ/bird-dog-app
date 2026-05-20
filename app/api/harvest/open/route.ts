@@ -734,6 +734,46 @@ export async function POST(req: NextRequest) {
       name: selected?.name || seedMeta?.name || "Perfect Game Tournament",
       company: "PG"
     });
+    const preferredTournamentName = selected?.name || seedMeta?.name || "";
+
+    const shouldRefreshImportedSnapshot = (existingTeamCount: number) => {
+      if (existingTeamCount === 0) return true;
+      if (company === "PG" && isArchive && existingTeamCount > 0 && existingTeamCount <= 120) return true;
+      return false;
+    };
+
+    const refreshFromLive = async (fallbackName: string) => {
+      const preferredName = fallbackName || preferredTournamentName || (company === "PBR" ? "PBR Tournament" : "Perfect Game Tournament");
+      try {
+        const liveTournament = company === "PBR"
+          ? await buildPbrLiveTournament({
+            inventorySlug,
+            tournamentHint,
+            preferredName
+          })
+          : await scrapePgTournamentLive(
+            tournamentHint || inventoryHarvestHint({
+              slug: inventorySlug,
+              name: preferredName,
+              company
+            })
+          );
+        if (!liveTournament) return null;
+        if (!hasSupabaseConfig) {
+          return liveTournament;
+        }
+        const dbId = await upsertHarvestedTournament({
+          orgId: session.orgId,
+          company,
+          tournament: liveTournament
+        }).catch(() => "");
+        if (!dbId) return liveTournament;
+        const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
+        return hydrated || liveTournament;
+      } catch {
+        return null;
+      }
+    };
 
     const liveFirstPg = async () => {
       if (company !== "PG") return null as Tournament | null;
@@ -795,29 +835,14 @@ export async function POST(req: NextRequest) {
         const tournamentById = await getHarvestedTournament(session.orgId, tournamentId);
         if (tournamentById) {
           const existingTeamCount = teamCount(tournamentById.teams);
-          const looksIncompleteDataset = company === "PG" && existingTeamCount === 0;
-          const looksTruncatedArchive = company === "PG" && isArchive && existingTeamCount > 0 && existingTeamCount <= 120;
-          if (looksTruncatedArchive || looksIncompleteDataset) {
-            const scrapeHint = tournamentHint || inventoryHarvestHint({
-              slug: inventorySlug,
-              name: selected?.name || seedMeta?.name || tournamentById.name || "Perfect Game Tournament",
-              company
-            });
-            try {
-              const refreshedTournament = await scrapePgTournamentLive(scrapeHint);
-              const dbId = await upsertHarvestedTournament({
-                orgId: session.orgId,
-                company,
-                tournament: refreshedTournament
-              });
-              const refreshedHydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
+          if (shouldRefreshImportedSnapshot(existingTeamCount)) {
+            const refreshedHydrated = await refreshFromLive(tournamentById.name || preferredTournamentName);
+            if (refreshedHydrated) {
               return NextResponse.json({
                 ok: true,
-                tournament: refreshedHydrated || refreshedTournament,
+                tournament: refreshedHydrated,
                 source: "archive_live_refresh_by_id"
               });
-            } catch {
-              // If refresh fails, continue with existing imported dataset.
             }
           }
           return NextResponse.json({
@@ -850,29 +875,14 @@ export async function POST(req: NextRequest) {
           const hydrated = await getHarvestedTournament(session.orgId, found.id).catch(() => null);
           const existingTournament = hydrated || found;
           const existingTeamCount = teamCount(existingTournament?.teams);
-          const looksIncompleteDataset = company === "PG" && existingTeamCount === 0;
-          const looksTruncatedArchive = company === "PG" && isArchive && existingTeamCount > 0 && existingTeamCount <= 120;
-          if (looksTruncatedArchive || looksIncompleteDataset) {
-            const scrapeHint = tournamentHint || inventoryHarvestHint({
-              slug: inventorySlug,
-              name: selected?.name || seedMeta?.name || found.name || "Perfect Game Tournament",
-              company
-            });
-            try {
-              const refreshedTournament = await scrapePgTournamentLive(scrapeHint);
-              const dbId = await upsertHarvestedTournament({
-                orgId: session.orgId,
-                company,
-                tournament: refreshedTournament
-              });
-              const refreshedHydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
+          if (shouldRefreshImportedSnapshot(existingTeamCount)) {
+            const refreshedHydrated = await refreshFromLive(found.name || preferredTournamentName);
+            if (refreshedHydrated) {
               return NextResponse.json({
                 ok: true,
-                tournament: refreshedHydrated || refreshedTournament,
+                tournament: refreshedHydrated,
                 source: "archive_live_refresh"
               });
-            } catch {
-              // If refresh fails, continue with existing imported dataset.
             }
           }
           return NextResponse.json({
