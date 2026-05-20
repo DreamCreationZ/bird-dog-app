@@ -3769,6 +3769,26 @@ export default function BirdDogPage() {
     const left = normalizeSmartSearch(a);
     const right = normalizeSmartSearch(b);
     if (!left || !right) return false;
+    const variantTokens = new Set([
+      "red", "blue", "black", "white", "gold", "silver", "green", "orange", "navy", "maroon",
+      "elite", "prime", "prospects", "platinum", "royal", "gray", "grey",
+      "major", "minor", "open", "aaa", "aa", "a"
+    ]);
+    const tokenize = (value: string) => value
+      .split(" ")
+      .map((token) => token.trim().toLowerCase())
+      .filter((token) => {
+        if (!token) return false;
+        if (/^\d+$/.test(token)) return false;
+        if (/^\d+u$/.test(token)) return false;
+        return true;
+      });
+    const leftVariants = new Set(tokenize(left).filter((token) => variantTokens.has(token)));
+    const rightVariants = new Set(tokenize(right).filter((token) => variantTokens.has(token)));
+    if (leftVariants.size > 0 && rightVariants.size > 0) {
+      const hasVariantOverlap = Array.from(leftVariants).some((token) => rightVariants.has(token));
+      if (!hasVariantOverlap) return false;
+    }
     if (left === right || left.includes(right) || right.includes(left)) return true;
     const leftTokens = teamNameTokens(left);
     const rightTokens = teamNameTokens(right);
