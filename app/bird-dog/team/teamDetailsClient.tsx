@@ -393,10 +393,11 @@ function normalizeCompany(value: string | null | undefined): "PG" | "PBR" | "" {
   return "";
 }
 
-function rosterCartStorageKey(company: string, inventorySlug?: string) {
-  const inventoryScope = normalizeStorageScope(inventorySlug || "");
-  if (inventorySlug) {
-    return `${ROSTER_CART_STORAGE_KEY_PREFIX}:scope:${inventoryScope}`;
+function rosterCartStorageKey(company: string, inventorySlug?: string, tournamentId?: string) {
+  const scopeSeed = inventorySlug || tournamentId || "";
+  const scoped = normalizeStorageScope(scopeSeed);
+  if (scopeSeed) {
+    return `${ROSTER_CART_STORAGE_KEY_PREFIX}:scope:${scoped}`;
   }
   const companyScope = normalizeStorageScope(company || "pg");
   return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}`;
@@ -811,8 +812,8 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     [initialParams.inventorySlug, initialParams.returnInventorySlug]
   );
   const cartStorageKey = useMemo(
-    () => rosterCartStorageKey(cartCompany, cartInventorySlug),
-    [cartCompany, cartInventorySlug]
+    () => rosterCartStorageKey(cartCompany, cartInventorySlug, initialParams.returnTournamentId || ""),
+    [cartCompany, cartInventorySlug, initialParams.returnTournamentId]
   );
   const cartStorageLegacyKeys = useMemo(() => {
     const candidates = [
@@ -842,16 +843,21 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   );
 
   useEffect(() => {
+    const aliasRows = mergeRosterCartStorage(cartStorageLegacyKeys);
     let merged: CrossTeamCartPlayer[] = [];
+    const canonicalRows = cartStorageKey ? readRosterCartStorage(cartStorageKey) : [];
+    let canonicalExists = false;
     try {
-      const canonicalRaw = cartStorageKey ? window.localStorage.getItem(cartStorageKey) : null;
-      if (canonicalRaw != null) {
-        merged = cartStorageKey ? readRosterCartStorage(cartStorageKey) : [];
-      } else {
-        merged = mergeRosterCartStorage([cartStorageKey, ...cartStorageLegacyKeys].filter(Boolean));
-      }
+      canonicalExists = cartStorageKey ? window.localStorage.getItem(cartStorageKey) != null : false;
     } catch {
-      merged = mergeRosterCartStorage([cartStorageKey, ...cartStorageLegacyKeys].filter(Boolean));
+      canonicalExists = false;
+    }
+    if (canonicalExists) {
+      merged = canonicalRows.length
+        ? canonicalRows
+        : dedupeCartPlayersByIdentity([...canonicalRows, ...aliasRows]);
+    } else {
+      merged = dedupeCartPlayersByIdentity([...canonicalRows, ...aliasRows]);
     }
     setCrossTeamCartPlayers(merged);
     // Keep only canonical key active so removed players cannot reappear from stale aliases.

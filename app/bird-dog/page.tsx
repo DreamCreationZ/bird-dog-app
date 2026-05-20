@@ -582,9 +582,10 @@ function rosterCartStorageKey(input: {
   inventorySlug?: string;
   tournamentId?: string;
 }) {
-  const inventoryScope = normalizeStorageScope(input.inventorySlug || "");
-  if (input.inventorySlug) {
-    return `${ROSTER_CART_STORAGE_KEY_PREFIX}:scope:${inventoryScope}`;
+  const scopeSeed = input.inventorySlug || input.tournamentId || "";
+  const scoped = normalizeStorageScope(scopeSeed);
+  if (scopeSeed) {
+    return `${ROSTER_CART_STORAGE_KEY_PREFIX}:scope:${scoped}`;
   }
   const companyScope = normalizeStorageScope(input.company);
   return `${ROSTER_CART_STORAGE_KEY_PREFIX}:${companyScope}`;
@@ -1561,9 +1562,9 @@ export default function BirdDogPage() {
   const [hotelBooked, setHotelBooked] = useState<"yes" | "no">("no");
   const [stateHotelInputs, setStateHotelInputs] = useState<Record<string, StateHotelInput>>({});
   const [questionOpen, setQuestionOpen] = useState({
-    flight: true,
-    arrival: true,
-    hotel: true
+    flight: false,
+    arrival: false,
+    hotel: false
   });
   const [planWorkflowStatus, setPlanWorkflowStatus] = useState<PlanWorkflowStatus>("draft");
   const [planWorkflowNote, setPlanWorkflowNote] = useState("");
@@ -1918,10 +1919,18 @@ export default function BirdDogPage() {
   function readTeamRosterCartCanonical() {
     if (!teamRosterCartStorageKey) return [] as DesiredPlayer[];
     const canonicalRaw = safeLocalGet(teamRosterCartStorageKey);
+    const aliasRows = mergeRosterCartStorage(teamRosterCartLegacyKeys);
     if (canonicalRaw != null) {
-      return readRosterCartStorage(teamRosterCartStorageKey);
+      const canonicalRows = readRosterCartStorage(teamRosterCartStorageKey);
+      if (canonicalRows.length || !aliasRows.length) {
+        return canonicalRows;
+      }
+      const repaired = dedupeDesiredPlayersByIdentity([...canonicalRows, ...aliasRows]);
+      writeRosterCartStorage(teamRosterCartStorageKey, repaired);
+      pruneLegacyTeamRosterCartAliases();
+      return repaired;
     }
-    const migrated = mergeRosterCartStorage([teamRosterCartStorageKey, ...teamRosterCartLegacyKeys]);
+    const migrated = dedupeDesiredPlayersByIdentity(aliasRows);
     writeRosterCartStorage(teamRosterCartStorageKey, migrated);
     pruneLegacyTeamRosterCartAliases();
     return migrated;
@@ -5743,7 +5752,7 @@ export default function BirdDogPage() {
                     onChange={(event) => {
                       const value = event.target.value === "yes" ? "yes" : "no";
                       setFlightBooked(value);
-                      setQuestionOpen((prev) => ({ ...prev, flight: false, arrival: true }));
+                      setQuestionOpen((prev) => ({ ...prev, flight: false }));
                     }}
                   >
                     <option value="no">No</option>
