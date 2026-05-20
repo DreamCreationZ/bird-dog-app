@@ -193,6 +193,13 @@ type StateHotelInput = {
   checkOut: string;
 };
 
+type CoachTravelInputsSnapshot = {
+  flightBooked?: "yes" | "no";
+  hotelBooked?: "yes" | "no";
+  stateArrivalInputs?: Record<string, StateArrivalInput>;
+  stateHotelInputs?: Record<string, StateHotelInput>;
+};
+
 type TeamRef = NonNullable<Tournament["teams"]>[number];
 
 type InlineTeamNoteTarget = {
@@ -288,6 +295,7 @@ const PREVIEW_UNLOCK_ALL =
 const COACH_LOCATION_SHARING_KEY = "bird_dog:coach_location_sharing";
 const LOCAL_SCHEDULE_FALLBACK_KEY = "bird_dog:local_schedule_fallback:v1";
 const PLAN_WORKFLOW_STATUS_KEY_PREFIX = "bird_dog:plan_workflow_status:v1";
+const COACH_TRAVEL_INPUTS_STORAGE_KEY_PREFIX = "bird_dog:coach_travel_inputs:v1";
 const DESIRED_PLAYERS_STORAGE_KEY_PREFIX = "bird_dog:desired_players:v1";
 const ROSTER_CART_STORAGE_KEY_PREFIX = "bird_dog:roster_cart:v3";
 const ROSTER_CART_GLOBAL_KEY = "bird_dog:roster_cart:v3:global";
@@ -685,6 +693,55 @@ function desiredPlayersScopedStorageKey(input: {
   const companyScope = normalizeStorageScope(input.company || "pg");
   const inventoryScope = normalizeStorageScope(input.inventorySlug || input.tournamentId || "global");
   return `${DESIRED_PLAYERS_STORAGE_KEY_PREFIX}:${orgScope}:${userScope}:${companyScope}:${inventoryScope}`;
+}
+
+function coachTravelInputsStorageKey(input: {
+  orgId: string;
+  userId: string;
+  company: "PG" | "PBR";
+  inventorySlug?: string;
+  tournamentId?: string;
+}) {
+  const orgScope = normalizeStorageScope(input.orgId || "org");
+  const userScope = normalizeStorageScope(input.userId || "user");
+  const companyScope = normalizeStorageScope(input.company || "pg");
+  const inventoryScope = normalizeStorageScope(input.inventorySlug || input.tournamentId || "global");
+  return `${COACH_TRAVEL_INPUTS_STORAGE_KEY_PREFIX}:${orgScope}:${userScope}:${companyScope}:${inventoryScope}`;
+}
+
+function sanitizeStateArrivalInputs(
+  value: unknown
+): Record<string, StateArrivalInput> {
+  if (!value || typeof value !== "object") return {};
+  const next: Record<string, StateArrivalInput> = {};
+  Object.entries(value as Record<string, unknown>).forEach(([stateCode, raw]) => {
+    const normalized = String(stateCode || "").trim().toUpperCase();
+    if (!normalized) return;
+    const row = (raw || {}) as Record<string, unknown>;
+    const arrivalLocation = String(row.arrivalLocation || "").trim();
+    const arrivalTime = String(row.arrivalTime || "").trim();
+    if (!arrivalLocation && !arrivalTime) return;
+    next[normalized] = { arrivalLocation, arrivalTime };
+  });
+  return next;
+}
+
+function sanitizeStateHotelInputs(
+  value: unknown
+): Record<string, StateHotelInput> {
+  if (!value || typeof value !== "object") return {};
+  const next: Record<string, StateHotelInput> = {};
+  Object.entries(value as Record<string, unknown>).forEach(([stateCode, raw]) => {
+    const normalized = String(stateCode || "").trim().toUpperCase();
+    if (!normalized) return;
+    const row = (raw || {}) as Record<string, unknown>;
+    const hotelName = String(row.hotelName || "").trim();
+    const checkIn = String(row.checkIn || "").trim();
+    const checkOut = String(row.checkOut || "").trim();
+    if (!hotelName && !checkIn && !checkOut) return;
+    next[normalized] = { hotelName, checkIn, checkOut };
+  });
+  return next;
 }
 
 function readRosterCartStorage(key: string) {
@@ -1668,6 +1725,16 @@ export default function BirdDogPage() {
       tournamentId: selectedTournamentId
     });
   }, [company, selectedInventorySlug, selectedTournamentId, user]);
+  const coachTravelInputsKey = useMemo(() => {
+    if (!user) return "";
+    return coachTravelInputsStorageKey({
+      orgId: user.orgId,
+      userId: user.userId,
+      company,
+      inventorySlug: selectedInventorySlug,
+      tournamentId: selectedTournamentId
+    });
+  }, [company, selectedInventorySlug, selectedTournamentId, user]);
 
   useEffect(() => {
     selectedTournamentIdRef.current = selectedTournamentId;
@@ -1880,6 +1947,7 @@ export default function BirdDogPage() {
   const selectedTournamentHydrationAttemptAtRef = useRef<Record<string, number>>({});
   const autoPlannerRef = useRef<{ busy: boolean; key: string }>({ busy: false, key: "" });
   const autoCreateScheduleRunKeyRef = useRef("");
+  const coachTravelInputsReadyKeyRef = useRef("");
   const generatedSchedulePanelRef = useRef<HTMLDivElement | null>(null);
   const inlineTeamNoteMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const inlineTeamNoteMediaStreamRef = useRef<MediaStream | null>(null);
@@ -2209,6 +2277,40 @@ export default function BirdDogPage() {
       dateOfBirth: String(saved.dateOfBirth || baseProfile.dateOfBirth || "1990-01-01")
     });
   }, [user]);
+
+  useEffect(() => {
+    if (!coachTravelInputsKey) {
+      coachTravelInputsReadyKeyRef.current = "";
+      return;
+    }
+    const raw = safeLocalGet(coachTravelInputsKey);
+    const saved = parseJsonSafe<CoachTravelInputsSnapshot | null>(raw, null);
+    if (!saved) {
+      setFlightBooked("no");
+      setHotelBooked("no");
+      setStateArrivalInputs({});
+      setStateHotelInputs({});
+      coachTravelInputsReadyKeyRef.current = coachTravelInputsKey;
+      return;
+    }
+    setFlightBooked(saved.flightBooked === "yes" ? "yes" : "no");
+    setHotelBooked(saved.hotelBooked === "yes" ? "yes" : "no");
+    setStateArrivalInputs(sanitizeStateArrivalInputs(saved.stateArrivalInputs));
+    setStateHotelInputs(sanitizeStateHotelInputs(saved.stateHotelInputs));
+    coachTravelInputsReadyKeyRef.current = coachTravelInputsKey;
+  }, [coachTravelInputsKey]);
+
+  useEffect(() => {
+    if (!coachTravelInputsKey) return;
+    if (coachTravelInputsReadyKeyRef.current !== coachTravelInputsKey) return;
+    const payload: CoachTravelInputsSnapshot = {
+      flightBooked,
+      hotelBooked,
+      stateArrivalInputs,
+      stateHotelInputs
+    };
+    safeLocalSet(coachTravelInputsKey, JSON.stringify(payload));
+  }, [coachTravelInputsKey, flightBooked, hotelBooked, stateArrivalInputs, stateHotelInputs]);
 
   useEffect(() => {
     const ctor = (window as unknown as { SpeechRecognition?: BrowserSpeechConstructor; webkitSpeechRecognition?: BrowserSpeechConstructor }).SpeechRecognition
