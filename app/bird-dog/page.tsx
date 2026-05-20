@@ -1098,68 +1098,6 @@ function withHotelReturnLeg(plan: PlanItem[], hotelName: string) {
   ];
 }
 
-function parseTravelTitle(title: string) {
-  const match = String(title || "").match(/^Travel\s+\d+:\s*(.+?)\s*->\s*(.+)$/i);
-  if (!match) return null;
-  const from = String(match[1] || "").trim();
-  const to = String(match[2] || "").trim();
-  if (!from || !to) return null;
-  return { from, to };
-}
-
-function renumberTravelLegs(plan: PlanItem[]) {
-  let travelNo = 0;
-  return plan.map((item) => {
-    const parsed = parseTravelTitle(item.title);
-    if (!parsed) return item;
-    travelNo += 1;
-    return {
-      ...item,
-      title: `Travel ${travelNo}: ${parsed.from} -> ${parsed.to}`
-    };
-  });
-}
-
-function applyHotelFirstRoutePlan(
-  plan: PlanItem[],
-  options: { startLabel: string; hotelName: string; hotelAreaHint?: string }
-) {
-  if (!plan.length) return plan;
-  const hotelLabel = String(options.hotelName || "").trim()
-    || (options.hotelAreaHint ? `Recommended hotel near ${options.hotelAreaHint}` : "Recommended hotel");
-  const firstTravelIndex = plan.findIndex((item) => Boolean(parseTravelTitle(item.title)));
-  if (firstTravelIndex < 0) return renumberTravelLegs(plan);
-
-  const firstTravel = plan[firstTravelIndex];
-  const parsedFirst = parseTravelTitle(firstTravel.title);
-  if (!parsedFirst) return renumberTravelLegs(plan);
-
-  const firstTravelMs = Date.parse(String(firstTravel.at || ""));
-  const firstDepartMs = Number.isFinite(firstTravelMs) ? firstTravelMs : Date.now() + 90 * 60 * 1000;
-  const hotelArriveMs = firstDepartMs - 45 * 60 * 1000;
-  const hotelDepartMs = hotelArriveMs - 35 * 60 * 1000;
-
-  const toHotelLeg: PlanItem = {
-    at: new Date(hotelDepartMs).toISOString(),
-    title: `Travel 1: ${options.startLabel} -> ${hotelLabel}`,
-    detail: `Leave by ${formatPlanClock(hotelDepartMs)} · Reach by ${formatPlanClock(hotelArriveMs)} · Check in before scouting.`
-  };
-
-  const nextPlan = [...plan];
-  const originalFirstTravelDetail = String(firstTravel.detail || "").trim();
-  nextPlan[firstTravelIndex] = {
-    ...firstTravel,
-    title: `Travel 2: ${hotelLabel} -> ${parsedFirst.to}`,
-    detail: originalFirstTravelDetail || "Head to your first selected player game."
-  };
-
-  return renumberTravelLegs([
-    ...nextPlan.slice(0, firstTravelIndex),
-    toHotelLeg,
-    ...nextPlan.slice(firstTravelIndex)
-  ]);
-}
-
 type TravelEstimate = {
   mode: string;
   minutes: number;
