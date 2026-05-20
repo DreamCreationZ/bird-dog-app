@@ -335,22 +335,25 @@ function parseFeaturedEvents(html: string): PgCatalogItem[] {
 
     const groupId = normalizeSpace(row.hlGroupID || "");
     const eventId = normalizeSpace(row.hlEventID || "");
-    const name = normalizeSpace(
-      grouped
-        ? row.hlGroupName || row.hlEventName || ""
-        : row.hlEventName || row.hlGroupName || ""
-    );
+    const eventName = normalizeSpace(row.hlEventName || "");
+    const groupName = normalizeSpace(row.hlGroupName || "");
+    const eventItem = normalizeSpace(row.hlEventItem || row.hlDivision || "");
+    let name = normalizeSpace(eventName || groupName || "");
+    if (grouped && groupName && name === groupName && eventItem) {
+      name = `${groupName} (${eventItem})`;
+    }
     if (!name) return;
 
     const city = normalizeSpace(
-      grouped
-        ? row.hlGroupLocation || row.hlEventLocation || ""
-        : row.hlEventLocation || row.hlGroupLocation || ""
+      row.hlEventLocation
+      || row.hlGroupLocation
+      || ""
     );
     const displayDate = normalizeSpace(
-      grouped
-        ? row.hlGroupDate || row.hlEventDate || row.hlBlockMonth || ""
-        : row.hlEventDate || row.hlGroupDate || row.hlBlockMonth || ""
+      row.hlEventDate
+      || row.hlGroupDate
+      || row.hlBlockMonth
+      || ""
     );
     const parsedRange = parseDateRange(displayDate, row.hlBlockMonth || "");
     const date = parsedRange?.start || new Date().toISOString().slice(0, 10);
@@ -360,16 +363,16 @@ function parseFeaturedEvents(html: string): PgCatalogItem[] {
       ? (/teams?/i.test(teamsRaw) ? teamsRaw : `${teamsRaw} TEAMS`)
       : "";
 
-    const harvestHint = grouped && groupId
-      ? `${PG_BASE_URL}/Schedule/GroupedEvents.aspx?gid=${groupId}`
-      : eventId
-        ? `${PG_BASE_URL}/Events/Default.aspx?event=${eventId}`
+    const harvestHint = eventId
+      ? `${PG_BASE_URL}/Events/Default.aspx?event=${eventId}`
+      : grouped && groupId
+        ? `${PG_BASE_URL}/Schedule/GroupedEvents.aspx?gid=${groupId}`
         : `${PG_BASE_URL}/search.aspx?search=${encodeURIComponent(name)}`;
 
-    const slugBase = grouped && groupId
-      ? `pg-live-${groupId}-${slugify(name)}`
-      : eventId
-        ? `pg-live-event-${eventId}-${slugify(name)}`
+    const slugBase = eventId
+      ? `pg-live-event-${eventId}-${slugify(name)}`
+      : grouped && groupId
+        ? `pg-live-${groupId}-${slugify(name)}-${date}`
         : `pg-live-${slugify(name)}-${slugify(city || "city-tbd")}-${date}`;
 
     const item: PgCatalogItem = {
