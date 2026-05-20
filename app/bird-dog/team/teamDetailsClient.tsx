@@ -1123,7 +1123,15 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     }
   }
 
-  async function fetchTeamDetailsRemote(timeoutMs = 4500) {
+  const TEAM_DETAILS_TIMEOUT_MARKER = "__TEAM_DETAILS_TIMEOUT__";
+  const TEAM_DETAILS_SYNCING_MESSAGE = "Tournament details are syncing. Please refresh in a few seconds.";
+
+  function isSyncingTimeoutError(error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error || "");
+    return detail === TEAM_DETAILS_TIMEOUT_MARKER || /Tournament details are syncing/i.test(detail);
+  }
+
+  async function fetchTeamDetailsAttempt(payload: Record<string, unknown>, timeoutMs: number) {
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     const timeoutId = controller
       ? window.setTimeout(() => controller.abort(), timeoutMs)
@@ -1133,13 +1141,13 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
       res = await fetch("/api/harvest/team", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(teamRequestPayload),
+        body: JSON.stringify(payload),
         signal: controller?.signal
       });
     } catch (error) {
       const aborted = error instanceof DOMException && error.name === "AbortError";
       if (aborted) {
-        throw new Error("Tournament details are syncing. Please refresh in a few seconds.");
+        throw new Error(TEAM_DETAILS_TIMEOUT_MARKER);
       }
       throw error;
     } finally {
@@ -1147,6 +1155,9 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     }
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
+      if (res.status === 504) {
+        throw new Error(TEAM_DETAILS_TIMEOUT_MARKER);
+      }
       throw new Error(body?.error || `Failed (${res.status})`);
     }
     const data = await res.json();
@@ -1154,6 +1165,29 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     const rosterRaw = Array.isArray(data?.roster) ? data.roster as TeamRosterRow[] : [];
     const roster = ensureRosterTeam(rosterRaw, initialParams.teamName);
     return { schedule, roster };
+  }
+
+  async function fetchTeamDetailsRemote() {
+    try {
+      return await fetchTeamDetailsAttempt(teamRequestPayload as Record<string, unknown>, 8000);
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== TEAM_DETAILS_TIMEOUT_MARKER) {
+        throw error;
+      }
+    }
+
+    try {
+      // Fallback to a faster server path when full live sync is still warming up.
+      return await fetchTeamDetailsAttempt(
+        { ...teamRequestPayload, searchOnly: true } as Record<string, unknown>,
+        15000
+      );
+    } catch (error) {
+      if (isSyncingTimeoutError(error)) {
+        throw new Error(TEAM_DETAILS_SYNCING_MESSAGE);
+      }
+      throw error;
+    }
   }
 
   useEffect(() => {
@@ -1171,8 +1205,25 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
 
       setLoading(true);
       setError("");
+      let keepLoadingForRetry = false;
       try {
-        const data = await fetchTeamDetailsRemote();
+        let data: { schedule: TeamScheduleRow[]; roster: TeamRosterRow[] } | null = null;
+        let lastError: unknown = null;
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          try {
+            data = await fetchTeamDetailsRemote();
+            break;
+          } catch (error) {
+            lastError = error;
+            const detail = error instanceof Error ? error.message : String(error || "");
+            const isSyncing = /Tournament details are syncing/i.test(detail);
+            if (!isSyncing || attempt === 3) break;
+            await new Promise((resolve) => window.setTimeout(resolve, 1200 * attempt));
+          }
+        }
+        if (!data) {
+          throw lastError || new Error("Failed to load team details.");
+        }
         if (!mounted) return;
         const schedule = data.schedule;
         const roster = data.roster;
@@ -1184,9 +1235,19 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
         }
       } catch (fetchError) {
         if (!mounted) return;
+        if (isSyncingTimeoutError(fetchError)) {
+          // Keep retrying quietly while upstream team sync catches up.
+          keepLoadingForRetry = true;
+          setError("");
+          window.setTimeout(() => {
+            if (!mounted) return;
+            void load();
+          }, 2200);
+          return;
+        }
         setError(String(fetchError));
       } finally {
-        if (mounted) setLoading(false);
+        if (mounted && !keepLoadingForRetry) setLoading(false);
       }
     }
     void load();

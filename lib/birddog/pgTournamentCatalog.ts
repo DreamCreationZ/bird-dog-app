@@ -435,8 +435,31 @@ function parseGroupedEvents(html: string, gid: number): PgCatalogItem[] {
   return items;
 }
 
+function startIsoFromDisplayDate(displayDate: string, name: string) {
+  const fromRange = parseDateRange(displayDate, displayDate)?.start;
+  if (fromRange) return fromRange;
+
+  const raw = normalizeSpace(displayDate);
+  const monthOnly = raw.match(/^([A-Za-z]{3,9})(?:\s*-\s*[A-Za-z]{3,9})?(?:\s+(20\d{2}))?$/);
+  if (monthOnly) {
+    const month = monthFromLabel(monthOnly[1]);
+    const year = Number(monthOnly[2] || name.match(/\b(20\d{2})\b/)?.[1] || "");
+    if (month && year) {
+      return toIsoDate(year, month, 1);
+    }
+  }
+  return "";
+}
+
 function sortItems(items: PgCatalogItem[]) {
-  return items.sort((a, b) => `${a.displayDate} ${a.name}`.localeCompare(`${b.displayDate} ${b.name}`));
+  return items.sort((a, b) => {
+    const aIso = startIsoFromDisplayDate(a.displayDate, a.name);
+    const bIso = startIsoFromDisplayDate(b.displayDate, b.name);
+    if (aIso && bIso && aIso !== bIso) return aIso.localeCompare(bIso);
+    if (aIso && !bIso) return -1;
+    if (!aIso && bIso) return 1;
+    return a.name.localeCompare(b.name);
+  });
 }
 
 async function fetchPgFromSource(forceDiscoveryRefresh = false) {

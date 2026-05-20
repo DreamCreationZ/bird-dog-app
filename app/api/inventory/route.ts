@@ -95,6 +95,108 @@ function normalizeInventoryName(value: string) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function monthTokenToIndex(token: string) {
+  const key = String(token || "").trim().slice(0, 3).toLowerCase();
+  const map: Record<string, number> = {
+    jan: 0,
+    feb: 1,
+    mar: 2,
+    apr: 3,
+    may: 4,
+    jun: 5,
+    jul: 6,
+    aug: 7,
+    sep: 8,
+    oct: 9,
+    nov: 10,
+    dec: 11
+  };
+  return map[key] ?? null;
+}
+
+function parseDisplayDateStartMs(displayDate: string, fallbackYear: number) {
+  const raw = String(displayDate || "").replace(/[–—]/g, "-").replace(/\s+/g, " ").trim();
+  if (!raw) return null;
+
+  const usDate = raw.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (usDate) {
+    const month = Number(usDate[1]);
+    const day = Number(usDate[2]);
+    const year = Number(usDate[3]);
+    return new Date(year, month - 1, day, 9, 0, 0, 0).getTime();
+  }
+
+  const monthDayRange = raw.match(/^([A-Za-z]+)\s*(\d{1,2})\s*-\s*([A-Za-z]+)?\s*(\d{1,2})(?:,\s*(\d{4}))?$/);
+  if (monthDayRange) {
+    const monthIdx = monthTokenToIndex(monthDayRange[1]);
+    const day = Number(monthDayRange[2]);
+    const explicitYear = monthDayRange[5] ? Number(monthDayRange[5]) : fallbackYear;
+    if (monthIdx != null && Number.isFinite(day)) {
+      return new Date(explicitYear, monthIdx, day, 9, 0, 0, 0).getTime();
+    }
+  }
+
+  const monthDay = raw.match(/^([A-Za-z]+)\s*(\d{1,2})(?:,\s*(\d{4}))?$/);
+  if (monthDay) {
+    const monthIdx = monthTokenToIndex(monthDay[1]);
+    const day = Number(monthDay[2]);
+    const year = monthDay[3] ? Number(monthDay[3]) : fallbackYear;
+    if (monthIdx != null && Number.isFinite(day)) {
+      return new Date(year, monthIdx, day, 9, 0, 0, 0).getTime();
+    }
+  }
+
+  const monthOnly = raw.match(/^([A-Za-z]+)(?:\s*-\s*[A-Za-z]+)?(?:\s+(\d{4}))?$/);
+  if (monthOnly) {
+    const monthIdx = monthTokenToIndex(monthOnly[1]);
+    const year = monthOnly[2] ? Number(monthOnly[2]) : fallbackYear;
+    if (monthIdx != null && Number.isFinite(year)) {
+      return new Date(year, monthIdx, 1, 9, 0, 0, 0).getTime();
+    }
+  }
+
+  return null;
+}
+
+function inventoryFallbackYear(item: InventoryItem) {
+  const fromDate = String(item.displayDate || "").match(/\b(20\d{2})\b/)?.[1];
+  if (fromDate) return Number(fromDate);
+  const fromName = String(item.name || "").match(/\b(20\d{2})\b/)?.[1];
+  if (fromName) return Number(fromName);
+  return new Date().getFullYear();
+}
+
+function inventoryRowScore(item: InventoryItem) {
+  let score = 0;
+  if (String(item.displayDate || "").trim()) score += 4;
+  if (String(item.displayTeams || "").trim()) score += 3;
+  if (String(item.displayCity || "").trim()) score += 2;
+  if (String(item.harvestHint || "").trim()) score += 1;
+  if (item.slug.startsWith("pg-live-") || item.slug.startsWith("pbr-live-")) score += 1;
+  return score;
+}
+
+function normalizeSortAndDedupeInventory(items: InventoryItem[]) {
+  const deduped = new Map<string, InventoryItem>();
+  for (const item of items) {
+    const key = `${item.company}:${normalizeInventoryName(item.name)}`;
+    const existing = deduped.get(key);
+    if (!existing) {
+      deduped.set(key, item);
+      continue;
+    }
+    if (inventoryRowScore(item) > inventoryRowScore(existing)) {
+      deduped.set(key, item);
+    }
+  }
+  return Array.from(deduped.values()).sort((a, b) => {
+    const aStart = parseDisplayDateStartMs(String(a.displayDate || ""), inventoryFallbackYear(a)) ?? Number.MAX_SAFE_INTEGER;
+    const bStart = parseDisplayDateStartMs(String(b.displayDate || ""), inventoryFallbackYear(b)) ?? Number.MAX_SAFE_INTEGER;
+    if (aStart !== bStart) return aStart - bStart;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 function inventoryNamesMatch(left: string, right: string) {
   const a = normalizeInventoryName(left);
   const b = normalizeInventoryName(right);
@@ -164,7 +266,8 @@ function mapInventoryForResponse(
   previewUnlockAll: boolean,
   unlockedSet: Set<string>
 ) {
-  return inventory.map((item) => {
+  const normalizedInventory = normalizeSortAndDedupeInventory(inventory);
+  return normalizedInventory.map((item) => {
     const isArchive = isFreeTournamentAccess({
       slug: item.slug,
       name: item.name,
@@ -278,6 +381,7 @@ export async function GET(req: NextRequest) {
       // Avoid flashing stale seeded tournaments as if they were current live events.
       mergedInventory = hasFreshLastGood ? lastGoodInventory.inventory : [];
     }
+    mergedInventory = normalizeSortAndDedupeInventory(mergedInventory);
     if (mergedInventory.length) {
       lastGoodInventory.savedAt = Date.now();
       lastGoodInventory.inventory = mergedInventory;

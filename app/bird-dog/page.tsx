@@ -1313,6 +1313,23 @@ function tournamentDateBadge(name: string, liveDate?: string) {
   return "";
 }
 
+function inventorySortStartMs(item: InventoryTournament) {
+  const fallbackYear = extractYearFromTournamentLabel(
+    `${item.name || ""} ${item.displayDate || ""}`,
+    new Date().getFullYear()
+  );
+  return parseDisplayDateStartMs(String(item.displayDate || ""), fallbackYear) ?? Number.MAX_SAFE_INTEGER;
+}
+
+function sortInventoryForDisplay(rows: InventoryTournament[]) {
+  return [...rows].sort((a, b) => {
+    const aStart = inventorySortStartMs(a);
+    const bStart = inventorySortStartMs(b);
+    if (aStart !== bStart) return aStart - bStart;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 function uniquePlayers(games: Game[]): Player[] {
   const map = new Map<string, Player>();
   games.forEach((g) => g.players.forEach((p) => map.set(p.id, p)));
@@ -5097,7 +5114,7 @@ export default function BirdDogPage() {
     return teams.filter((team) => team.name.toLowerCase().includes(query));
   }, [selectedTournament?.teams, teamsSearchQuery]);
   const companyTournamentInventory = useMemo(
-    () => displayInventory.filter((item) => item.company === company),
+    () => sortInventoryForDisplay(displayInventory.filter((item) => item.company === company)),
     [company, displayInventory]
   );
   const filteredTournamentInventory = useMemo(() => {

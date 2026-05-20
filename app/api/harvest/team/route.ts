@@ -624,6 +624,36 @@ function importedScheduleRows(teamGames: Tournament["games"]): TeamScheduleRow[]
   });
 }
 
+function importedRowsForTeam(tournament: Tournament, targetTeamName: string) {
+  const teamGames = tournament.games
+    .filter((game) => teamMatches(game.homeTeam, targetTeamName) || teamMatches(game.awayTeam, targetTeamName))
+    .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+
+  const schedule = importedScheduleRows(teamGames);
+  const rosterMap = new Map<string, TeamRosterRow>();
+  teamGames.forEach((game) => {
+    game.players.forEach((player) => {
+      if (!rosterMap.has(player.id)) {
+        rosterMap.set(player.id, {
+          no: "",
+          name: player.name,
+          position: player.position || "",
+          height: "",
+          weight: "",
+          batsThrows: "",
+          grad: "",
+          school: player.school || "",
+          hometown: "",
+          rank: "",
+          commitment: ""
+        });
+      }
+    });
+  });
+  const roster = Array.from(rosterMap.values());
+  return { schedule, roster };
+}
+
 async function resolveTeamUrl(input: {
   teamId: string;
   teamUrl: string;
@@ -636,7 +666,9 @@ async function resolveTeamUrl(input: {
     url = `https://www.perfectgame.org/Events/Tournaments/Teams/Default.aspx?team=${teamNum}`;
   }
   if (!url && input.teamName && input.eventId) {
-    url = await resolvePgTeamUrl(input.teamName, input.eventId);
+    // Avoid long hangs when PG lookup stalls.
+    const resolved = await withTimeout(resolvePgTeamUrl(input.teamName, input.eventId), 1800);
+    url = resolved || "";
   }
   return url;
 }
@@ -663,7 +695,9 @@ export async function POST(req: NextRequest) {
   const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
   const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
   const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
-  const unlocked: string[] = await listOrgUnlocks(session.orgId).catch(() => []);
+  const unlockedResult = await withTimeout(listOrgUnlocks(session.orgId), 1800);
+  const unlockedTimedOut = unlockedResult === null;
+  const unlocked: string[] = Array.isArray(unlockedResult) ? unlockedResult : [];
   const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
   const displayDate = seedMeta?.displayDate || "";
   const archiveCandidates = [seedMeta?.name, inventorySlug, tournamentId, teamName].filter(Boolean) as string[];
@@ -674,7 +708,7 @@ export async function POST(req: NextRequest) {
       displayDate
     })
   );
-  if (!previewUnlockAll && !isAdminUser && !isArchive && !unlocked.includes(inventorySlug)) {
+  if (!unlockedTimedOut && !previewUnlockAll && !isAdminUser && !isArchive && !unlocked.includes(inventorySlug)) {
     return NextResponse.json({ error: "Tournament is locked for your organization." }, { status: 402 });
   }
 
@@ -684,7 +718,12 @@ export async function POST(req: NextRequest) {
 
     if (dataMode !== "live" || !allowLiveScrape) {
       const tournament = tournamentId
-        ? (hasSupabaseConfig ? await getHarvestedTournament(session.orgId, tournamentId).catch(() => null) : null)
+        ? (hasSupabaseConfig
+            ? (await withTimeout(
+              getHarvestedTournament(session.orgId, tournamentId).catch(() => null),
+              searchOnly ? 1800 : 3500
+            ))
+            : null)
         : null;
 
       const targetTeamName = teamName
@@ -692,34 +731,9 @@ export async function POST(req: NextRequest) {
         || "";
 
       if (tournament && targetTeamName) {
-        const teamGames = tournament.games
-          .filter((game) => teamMatches(game.homeTeam, targetTeamName) || teamMatches(game.awayTeam, targetTeamName))
-          .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
-
-        const schedule = importedScheduleRows(teamGames);
-
-        const rosterMap = new Map<string, TeamRosterRow>();
-        teamGames.forEach((game) => {
-          game.players.forEach((player) => {
-            if (!rosterMap.has(player.id)) {
-              rosterMap.set(player.id, {
-                no: "",
-                name: player.name,
-                position: player.position || "",
-                height: "",
-                weight: "",
-                batsThrows: "",
-                grad: "",
-                school: player.school || "",
-                hometown: "",
-                rank: "",
-                commitment: ""
-              });
-            }
-          });
-        });
-
-        const importedRoster = Array.from(rosterMap.values());
+        const imported = importedRowsForTeam(tournament, targetTeamName);
+        const schedule = imported.schedule;
+        const importedRoster = imported.roster;
         const importedReady = schedule.length && importedRoster.length;
         const importedDetailed = hasDetailedRosterColumns(importedRoster);
         const isPbrTournament = seedMeta?.company === "PBR"
@@ -849,18 +863,35 @@ export async function POST(req: NextRequest) {
 
       const fallbackTeamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName: targetTeamName || teamName, eventId });
       if (fallbackTeamUrl) {
-        const live = await withTimeout(scrapePgTeamLive(fallbackTeamUrl, {
+        const liveFast = await withTimeout(scrapePgTeamLive(fallbackTeamUrl, {
           teamName: targetTeamName || teamName,
           eventId,
           fastMode: true
-        }), 2800) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[] };
-        if (live.schedule.length || live.roster.length) {
-          return NextResponse.json({ ok: true, source: "pg_live_fallback", ...live, teamUrl: fallbackTeamUrl });
+        }), searchOnly ? 7000 : 12000);
+        if (liveFast && (liveFast.schedule.length || liveFast.roster.length)) {
+          return NextResponse.json({ ok: true, source: "pg_live_fallback", ...liveFast, teamUrl: fallbackTeamUrl });
+        }
+
+        if (!searchOnly) {
+          const liveRetry = await withTimeout(scrapePgTeamLive(fallbackTeamUrl, {
+            teamName: targetTeamName || teamName,
+            eventId,
+            fastMode: false
+          }), 12000);
+          if (liveRetry && (liveRetry.schedule.length || liveRetry.roster.length)) {
+            return NextResponse.json({ ok: true, source: "pg_live_fallback_retry", ...liveRetry, teamUrl: fallbackTeamUrl });
+          }
         }
       }
 
       if (!tournament) {
-        return NextResponse.json({ error: "Tournament not found in imported dataset." }, { status: 404 });
+        return NextResponse.json({
+          ok: true,
+          source: "imported_missing_live_pending",
+          schedule: [] as TeamScheduleRow[],
+          roster: [] as TeamRosterRow[],
+          teamUrl: fallbackTeamUrl || ""
+        });
       }
 
       return NextResponse.json({
@@ -874,14 +905,72 @@ export async function POST(req: NextRequest) {
 
     teamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName, eventId });
     if (!teamUrl) {
-      return NextResponse.json({ error: "Team URL could not be resolved." }, { status: 404 });
+      return NextResponse.json({
+        ok: true,
+        source: "team_url_unresolved",
+        schedule: [] as TeamScheduleRow[],
+        roster: [] as TeamRosterRow[],
+        teamUrl: ""
+      });
     }
-    const data = await withTimeout(scrapePgTeamLive(teamUrl, { teamName, eventId, fastMode: searchOnly }), 6000);
-    if (!data) {
-      return NextResponse.json({ error: "Live team sync timed out. Please retry." }, { status: 504 });
+    const livePrimary = await withTimeout(
+      scrapePgTeamLive(teamUrl, { teamName, eventId, fastMode: searchOnly }),
+      searchOnly ? 9000 : 12000
+    );
+    if (livePrimary && (livePrimary.schedule.length || livePrimary.roster.length)) {
+      return NextResponse.json({ ok: true, source: "live_primary", ...livePrimary });
     }
-    return NextResponse.json({ ok: true, ...data });
+
+    if (!searchOnly) {
+      const liveRetry = await withTimeout(
+        scrapePgTeamLive(teamUrl, { teamName, eventId, fastMode: true }),
+        9000
+      );
+      if (liveRetry && (liveRetry.schedule.length || liveRetry.roster.length)) {
+        return NextResponse.json({ ok: true, source: "live_retry", ...liveRetry });
+      }
+    }
+
+    if (!searchOnly && hasSupabaseConfig && tournamentId) {
+      const fallbackTournament = await withTimeout(
+        getHarvestedTournament(session.orgId, tournamentId).catch(() => null),
+        2500
+      );
+      if (fallbackTournament) {
+        const fallbackTeamName = teamName || fallbackTournament.teams?.find((team) => team.id === teamId)?.name || "";
+        if (fallbackTeamName) {
+          const fallbackRows = importedRowsForTeam(fallbackTournament, fallbackTeamName);
+          if (fallbackRows.schedule.length || fallbackRows.roster.length) {
+            return NextResponse.json({
+              ok: true,
+              source: "imported_after_live_timeout",
+              schedule: fallbackRows.schedule,
+              roster: fallbackRows.roster,
+              teamUrl
+            });
+          }
+        }
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      source: "live_sync_pending",
+      schedule: [] as TeamScheduleRow[],
+      roster: [] as TeamRosterRow[],
+      teamUrl
+    });
   } catch (error) {
-    return NextResponse.json({ error: "Failed to load team details", detail: String(error) }, { status: 500 });
+    const detail = String(error || "");
+    if (/timed out|AbortError/i.test(detail)) {
+      return NextResponse.json({
+        ok: true,
+        source: "team_sync_timeout",
+        schedule: [] as TeamScheduleRow[],
+        roster: [] as TeamRosterRow[],
+        teamUrl: teamUrl || ""
+      });
+    }
+    return NextResponse.json({ error: "Failed to load team details", detail }, { status: 500 });
   }
 }
