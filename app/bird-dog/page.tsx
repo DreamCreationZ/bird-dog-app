@@ -3735,6 +3735,30 @@ export default function BirdDogPage() {
     }
   }
 
+  async function fetchLiveRouteEstimate(origin: GeoLocation, destination: GeoLocation): Promise<TravelEstimate | null> {
+    try {
+      const url = new URL("/api/maps/route-time", window.location.origin);
+      url.searchParams.set("originLat", String(origin.lat));
+      url.searchParams.set("originLng", String(origin.lng));
+      url.searchParams.set("destLat", String(destination.lat));
+      url.searchParams.set("destLng", String(destination.lng));
+      const res = await fetch(url.toString(), { cache: "no-store" });
+      if (!res.ok) return null;
+      const data = await res.json().catch(() => ({}));
+      const minutes = Number(data?.minutes || NaN);
+      if (!Number.isFinite(minutes) || minutes <= 0) return null;
+      const mode = String(data?.mode || "").trim() || "Drive / Cab";
+      const advisory = String(data?.advisory || "").trim();
+      return {
+        mode,
+        minutes: Math.max(1, Math.round(minutes)),
+        advisory: advisory || "Live route ETA"
+      } satisfies TravelEstimate;
+    } catch {
+      return null;
+    }
+  }
+
   async function detectCoachStartPoint() {
     if (typeof navigator === "undefined" || !navigator.geolocation) return null;
     const location = await new Promise<GeolocationPosition | null>((resolve) => {
@@ -3969,6 +3993,7 @@ export default function BirdDogPage() {
       cursorMs = defaultArrivalMs;
     }
     const travelPlan: PlanItem[] = [];
+    const liveRouteCache = new Map<string, TravelEstimate | null>();
     const unseenPlayers = new Set(targetPlayers.map((player) => desiredPlayerSelectionKey(player)));
     const usedGameKeys = new Set<string>();
     const visitedStops: Array<CoachGameCandidate & { watchStartMs: number; reason: string }> = [];
@@ -4037,9 +4062,17 @@ export default function BirdDogPage() {
           travelEstimate = { mode: "On-site", minutes: 0, advisory: "Already at this venue." };
         } else if (fromPoint?.lat != null && fromPoint?.lng != null && candidate.point?.lat != null && candidate.point?.lng != null) {
           const km = distanceKm(fromPoint.lat, fromPoint.lng, candidate.point.lat, candidate.point.lng);
-          travelEstimate = km <= 0.6
-            ? { mode: "On-site", minutes: 0, advisory: "Already at this venue." }
-            : travelModeByDistance(km);
+          if (km <= 0.6) {
+            travelEstimate = { mode: "On-site", minutes: 0, advisory: "Already at this venue." };
+          } else {
+            const routeKey = `${fromPoint.lat.toFixed(4)},${fromPoint.lng.toFixed(4)}=>${candidate.point.lat.toFixed(4)},${candidate.point.lng.toFixed(4)}`;
+            if (!liveRouteCache.has(routeKey)) {
+              const liveEstimate = await fetchLiveRouteEstimate(fromPoint, candidate.point);
+              liveRouteCache.set(routeKey, liveEstimate);
+            }
+            const cachedLive = liveRouteCache.get(routeKey);
+            travelEstimate = cachedLive || travelModeByDistance(km);
+          }
         } else {
           travelEstimate = travelModeByText(fromLabel, destinationLabel);
         }
