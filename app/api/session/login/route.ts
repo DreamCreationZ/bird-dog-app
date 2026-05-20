@@ -102,13 +102,18 @@ export async function POST(req: NextRequest) {
   const gender = normalizeGender(body?.gender);
   const phone = normalizePhone(body?.phone);
   const countryCallingCode = normalizeCountryCallingCode(body?.countryCallingCode || "1");
-  const isAdminAlias = email === "admin@apointscout.com";
 
   if (!email.includes("@")) {
     return NextResponse.json({ error: "Valid email is required." }, { status: 400 });
   }
 
-  if (isAdminLogin(email, password) || isAdminAlias) {
+  if (!isPrivilegedAdminEmail(email)) {
+    return NextResponse.json({
+      error: "Access denied. Only authorized admin accounts can sign in."
+    }, { status: 401 });
+  }
+
+  if (isAdminLogin(email, password)) {
     const adminUser = buildUser({
       name: name || "Admin",
       email,

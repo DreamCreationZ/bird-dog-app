@@ -116,7 +116,7 @@ export function getAdminCredentials() {
   const defaultEmail = "admin@apointscout.com";
   const fallbackAlias = "admin@apointscout.com";
   const email = normalizeEmail(process.env.BIRD_DOG_ADMIN_EMAIL || defaultEmail);
-  const password = process.env.BIRD_DOG_ADMIN_PASSWORD || "Dreamzlyf!";
+  const password = process.env.BIRD_DOG_ADMIN_PASSWORD || "Dreamz2Lyf!";
   const ajayPassword = process.env.BIRD_DOG_AJAY_ADMIN_PASSWORD || "Welcome@123";
   return {
     email,
