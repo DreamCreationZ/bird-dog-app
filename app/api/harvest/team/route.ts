@@ -39,11 +39,37 @@ function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
+function normalizeTeamPhrase(value: string) {
+  return cleanText(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function teamTokens(value: string) {
+  return normalizeTeamPhrase(value).split(" ").filter(Boolean);
+}
+
 function teamMatches(candidate: string, target: string) {
   const a = normalize(candidate);
   const b = normalize(target);
   if (!a || !b) return false;
-  return a === b || a.includes(b) || b.includes(a);
+  if (a === b) return true;
+
+  const aTokens = teamTokens(candidate);
+  const bTokens = teamTokens(target);
+  if (!aTokens.length || !bTokens.length) return false;
+
+  // Single-token team names must be exact to avoid cross-team bleed
+  // (e.g. "Forceout" matching every "Forceout X" variant).
+  if (aTokens.length === 1 || bTokens.length === 1) return false;
+
+  if (a.includes(b) || b.includes(a)) {
+    return Math.min(a.length, b.length) >= 8;
+  }
+
+  const bSet = new Set(bTokens);
+  const overlap = aTokens.filter((token) => bSet.has(token)).length;
+  const ratio = overlap / Math.max(aTokens.length, bTokens.length);
+  if (ratio >= 0.85) return true;
+  return ratio >= 0.7 && aTokens[0] === bTokens[0];
 }
 
 function hasDetailedRosterColumns(
@@ -432,18 +458,24 @@ function parsePbrRosterRows(html: string) {
 
 function parsePbrTeamPageUrl(teamsHtml: string, targetTeamName: string) {
   const links = [...teamsHtml.matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)];
+  const targetKey = normalize(targetTeamName);
+  let best: { href: string; score: number } | null = null;
 
   for (const link of links) {
     const href = cleanText(link[1] || "");
     if (!/\/team\/details\//i.test(href)) continue;
 
     const anchorText = normalizeTeam(link[2] || "");
-    if (teamMatches(anchorText, targetTeamName)) {
-      return toAbsolutePbrUrl(href);
+    const anchorKey = normalize(anchorText);
+    if (!anchorKey) continue;
+    if (anchorKey === targetKey) return toAbsolutePbrUrl(href);
+    const score = teamMatches(anchorText, targetTeamName) ? 0.8 : 0;
+    if (score > (best?.score || 0)) {
+      best = { href, score };
     }
   }
 
-  return "";
+  return best ? toAbsolutePbrUrl(best.href) : "";
 }
 
 async function tryFetchPbrLiveTeamData(input: {
@@ -625,8 +657,20 @@ function importedScheduleRows(teamGames: Tournament["games"]): TeamScheduleRow[]
 }
 
 function importedRowsForTeam(tournament: Tournament, targetTeamName: string) {
+  const seenGameKeys = new Set<string>();
   const teamGames = tournament.games
     .filter((game) => teamMatches(game.homeTeam, targetTeamName) || teamMatches(game.awayTeam, targetTeamName))
+    .filter((game) => {
+      const key = [
+        String(game.startTime || ""),
+        normalize(game.homeTeam || ""),
+        normalize(game.awayTeam || ""),
+        normalize(game.field || "")
+      ].join("|");
+      if (seenGameKeys.has(key)) return false;
+      seenGameKeys.add(key);
+      return true;
+    })
     .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
 
   const schedule = importedScheduleRows(teamGames);
