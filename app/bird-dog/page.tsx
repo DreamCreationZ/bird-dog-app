@@ -341,6 +341,19 @@ function formatScheduleDayLabel(value: Date) {
   }).toUpperCase();
 }
 
+function formatTournamentGameDateTime(valueMs: number) {
+  if (!Number.isFinite(valueMs)) return "Time TBD";
+  return new Date(valueMs).toLocaleString(undefined, {
+    timeZone: "UTC",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  });
+}
+
 function extractGameNoLabel(game: Game, index: number) {
   const rawGame = game as unknown as Record<string, unknown>;
   const explicitGameNo = String(rawGame.gameNo || "").trim();
@@ -1784,7 +1797,7 @@ export default function BirdDogPage() {
       const next = matches.find((item) => item.startMs >= nowMs) || matches[0];
       map.set(
         key,
-        `${new Date(next.startMs).toLocaleString()} · vs ${next.opponent} · ${next.field}`
+        `${formatTournamentGameDateTime(next.startMs)} · vs ${next.opponent} · ${next.field}`
       );
     });
     return map;
