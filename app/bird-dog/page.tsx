@@ -4257,6 +4257,69 @@ export default function BirdDogPage() {
     return [...plan, ...extras].sort((a, b) => Date.parse(String(a.at || "")) - Date.parse(String(b.at || "")));
   }
 
+  function validateArrivalFeasibility(
+    targetPlayers: DesiredPlayer[],
+    arrivalPayloadByState: Record<string, StateArrivalInput>,
+    fallbackArrivalInput: string
+  ) {
+    const games = selectedTournament?.games || [];
+    if (!games.length) return null as { message: string } | null;
+
+    const arrivalByStateMs = new Map<string, number>();
+    Object.entries(arrivalPayloadByState).forEach(([stateCode, row]) => {
+      const normalized = String(stateCode || "").trim().toUpperCase();
+      const arrivalMs = Date.parse(String(row?.arrivalTime || ""));
+      if (normalized && Number.isFinite(arrivalMs)) {
+        arrivalByStateMs.set(normalized, arrivalMs);
+      }
+    });
+    const fallbackArrivalMs = Date.parse(String(fallbackArrivalInput || ""));
+
+    let evaluablePlayers = 0;
+    const missedRows: Array<{ playerName: string; arrivalMs: number; gameStartMs: number }> = [];
+    targetPlayers.forEach((player) => {
+      const matches = games
+        .map((game) => {
+          const startMs = Date.parse(String(game.startTime || ""));
+          if (!Number.isFinite(startMs)) return null;
+          if (!teamsLookEquivalent(player.team, game.homeTeam) && !teamsLookEquivalent(player.team, game.awayTeam)) return null;
+          const venueLabel = normalizedVenueLabel(game);
+          const stateCode = extractUsStateCode(
+            `${venueLabel}, ${String(selectedInventory?.displayCity || selectedTournament?.city || "").trim()}`
+          ) || extractUsStateCode(String(selectedInventory?.displayCity || selectedTournament?.city || ""));
+          return { startMs, stateCode };
+        })
+        .filter((item): item is { startMs: number; stateCode: string } => Boolean(item))
+        .sort((a, b) => a.startMs - b.startMs);
+
+      if (!matches.length) return;
+      evaluablePlayers += 1;
+
+      const primaryMatch = matches[0];
+      const arrivalMs = (primaryMatch.stateCode && arrivalByStateMs.has(primaryMatch.stateCode))
+        ? Number(arrivalByStateMs.get(primaryMatch.stateCode))
+        : fallbackArrivalMs;
+      if (!Number.isFinite(arrivalMs)) return;
+      if (arrivalMs > primaryMatch.startMs) {
+        missedRows.push({
+          playerName: player.name,
+          arrivalMs,
+          gameStartMs: primaryMatch.startMs
+        });
+      }
+    });
+
+    if (!evaluablePlayers || missedRows.length !== evaluablePlayers) return null;
+
+    const earliestGameStartMs = Math.min(...missedRows.map((row) => row.gameStartMs));
+    const latestArrivalMs = Math.max(...missedRows.map((row) => row.arrivalMs));
+    const previewPlayers = missedRows.map((row) => row.playerName).slice(0, 3).join(", ");
+    const suffix = missedRows.length > 3 ? " and more" : "";
+    return {
+      message: `Schedule cannot be created. You are arriving at ${formatTournamentGameDateTime(latestArrivalMs)}, after selected players' first game window (${formatTournamentGameDateTime(earliestGameStartMs)}). Missed players: ${previewPlayers}${suffix}.`
+    };
+  }
+
   function isSelectedTournamentPast() {
     const selectedName = selectedInventory?.name || selectedTournament?.name || "";
     const selectedDateLabel = selectedInventory?.displayDate || selectedTournament?.date || "";
@@ -4334,6 +4397,14 @@ export default function BirdDogPage() {
     const firstPlayerStart = destinationForPlayer(selectedPlayers[0]) || "";
     const resolvedSource = String(earliestArrival?.arrivalLocation || airportStartLabel || firstPlayerStart || "Event arrival hub").trim();
     const plannedArrivalInput = String(earliestArrival?.arrivalTime || scheduleForm.flightArrivalTime || "").trim();
+    const arrivalValidation = validateArrivalFeasibility(selectedPlayers, arrivalPayloadByState, plannedArrivalInput);
+    if (arrivalValidation) {
+      setAndPersistPlanWorkflowStatus("draft");
+      setPlanWorkflowNote(arrivalValidation.message);
+      setPlayerSearchStatus(arrivalValidation.message);
+      setMyGeneratedPlan([]);
+      return;
+    }
     clearSmartScheduleInsights();
     const instantFlightDestination = scheduleForm.flightDestination || firstPlayerStart;
     const instantForm = {
@@ -4412,11 +4483,11 @@ export default function BirdDogPage() {
             ? "Schedule auto-created from selected player order."
             : "Schedule created from selected player order."
         );
+        await saveSchedule(finalPlan, selectedPlayers, nextForm);
       } else {
         setAndPersistPlanWorkflowStatus("draft");
         setPlanWorkflowNote(optimized.blockedReason || "Recommendation generated, but this route is not feasible within the next 12 hours.");
       }
-      await saveSchedule(finalPlan, selectedPlayers, nextForm);
       if (!isFeasible) {
         setPlayerSearchStatus(
           `Recommendation generated with feasibility warning. ${optimized.blockedReason || "At least one leg is not feasible in the next 12 hours."}`
