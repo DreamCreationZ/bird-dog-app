@@ -839,6 +839,13 @@ function normalizeLocationText(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function extractCityToken(value: string) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const firstSegment = raw.split(",")[0] || "";
+  return normalizeLocationText(firstSegment);
+}
+
 const US_STATE_CODES = new Set([
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
   "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
@@ -1220,8 +1227,17 @@ function extractYearFromTournamentLabel(nameOrDate: string, fallbackYear: number
 }
 
 function travelModeByText(from: string, to: string): TravelEstimate {
+  const fromCity = extractCityToken(from);
+  const toCity = extractCityToken(to);
   const fromState = extractUsStateCode(from);
   const toState = extractUsStateCode(to);
+  if (fromCity && toCity && fromCity === toCity && fromState && toState && fromState === toState) {
+    return {
+      mode: "Local Transfer",
+      minutes: 22,
+      advisory: `Same-city route (${fromState}).`
+    };
+  }
   if (fromState && toState && fromState === toState) {
     return {
       mode: "Drive / Cab",
@@ -3647,30 +3663,33 @@ export default function BirdDogPage() {
     if (geocodeCacheRef.current.has(normalized)) {
       return geocodeCacheRef.current.get(normalized) || null;
     }
-    try {
-      const res = await fetch(`/api/maps/geocode?address=${encodeURIComponent(address)}`, { cache: "no-store" });
-      if (!res.ok) {
-        geocodeCacheRef.current.set(normalized, null);
-        return null;
+    const rawAddress = String(address || "").trim();
+    const candidates = Array.from(new Set([
+      rawAddress,
+      rawAddress.replace(/\bfield\s*[a-z0-9-]*\b/ig, "").replace(/\s+/g, " ").trim(),
+      rawAddress.split(",").slice(1).join(",").trim()
+    ].filter(Boolean)));
+    for (const query of candidates) {
+      try {
+        const res = await fetch(`/api/maps/geocode?address=${encodeURIComponent(query)}`, { cache: "no-store" });
+        if (!res.ok) continue;
+        const data = await res.json().catch(() => ({}));
+        const lat = data?.location?.lat;
+        const lng = data?.location?.lng;
+        if (typeof lat !== "number" || typeof lng !== "number") continue;
+        const point: GeoLocation = {
+          lat,
+          lng,
+          label: String(data?.location?.label || query || address)
+        };
+        geocodeCacheRef.current.set(normalized, point);
+        return point;
+      } catch {
+        // Try next geocode query candidate.
       }
-      const data = await res.json().catch(() => ({}));
-      const lat = data?.location?.lat;
-      const lng = data?.location?.lng;
-      if (typeof lat !== "number" || typeof lng !== "number") {
-        geocodeCacheRef.current.set(normalized, null);
-        return null;
-      }
-      const point: GeoLocation = {
-        lat,
-        lng,
-        label: String(data?.location?.label || address)
-      };
-      geocodeCacheRef.current.set(normalized, point);
-      return point;
-    } catch {
-      geocodeCacheRef.current.set(normalized, null);
-      return null;
     }
+    geocodeCacheRef.current.set(normalized, null);
+    return null;
   }
 
   async function fetchLiveRouteEstimate(origin: GeoLocation, destination: GeoLocation): Promise<TravelEstimate | null> {
@@ -4013,7 +4032,10 @@ export default function BirdDogPage() {
             travelEstimate = cachedLive || travelModeByDistance(km);
           }
         } else {
-          travelEstimate = travelModeByText(fromLabel, destinationLabel);
+          travelEstimate = travelModeByText(
+            fromLabel,
+            candidate.locationQuery || destinationLabel
+          );
         }
 
         if (travelEstimate.minutes > MAX_FEASIBLE_TRAVEL_MINUTES) continue;
