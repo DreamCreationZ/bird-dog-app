@@ -1653,14 +1653,22 @@ export default function BirdDogPage() {
     [company, selectedInventorySlug, selectedTournamentId]
   );
   const teamRosterCartLegacyKeys = useMemo(() => {
+    const scopedInventoryKey = selectedInventorySlug
+      ? rosterCartStorageKey({ company, inventorySlug: selectedInventorySlug })
+      : "";
+    const scopedTournamentKey = selectedTournamentId
+      ? rosterCartStorageKey({ company, tournamentId: selectedTournamentId })
+      : "";
     const candidates = [
+      scopedInventoryKey,
+      scopedTournamentKey,
       rosterCartStorageKey({ company }),
       ROSTER_CART_GLOBAL_KEY,
       legacyRosterCartStorageKey(company, selectedInventorySlug),
       legacyRosterCartStorageKey(company)
     ];
     return Array.from(new Set(candidates.filter(Boolean)));
-  }, [company, selectedInventorySlug]);
+  }, [company, selectedInventorySlug, selectedTournamentId]);
   const desiredPlayersStorageKey = useMemo(() => {
     if (!user) return "";
     return desiredPlayersScopedStorageKey({
@@ -2300,7 +2308,7 @@ export default function BirdDogPage() {
       });
       return Array.from(merged.values());
     });
-  }, [teamRosterCartPlayers]);
+  }, [desiredPlayersStorageKey, teamRosterCartPlayers]);
 
   useEffect(() => {
     if (!requiredStateCodes.length) {

@@ -816,14 +816,22 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     [cartCompany, cartInventorySlug, initialParams.returnTournamentId]
   );
   const cartStorageLegacyKeys = useMemo(() => {
+    const scopedInventoryKey = cartInventorySlug
+      ? rosterCartStorageKey(cartCompany, cartInventorySlug)
+      : "";
+    const scopedTournamentKey = initialParams.returnTournamentId
+      ? rosterCartStorageKey(cartCompany, "", initialParams.returnTournamentId)
+      : "";
     const candidates = [
+      scopedInventoryKey,
+      scopedTournamentKey,
       rosterCartStorageKey(cartCompany),
       ROSTER_CART_GLOBAL_KEY,
       legacyRosterCartStorageKey(cartCompany, cartInventorySlug),
       legacyRosterCartStorageKey(cartCompany)
     ];
     return Array.from(new Set(candidates.filter(Boolean)));
-  }, [cartCompany, cartInventorySlug]);
+  }, [cartCompany, cartInventorySlug, initialParams.returnTournamentId]);
 
   const persistCrossTeamCart = useMemo(
     () => (rows: CrossTeamCartPlayer[]) => {
