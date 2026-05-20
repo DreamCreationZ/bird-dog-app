@@ -125,6 +125,14 @@ function normalizeTeam(value: string) {
   return cleanText(value).replace(/\s+/g, " ").trim();
 }
 
+function slugifyText(value: string) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 220);
+}
+
 function toAbsolutePbrUrl(href: string) {
   const raw = String(href || "").trim();
   if (!raw) return "";
@@ -459,6 +467,7 @@ function parsePbrRosterRows(html: string) {
 function parsePbrTeamPageUrl(teamsHtml: string, targetTeamName: string) {
   const links = [...teamsHtml.matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)];
   const targetKey = normalize(targetTeamName);
+  const targetTokens = teamTokens(targetTeamName);
   let best: { href: string; score: number } | null = null;
 
   for (const link of links) {
@@ -469,13 +478,22 @@ function parsePbrTeamPageUrl(teamsHtml: string, targetTeamName: string) {
     const anchorKey = normalize(anchorText);
     if (!anchorKey) continue;
     if (anchorKey === targetKey) return toAbsolutePbrUrl(href);
-    const score = teamMatches(anchorText, targetTeamName) ? 0.8 : 0;
+
+    const anchorTokens = teamTokens(anchorText);
+    if (!anchorTokens.length || !targetTokens.length) continue;
+    const targetSet = new Set(targetTokens);
+    const overlap = anchorTokens.filter((token) => targetSet.has(token)).length;
+    if (!overlap) continue;
+    const ratio = overlap / Math.max(anchorTokens.length, targetTokens.length);
+    const startsAligned = anchorTokens[0] === targetTokens[0];
+    const score = ratio + (startsAligned ? 0.2 : 0);
     if (score > (best?.score || 0)) {
       best = { href, score };
     }
   }
 
-  return best ? toAbsolutePbrUrl(best.href) : "";
+  if (best && best.score >= 0.6) return toAbsolutePbrUrl(best.href);
+  return "";
 }
 
 async function tryFetchPbrLiveTeamData(input: {
@@ -635,6 +653,61 @@ async function resolvePbrEventHint(input: {
       return itemName === tournamentName || itemName.includes(tournamentName) || tournamentName.includes(itemName);
     });
     if (byName?.harvestHint) return byName.harvestHint;
+  }
+
+  const candidateSlugs = new Set<string>();
+  const rawInventorySlug = String(input.inventorySlug || "").replace(/^pbr-live-/i, "");
+  if (rawInventorySlug) {
+    candidateSlugs.add(rawInventorySlug);
+    const parts = rawInventorySlug.split("-").filter(Boolean);
+    if (parts.length >= 5) {
+      const n = parts.length;
+      const yyyy = parts[n - 3];
+      const mm = parts[n - 2];
+      const dd = parts[n - 1];
+      if (/^\d{4}$/.test(yyyy) && /^\d{2}$/.test(mm) && /^\d{2}$/.test(dd)) {
+        const prefix = parts.slice(0, n - 3);
+        candidateSlugs.add([...prefix, mm, dd, yyyy].join("-"));
+        if (prefix.length >= 2 && /^[a-z]{2}$/i.test(prefix[prefix.length - 1])) {
+          const noState = prefix.slice(0, -1);
+          candidateSlugs.add([...noState, mm, dd, yyyy].join("-"));
+        }
+      }
+    }
+  }
+
+  const tournamentNameClean = String(input.tournament?.name || "")
+    .replace(/\s*-\s*prep baseball tournaments/i, "")
+    .trim();
+  if (tournamentNameClean) {
+    const nameSlug = slugifyText(tournamentNameClean);
+    if (nameSlug) {
+      candidateSlugs.add(nameSlug);
+      candidateSlugs.add(nameSlug.replace(/-\d{2}-\d{2}-\d{4}-\d{2}-\d{2}-\d{4}$/i, ""));
+    }
+  }
+  const citySlug = slugifyText(String(input.tournament?.city || "").split(",")[0] || "");
+  if (citySlug && rawInventorySlug) {
+    candidateSlugs.add(`${slugifyText(rawInventorySlug.replace(/-\d{4}-\d{2}-\d{2}$/i, ""))}-${citySlug}`);
+  }
+
+  const userAgent =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+  for (const slug of candidateSlugs) {
+    const cleanSlug = String(slug || "").replace(/^-+|-+$/g, "");
+    if (!cleanSlug) continue;
+    const eventBase = `https://tournaments.prepbaseballreport.com/events/${cleanSlug}`;
+    const teamsUrl = `${eventBase}/teams`;
+    const probe = await withTimeout(fetch(teamsUrl, {
+      cache: "no-store",
+      headers: {
+        "User-Agent": userAgent,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      }
+    }).catch(() => null), 2200);
+    if (probe && probe.ok) {
+      return eventBase;
+    }
   }
 
   return "";
