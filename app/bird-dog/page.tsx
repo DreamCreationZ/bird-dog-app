@@ -1525,6 +1525,7 @@ export default function BirdDogPage() {
   const companyRef = useRef<"PG" | "PBR">("PG");
   const inventoryRef = useRef<InventoryTournament[]>([]);
   const inventoryFetchSeqRef = useRef(0);
+  const schedulesFetchSeqRef = useRef(0);
   const tabHistoryRef = useRef<BirdDogTab[]>([]);
 
   const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
@@ -2266,22 +2267,26 @@ export default function BirdDogPage() {
   }, [teamRosterCartLegacyKeys, teamRosterCartStorageKey]);
 
   useEffect(() => {
-    if (!desiredPlayersStorageKey) {
-      setDesiredPlayers([]);
-      return;
-    }
-    const raw = safeLocalGet(desiredPlayersStorageKey);
-    if (raw == null) {
-      setDesiredPlayers([]);
-      return;
-    }
-    const persisted = readDesiredPlayersStorage(desiredPlayersStorageKey);
-    if (!persisted) {
-      setDesiredPlayers([]);
-      return;
-    }
-    setDesiredPlayers(persisted);
-  }, [desiredPlayersStorageKey]);
+    const persisted = desiredPlayersStorageKey
+      ? readDesiredPlayersStorage(desiredPlayersStorageKey)
+      : null;
+    setDesiredPlayers((prev) => {
+      const manual = prev.filter((item) => !String(desiredPlayerSelectionKey(item)).startsWith("team:"));
+      const merged = new Map<string, DesiredPlayer>();
+      teamRosterCartPlayers.forEach((item) => {
+        merged.set(desiredPlayerSelectionKey(item), item);
+      });
+      (persisted || []).forEach((item) => {
+        const key = desiredPlayerSelectionKey(item);
+        if (!merged.has(key)) merged.set(key, item);
+      });
+      manual.forEach((item) => {
+        const key = desiredPlayerSelectionKey(item);
+        if (!merged.has(key)) merged.set(key, item);
+      });
+      return Array.from(merged.values());
+    });
+  }, [desiredPlayersStorageKey, teamRosterCartPlayers]);
 
   useEffect(() => {
     setDesiredPlayersAndPersist((prev) => {
@@ -2990,10 +2995,14 @@ export default function BirdDogPage() {
   }
 
   async function fetchSchedules() {
+    const fetchSeq = schedulesFetchSeqRef.current + 1;
+    schedulesFetchSeqRef.current = fetchSeq;
     const res = await fetch("/api/schedules");
+    if (fetchSeq !== schedulesFetchSeqRef.current) return;
     if (!res.ok) {
       const local = readLocalFallbackSchedule();
       if (local) {
+        if (fetchSeq !== schedulesFetchSeqRef.current) return;
         setSchedules([local]);
         hydrateMySchedule([local]);
         setPlanWorkflowNote("Cloud schedule sync is unavailable. Showing your local saved recommendation.");
@@ -3011,9 +3020,15 @@ export default function BirdDogPage() {
     const scheduleList = local && !remoteList.some((item) => item.user_id === local.user_id)
       ? [local, ...remoteList]
       : remoteList;
+    if (fetchSeq !== schedulesFetchSeqRef.current) return;
     setSchedules(scheduleList);
     hydrateMySchedule(scheduleList);
   }
+
+  useEffect(() => {
+    if (!queryStateApplied || !user) return;
+    void fetchSchedules();
+  }, [company, queryStateApplied, selectedInventorySlug, selectedTournamentId, user]);
 
   async function removeMySchedule() {
     const key = localScheduleFallbackKey(user, company, selectedInventorySlug, selectedTournamentId);
