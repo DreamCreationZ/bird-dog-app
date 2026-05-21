@@ -77,6 +77,27 @@ async function settleSuggestionGroups(tasks: Array<Promise<Suggestion[]>>) {
     .map((item) => item.value);
 }
 
+async function fetchNominatimSuggestions(query: string, limit = 10): Promise<Suggestion[]> {
+  const url = new URL("https://nominatim.openstreetmap.org/search");
+  url.searchParams.set("q", query);
+  url.searchParams.set("format", "jsonv2");
+  url.searchParams.set("limit", String(Math.max(1, Math.min(limit, 20))));
+  const res = await fetch(url.toString(), {
+    cache: "no-store",
+    headers: {
+      "User-Agent": "APointScout-BirdDog/1.0 (maps-autocomplete)"
+    }
+  });
+  const data = await res.json().catch(() => ([]));
+  const rows = Array.isArray(data) ? data : [];
+  return rows
+    .map((item: { display_name?: string; place_id?: string; osm_id?: string; osm_type?: string }) => ({
+      label: String(item?.display_name || "").trim(),
+      placeId: String(item?.place_id || item?.osm_id || item?.osm_type || "").trim()
+    }))
+    .filter((item: Suggestion) => item.label);
+}
+
 function appendTokenIfMissing(base: string, token: string) {
   const cleanBase = String(base || "").trim();
   const cleanToken = String(token || "").trim();
@@ -150,6 +171,22 @@ export async function GET(req: NextRequest) {
       suggestions = queryLooksAirport
         ? mergeSuggestions([airportSuggestions, nonAirportSuggestions])
         : mergeSuggestions([...groups, airportSuggestions]);
+      if (!suggestions.length) {
+        const fallbackGroups = await settleSuggestionGroups([
+          fetchNominatimSuggestions(q, 12),
+          fetchNominatimSuggestions(airportQuery, 12),
+          ...(stateQuery ? [fetchNominatimSuggestions(stateQuery, 10)] : [])
+        ]);
+        const fallbackAirport = fallbackGroups
+          .flat()
+          .filter((item) => /\b(airport|airfield|intl|international)\b/i.test(item.label));
+        const fallbackOther = fallbackGroups
+          .flat()
+          .filter((item) => !/\b(airport|airfield|intl|international)\b/i.test(item.label));
+        suggestions = queryLooksAirport
+          ? mergeSuggestions([fallbackAirport, fallbackOther])
+          : mergeSuggestions([...fallbackGroups, fallbackAirport]);
+      }
     } else if (kind === "hotel") {
       const hotelQuery = appendTokenIfMissing(q, "hotel");
       const groups = await settleSuggestionGroups([
@@ -162,6 +199,14 @@ export async function GET(req: NextRequest) {
         ...(stateQuery ? [fetchTextSuggestions(`${hotelQuery} ${stateHint}`, key)] : [])
       ]);
       suggestions = mergeSuggestions(groups);
+      if (!suggestions.length) {
+        const fallbackGroups = await settleSuggestionGroups([
+          fetchNominatimSuggestions(hotelQuery, 12),
+          fetchNominatimSuggestions(appendTokenIfMissing(q, "lodging"), 12),
+          ...(stateQuery ? [fetchNominatimSuggestions(`${hotelQuery} ${stateHint}`, 10)] : [])
+        ]);
+        suggestions = mergeSuggestions(fallbackGroups);
+      }
     } else {
       const groups = await settleSuggestionGroups([
         fetchPredictions(q, key, { types: "(cities)" }),
@@ -170,6 +215,13 @@ export async function GET(req: NextRequest) {
         fetchGeocodeSuggestions(q, key)
       ]);
       suggestions = mergeSuggestions(groups);
+      if (!suggestions.length) {
+        const fallbackGroups = await settleSuggestionGroups([
+          fetchNominatimSuggestions(q, 12),
+          ...(stateQuery ? [fetchNominatimSuggestions(stateQuery, 10)] : [])
+        ]);
+        suggestions = mergeSuggestions(fallbackGroups);
+      }
     }
     return NextResponse.json({ suggestions });
   } catch (error) {

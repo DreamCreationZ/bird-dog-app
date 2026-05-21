@@ -44,6 +44,35 @@ function mergeHotels(groups: HotelSuggestion[][]) {
   return merged.slice(0, 12);
 }
 
+async function fetchNominatimHotels(query: string): Promise<HotelSuggestion[]> {
+  const url = new URL("https://nominatim.openstreetmap.org/search");
+  url.searchParams.set("q", query);
+  url.searchParams.set("format", "jsonv2");
+  url.searchParams.set("limit", "12");
+  const res = await fetch(url.toString(), {
+    cache: "no-store",
+    headers: {
+      "User-Agent": "APointScout-BirdDog/1.0 (hotel-suggestions)"
+    }
+  });
+  const data = await res.json().catch(() => ([]));
+  const rows = Array.isArray(data) ? data : [];
+  return rows
+    .map((item: { display_name?: string; place_id?: string }) => {
+      const full = String(item?.display_name || "").trim();
+      if (!full) return null;
+      const parts = full.split(",");
+      const name = String(parts.shift() || "").trim() || full;
+      const address = parts.join(",").trim();
+      return {
+        name,
+        address,
+        placeId: String(item?.place_id || "").trim()
+      } as HotelSuggestion;
+    })
+    .filter((item): item is HotelSuggestion => Boolean(item?.name));
+}
+
 export async function GET(req: NextRequest) {
   const session = readSessionFromRequest(req);
   if (!session) {
@@ -69,7 +98,13 @@ export async function GET(req: NextRequest) {
     const groups = settled
       .filter((item): item is PromiseFulfilledResult<HotelSuggestion[]> => item.status === "fulfilled")
       .map((item) => item.value);
-    const hotels = mergeHotels(groups);
+    let hotels = mergeHotels(groups);
+    if (!hotels.length) {
+      hotels = mergeHotels([
+        await fetchNominatimHotels(`hotel in ${destination}`),
+        await fetchNominatimHotels(`lodging near ${destination}`)
+      ]);
+    }
     return NextResponse.json({ hotels });
   } catch (error) {
     return NextResponse.json({ hotels: [] as HotelSuggestion[], error: String(error) }, { status: 200 });
