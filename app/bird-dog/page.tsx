@@ -1787,6 +1787,7 @@ export default function BirdDogPage() {
   const stateHotelSuggestionSeqRef = useRef<Record<string, number>>({});
   const [tournamentSearchQuery, setTournamentSearchQuery] = useState("");
   const [teamsSearchQuery, setTeamsSearchQuery] = useState("");
+  const [teamsSearchStableQuery, setTeamsSearchStableQuery] = useState("");
   const [playerSearchQuery, setPlayerSearchQuery] = useState("");
   const [scheduleSearchPlayerTeamIds, setScheduleSearchPlayerTeamIds] = useState<string[]>([]);
   const [scheduleSearchPlayerTeamNames, setScheduleSearchPlayerTeamNames] = useState<string[]>([]);
@@ -2012,6 +2013,10 @@ export default function BirdDogPage() {
   const scheduleSearchNormalized = useMemo(
     () => normalizeSmartSearch(teamsSearchQuery),
     [teamsSearchQuery]
+  );
+  const scheduleSearchPendingInput = useMemo(
+    () => normalizeSmartSearch(teamsSearchQuery) !== normalizeSmartSearch(teamsSearchStableQuery),
+    [teamsSearchQuery, teamsSearchStableQuery]
   );
   const scheduleSearchTokens = useMemo(
     () => scheduleSearchNormalized.split(" ").filter(Boolean),
@@ -2685,6 +2690,7 @@ export default function BirdDogPage() {
     setPlayerSearchResults([]);
     setPlayerSearchStatus("");
     setTeamsSearchQuery("");
+    setTeamsSearchStableQuery("");
     setScheduleSearchPlayerTeamIds([]);
     setScheduleSearchPlayerTeamNames([]);
     setScheduleSearchLoading(false);
@@ -2696,7 +2702,14 @@ export default function BirdDogPage() {
   }, [selectedTournamentId, selectedInventorySlug]);
 
   useEffect(() => {
-    const normalizedQuery = normalizeSmartSearch(teamsSearchQuery);
+    const timer = window.setTimeout(() => {
+      setTeamsSearchStableQuery(teamsSearchQuery);
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [teamsSearchQuery]);
+
+  useEffect(() => {
+    const normalizedQuery = normalizeSmartSearch(teamsSearchStableQuery);
     if (!normalizedQuery) {
       setScheduleSearchPlayerTeamIds([]);
       setScheduleSearchPlayerTeamNames([]);
@@ -2724,6 +2737,14 @@ export default function BirdDogPage() {
     setScheduleSearchLoading(true);
     void (async () => {
       try {
+        const tournamentIndexCacheKey = `${selectedInventorySlug}:${selectedTournamentId}`;
+        const deepIndexMap = new Map<string, TournamentPlayerIndexRow>();
+        if (tournamentPlayerIndexKeyRef.current === tournamentIndexCacheKey) {
+          tournamentPlayerIndexRef.current.forEach((row) => {
+            const key = `${String(row.teamId || "").trim().toLowerCase()}::${normalizeSmartSearch(row.name)}`;
+            if (!key.endsWith("::")) deepIndexMap.set(key, row);
+          });
+        }
         const rows = await loadTournamentPlayerIndex();
         if (cancelled) return;
         const matched = rows.filter((row) => {
@@ -2737,7 +2758,7 @@ export default function BirdDogPage() {
         const matchedTeamNames = Array.from(new Set(
           matched.map((row) => String(row.teamName || "").trim()).filter(Boolean)
         ));
-        if (!matchedTeamIds.length && normalizedQuery.length >= 3 && scheduleSearchFallbackTeams.length) {
+        if (!matchedTeamIds.length && normalizedQuery.length >= 2 && scheduleSearchFallbackTeams.length) {
           const fallbackTeamIds = new Set(matchedTeamIds.map((value) => String(value || "").trim()).filter(Boolean));
           const fallbackTeamNames = new Set(matchedTeamNames.map((value) => String(value || "").trim()).filter(Boolean));
           const chunkSize = 14;
@@ -2748,6 +2769,20 @@ export default function BirdDogPage() {
               roster: await loadRosterForSmartSearch(team).catch(() => [])
             })));
             loaded.forEach(({ team, roster }) => {
+              const teamIdForIndex = smartSearchFallbackTeamId(team.name, team.id);
+              const teamNameForIndex = String(team.name || "").trim();
+              roster.forEach((row) => {
+                const name = String(row.name || "").trim();
+                const normalizedName = normalizeSmartSearch(name);
+                if (!name || !normalizedName || !teamIdForIndex || !teamNameForIndex) return;
+                deepIndexMap.set(`${teamIdForIndex.toLowerCase()}::${normalizedName}`, {
+                  playerId: resolvePlayerIdByName(name, teamIdForIndex),
+                  name,
+                  hometown: String(row.hometown || team.from || ""),
+                  teamId: teamIdForIndex,
+                  teamName: teamNameForIndex
+                });
+              });
               const hasMatch = roster.some((row) => {
                 const nameBlob = normalizeSmartSearch(row.name);
                 if (!nameBlob) return false;
@@ -2763,6 +2798,10 @@ export default function BirdDogPage() {
           }
           matchedTeamIds.splice(0, matchedTeamIds.length, ...Array.from(fallbackTeamIds));
           matchedTeamNames.splice(0, matchedTeamNames.length, ...Array.from(fallbackTeamNames));
+        }
+        if (deepIndexMap.size) {
+          tournamentPlayerIndexKeyRef.current = tournamentIndexCacheKey;
+          tournamentPlayerIndexRef.current = Array.from(deepIndexMap.values());
         }
         setScheduleSearchPlayerTeamIds(matchedTeamIds);
         setScheduleSearchPlayerTeamNames(matchedTeamNames);
@@ -2788,7 +2827,7 @@ export default function BirdDogPage() {
     scheduleSearchFallbackTeamsScopeKey,
     selectedInventorySlug,
     selectedTournamentId,
-    teamsSearchQuery
+    teamsSearchStableQuery
   ]);
 
   useEffect(() => {
@@ -6771,7 +6810,7 @@ export default function BirdDogPage() {
             </div>
             {teamsSearchQuery.trim() ? (
               <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
-                {scheduleSearchLoading
+                {(scheduleSearchLoading || scheduleSearchPendingInput)
                   ? "Searching players and teams..."
                   : filteredTournamentScheduleRowsCount
                     ? `Showing ${filteredTournamentScheduleRowsCount} game${filteredTournamentScheduleRowsCount === 1 ? "" : "s"}`
@@ -6852,7 +6891,9 @@ export default function BirdDogPage() {
               ))
             ) : (
               <p className="muted" style={{ marginTop: 6 }}>
-                {tournamentScheduleGroups.length
+                {(teamsSearchQuery.trim() && (scheduleSearchLoading || scheduleSearchPendingInput))
+                  ? "Searching players and teams..."
+                  : tournamentScheduleGroups.length
                   ? "No teams or players matched your search."
                   : scheduleNotUploadedMessage(company)}
               </p>
