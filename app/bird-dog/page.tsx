@@ -3064,7 +3064,8 @@ export default function BirdDogPage() {
       const timer = window.setTimeout(() => {
         const params = new URLSearchParams({
           q: query,
-          kind: "arrival"
+          kind: "arrival",
+          state: stateCode
         });
         void fetch(`/api/maps/autocomplete?${params.toString()}`)
           .then((res) => (res.ok ? res.json() : { suggestions: [] }))
@@ -3123,7 +3124,8 @@ export default function BirdDogPage() {
       const timer = window.setTimeout(() => {
         const params = new URLSearchParams({
           q: query,
-          kind: "hotel"
+          kind: "hotel",
+          state: stateCode
         });
         void fetch(`/api/maps/autocomplete?${params.toString()}`)
           .then((res) => (res.ok ? res.json() : { suggestions: [] }))
