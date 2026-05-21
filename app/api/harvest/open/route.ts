@@ -692,7 +692,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "inventorySlug and tournamentHint or tournamentId are required" }, { status: 400 });
   }
 
-  const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
+  const previewUnlockAll =
+    process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
+    && process.env.NODE_ENV !== "production";
   const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
   const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   const [unlocked, inventory] = await Promise.all([

@@ -107,22 +107,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Valid email is required." }, { status: 400 });
   }
 
-  if (!isPrivilegedAdminEmail(email)) {
-    return NextResponse.json({
-      error: "Access denied. Only authorized admin accounts can sign in."
-    }, { status: 401 });
-  }
-
-  if (isAdminLogin(email, password)) {
-    const adminUser = buildUser({
-      name: name || "Admin",
-      email,
-      isAdmin: true,
-      authMethod: "admin"
-    });
-    return finishLogin(adminUser, ADMIN_SESSION_TTL_SECONDS);
-  }
   if (isPrivilegedAdminEmail(email)) {
+    if (isAdminLogin(email, password)) {
+      const adminUser = buildUser({
+        name: name || "Admin",
+        email,
+        isAdmin: true,
+        authMethod: "admin"
+      });
+      return finishLogin(adminUser, ADMIN_SESSION_TTL_SECONDS);
+    }
     return NextResponse.json({ error: "Invalid admin credentials." }, { status: 401 });
   }
 

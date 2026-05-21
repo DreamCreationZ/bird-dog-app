@@ -54,7 +54,7 @@ export default function SubscribePage() {
       <section className="login-card">
         <h1>APOINT SCOUT Subscription</h1>
         <p>Unlock one tournament for your entire organization.</p>
-        <p><strong>$500</strong> per tournament in test mode.</p>
+        <p><strong>$500</strong> per tournament unlock.</p>
         {error ? <p className="error-text">{error}</p> : null}
         <button type="button" onClick={() => void startSubscription()} disabled={loading}>
           {loading ? "Redirecting..." : "Subscribe & Unlock"}

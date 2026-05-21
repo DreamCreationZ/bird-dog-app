@@ -293,6 +293,7 @@ const CACHE_KEY = "bird_dog_tournament_cache";
 const PREVIEW_UNLOCK_ALL =
   process.env.NEXT_PUBLIC_BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
   && process.env.NODE_ENV !== "production";
+const TOURNAMENT_UNLOCK_EVENT_KEY = "bird_dog:tournament_unlock_event:v1";
 const COACH_LOCATION_SHARING_KEY = "bird_dog:coach_location_sharing";
 const LOCAL_SCHEDULE_FALLBACK_KEY = "bird_dog:local_schedule_fallback:v1";
 const PLAN_WORKFLOW_STATUS_KEY_PREFIX = "bird_dog:plan_workflow_status:v1";
@@ -304,7 +305,6 @@ const INVENTORY_CACHE_STORAGE_KEY_PREFIX = "bird_dog:inventory_cache:v2";
 const BOOKING_REVIEW_DRAFT_KEY = "bird_dog:booking_review_draft:v1";
 const BOOKING_SUMMARY_KEY = "bird_dog:booking_summary:v1";
 const PROFILE_FORM_STORAGE_KEY_PREFIX = "bird_dog:profile_form:v1";
-const DEMO_FREE_TOURNAMENT_SLUGS = new Set(["2025-pg-16u-wwba-national-championship"]);
 
 function parseCompanyParam(value: string | null | undefined): "PG" | "PBR" | null {
   const normalized = String(value || "").trim().toUpperCase();
@@ -330,7 +330,6 @@ function isTournamentLocked(item: InventoryTournament | null | undefined, option
   if (options?.forceUnlocked) return false;
   if (PREVIEW_UNLOCK_ALL) return false;
   if (item.isArchive) return false;
-  if (DEMO_FREE_TOURNAMENT_SLUGS.has(item.slug)) return false;
   return item.locked;
 }
 
@@ -2623,6 +2622,7 @@ export default function BirdDogPage() {
     const checkoutSessionId = params.get("session_id") || "";
     const returnInventorySlug = params.get("inventorySlug") || "";
     const finalize = async () => {
+      let confirmedInventorySlug = returnInventorySlug;
       if (checkoutSessionId) {
         const confirmRes = await fetch("/api/payments/confirm", {
           method: "POST",
@@ -2633,14 +2633,28 @@ export default function BirdDogPage() {
           const data = await confirmRes.json().catch(() => ({}));
           const detail = typeof data?.detail === "string" && data.detail ? ` (${data.detail})` : "";
           setOpenError(`${data?.error || "Payment confirmation failed."}${detail}`);
+        } else if (confirmRes) {
+          const data = await confirmRes.json().catch(() => ({}));
+          if (typeof data?.inventorySlug === "string" && data.inventorySlug.trim()) {
+            confirmedInventorySlug = data.inventorySlug.trim();
+          }
         }
       }
       const nextInventory = await fetchInventory();
-      if (returnInventorySlug) {
-        const paidItem = nextInventory.find((item) => item.slug === returnInventorySlug);
+      let unlockedByPayment = false;
+      if (confirmedInventorySlug) {
+        const paidItem = nextInventory.find((item) => item.slug === confirmedInventorySlug);
         if (paidItem && !isTournamentLocked(paidItem, { forceUnlocked: isAdminUser })) {
-          setSelectedInventorySlug(returnInventorySlug);
+          setSelectedInventorySlug(confirmedInventorySlug);
+          unlockedByPayment = true;
         }
+      }
+      if (unlockedByPayment) {
+        safeLocalSet(TOURNAMENT_UNLOCK_EVENT_KEY, JSON.stringify({
+          slug: confirmedInventorySlug,
+          at: Date.now()
+        }));
+        window.alert("Payment successful. Please return to the tournament page. This tournament is now unlocked for your organization.");
       }
       navigateTab("tournaments", { rememberCurrent: false });
       const next = new URL(window.location.href);
@@ -2649,6 +2663,26 @@ export default function BirdDogPage() {
       window.history.replaceState({}, "", next.pathname + (next.search ? `?${next.searchParams.toString()}` : ""));
     };
     void finalize();
+  }, []);
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== TOURNAMENT_UNLOCK_EVENT_KEY || !event.newValue) return;
+      let slug = "";
+      try {
+        const parsed = JSON.parse(event.newValue) as { slug?: string };
+        slug = String(parsed?.slug || "").trim();
+      } catch {
+        slug = "";
+      }
+      const message = slug
+        ? "Payment successful. Please return to the tournament page. The selected tournament is now unlocked."
+        : "Payment successful. Please return to the tournament page. The tournament is now unlocked.";
+      window.alert(message);
+      window.location.reload();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
 
   function chooseTournamentIdForCompanyLoad(

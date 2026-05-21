@@ -52,7 +52,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, rows: [] });
   }
 
-  const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
+  const previewUnlockAll =
+    process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
+    && process.env.NODE_ENV !== "production";
   const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
   const unlocked: string[] = await listOrgUnlocks(session.orgId).catch(() => []);
   const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);

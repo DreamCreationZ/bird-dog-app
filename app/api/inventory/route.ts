@@ -8,7 +8,6 @@ import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 import { fetchPbrTournamentCatalog } from "@/lib/birddog/pbrTournamentCatalog";
 import { fetchPgTournamentCatalog } from "@/lib/birddog/pgTournamentCatalog";
 
-const FALLBACK_UNLOCK_COOKIE = "bird_dog_fallback_unlocks";
 const LIVE_CATALOG_CACHE_TTL_MS = 45 * 1000;
 const LAST_GOOD_INVENTORY_TTL_MS = 30 * 60 * 1000;
 
@@ -44,15 +43,6 @@ function getLastGoodInventoryCache() {
     };
   }
   return g.__BIRD_DOG_LAST_GOOD_INVENTORY_CACHE__;
-}
-
-function fallbackUnlockedSlugs(req: NextRequest) {
-  const raw = req.cookies.get(FALLBACK_UNLOCK_COOKIE)?.value || "";
-  const values = raw
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  return new Set(values);
 }
 
 type InventoryItem = {
@@ -273,15 +263,13 @@ function mapInventoryForResponse(
       name: item.name,
       displayDate: item.displayDate || ""
     });
-    const isLivePg = item.company === "PG" && item.slug.startsWith("pg-live-");
-    const isLivePbr = item.company === "PBR" && item.slug.startsWith("pbr-live-");
     return {
       id: item.slug,
       slug: item.slug,
       name: item.name,
       season: item.season,
       company: item.company,
-      locked: previewUnlockAll ? false : (isArchive ? false : (isLivePg || isLivePbr ? false : !unlockedSet.has(item.slug))),
+      locked: previewUnlockAll ? false : (isArchive ? false : !unlockedSet.has(item.slug)),
       isArchive,
       harvestHint: item.harvestHint || inventoryHarvestHint(item),
       displayDate: item.displayDate || "",
@@ -302,17 +290,16 @@ export async function GET(req: NextRequest) {
     process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
     && process.env.NODE_ENV !== "production";
   const forceUnlocked = previewUnlockAll || isAdminUser;
-  const cookieUnlockedSet = fallbackUnlockedSlugs(req);
   const fallbackBaseInventory = buildFallbackInventory();
 
   try {
     const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
     if (!hasSupabaseConfig) {
       return NextResponse.json({
-        subscribed: forceUnlocked || cookieUnlockedSet.size > 0,
+        subscribed: forceUnlocked,
         fallback: true,
         source: "seed_inventory",
-        inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, cookieUnlockedSet)
+        inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, new Set<string>())
       });
     }
     const seedMetaBySlug = new Map(INVENTORY_SEED.map((item) => [item.slug, item]));
@@ -337,10 +324,10 @@ export async function GET(req: NextRequest) {
     ]);
     if (!inventory.length) {
       return NextResponse.json({
-        subscribed: forceUnlocked || cookieUnlockedSet.size > 0,
+        subscribed: forceUnlocked,
         fallback: true,
         warning: "Inventory table was empty. Showing seeded tournaments.",
-        inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, cookieUnlockedSet)
+        inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, new Set<string>())
       });
     }
     const liveCatalogCache = getLiveCatalogCache();
@@ -390,7 +377,7 @@ export async function GET(req: NextRequest) {
     const warmupWarning = !hasPgRows
       ? "PG tournaments are still syncing from the live site. Please refresh in a few seconds."
       : undefined;
-    const unlockedSet = new Set([...unlockedSlugs, ...cookieUnlockedSet]);
+    const unlockedSet = new Set(unlockedSlugs);
 
     return NextResponse.json({
       subscribed: forceUnlocked || unlockedSet.size > 0,
@@ -402,11 +389,9 @@ export async function GET(req: NextRequest) {
         const seedMeta = seedMetaBySlug.get(item.slug);
         const displayDate = item.displayDate || match?.dateLabel || seedMeta?.displayDate || "";
         const isArchive = isFreeTournamentAccess({ slug: item.slug, name: item.name, displayDate });
-        const isLivePg = item.company === "PG" && item.slug.startsWith("pg-live-");
-        const isLivePbr = item.company === "PBR" && item.slug.startsWith("pbr-live-");
         return {
           ...item,
-          locked: forceUnlocked ? false : (isArchive ? false : (isLivePg || isLivePbr ? false : !unlockedSet.has(item.slug))),
+          locked: forceUnlocked ? false : (isArchive ? false : !unlockedSet.has(item.slug)),
           isArchive,
           harvestHint: item.harvestHint || inventoryHarvestHint(item),
           displayDate,
@@ -425,22 +410,22 @@ export async function GET(req: NextRequest) {
       || detail.includes("Missing environment variable: SUPABASE_SERVICE_ROLE_KEY");
     if (missingConfig) {
       return NextResponse.json({
-        subscribed: forceUnlocked || cookieUnlockedSet.size > 0,
+        subscribed: forceUnlocked,
         fallback: true,
         source: "seed_inventory",
-        inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, cookieUnlockedSet)
+        inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, new Set<string>())
       });
     }
     return NextResponse.json({
-      subscribed: forceUnlocked || cookieUnlockedSet.size > 0,
+      subscribed: forceUnlocked,
       fallback: true,
       warning: hasFreshLastGood
         ? "Live sync failed briefly. Showing last successful tournament snapshot."
         : "Failed to read inventory from database. Showing seeded tournaments.",
       detail,
       inventory: hasFreshLastGood
-        ? mapInventoryForResponse(lastGoodInventory.inventory, forceUnlocked, cookieUnlockedSet)
-        : mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, cookieUnlockedSet)
+        ? mapInventoryForResponse(lastGoodInventory.inventory, forceUnlocked, new Set<string>())
+        : mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, new Set<string>())
     });
   }
 }

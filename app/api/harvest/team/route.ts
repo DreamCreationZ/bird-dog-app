@@ -913,11 +913,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "inventorySlug is required" }, { status: 400 });
   }
 
-  const previewUnlockAll = process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true";
+  const previewUnlockAll =
+    process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
+    && process.env.NODE_ENV !== "production";
   const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
   const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   const unlockedResult = await withTimeout(listOrgUnlocks(session.orgId), 1800);
-  const unlockedTimedOut = unlockedResult === null;
   const unlocked: string[] = Array.isArray(unlockedResult) ? unlockedResult : [];
   const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
   const displayDate = seedMeta?.displayDate || "";
@@ -929,7 +930,7 @@ export async function POST(req: NextRequest) {
       displayDate
     })
   );
-  if (!unlockedTimedOut && !previewUnlockAll && !isAdminUser && !isArchive && !unlocked.includes(inventorySlug)) {
+  if (!previewUnlockAll && !isAdminUser && !isArchive && !unlocked.includes(inventorySlug)) {
     return NextResponse.json({ error: "Tournament is locked for your organization." }, { status: 402 });
   }
 

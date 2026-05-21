@@ -2,6 +2,7 @@ import Stripe from "stripe";
 import { NextRequest, NextResponse } from "next/server";
 import { unlockTournamentForOrg } from "@/lib/birddog/repository";
 export const runtime = "nodejs";
+const TOURNAMENT_UNLOCK_AMOUNT_CENTS = 50000;
 
 function required(name: string): string {
   const value = process.env[name];
@@ -27,15 +28,16 @@ export async function POST(req: NextRequest) {
       const orgId = session.metadata?.org_id || "";
       const userId = session.metadata?.user_id || "";
       const inventorySlug = session.metadata?.inventory_slug || "";
+      const amountTotal = Number(session.amount_total || 0);
 
-      if (orgId && userId && inventorySlug) {
+      if (orgId && userId && inventorySlug && Number.isFinite(amountTotal) && amountTotal >= TOURNAMENT_UNLOCK_AMOUNT_CENTS) {
         await unlockTournamentForOrg({
           orgId,
           userId,
           inventorySlug,
           stripeSessionId: session.id,
           stripePaymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : null,
-          amountCents: Number(session.amount_total || 0)
+          amountCents: amountTotal
         });
       }
     }
