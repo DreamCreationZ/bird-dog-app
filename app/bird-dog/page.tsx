@@ -6810,13 +6810,13 @@ export default function BirdDogPage() {
                 autoComplete="off"
               />
             </div>
-            {teamsSearchQuery.trim() ? (
+            {teamsSearchQuery.trim() && (scheduleSearchLoading || scheduleSearchPendingInput || filteredTournamentScheduleRowsCount > 0) ? (
               <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
                 {(scheduleSearchLoading || scheduleSearchPendingInput)
                   ? "Searching players and teams..."
                   : filteredTournamentScheduleRowsCount
                     ? `Showing ${filteredTournamentScheduleRowsCount} game${filteredTournamentScheduleRowsCount === 1 ? "" : "s"}`
-                    : "No games matched this team/player search."}
+                    : ""}
               </p>
             ) : null}
             {filteredTournamentScheduleGroups.length ? (
