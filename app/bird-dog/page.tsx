@@ -2208,6 +2208,7 @@ export default function BirdDogPage() {
   const tournamentPlayerIndexRef = useRef<TournamentPlayerIndexRow[]>([]);
   const tournamentPlayerIndexKeyRef = useRef("");
   const tournamentPlayerIndexLoadingRef = useRef<Promise<TournamentPlayerIndexRow[]> | null>(null);
+  const schedulePlayerTeamQueryCacheRef = useRef<Map<string, { teamIds: string[]; teamNames: string[] }>>(new Map());
   const selectedTournamentHydrationKeyRef = useRef("");
   const selectedTournamentHydrationAttemptAtRef = useRef<Record<string, number>>({});
   const autoPlannerRef = useRef<{ busy: boolean; key: string }>({ busy: false, key: "" });
@@ -2617,6 +2618,7 @@ export default function BirdDogPage() {
     tournamentPlayerIndexRef.current = [];
     tournamentPlayerIndexKeyRef.current = "";
     tournamentPlayerIndexLoadingRef.current = null;
+    schedulePlayerTeamQueryCacheRef.current.clear();
   }, [selectedTournamentId, selectedInventorySlug]);
 
   useEffect(() => {
@@ -2632,6 +2634,14 @@ export default function BirdDogPage() {
     if (!tokens.length) {
       setScheduleSearchPlayerTeamIds([]);
       setScheduleSearchPlayerTeamNames([]);
+      setScheduleSearchLoading(false);
+      return;
+    }
+    const cacheKey = `${selectedInventorySlug}:${selectedTournamentId}:${selectedTournamentTeams.length}:${normalizedQuery}`;
+    const cached = schedulePlayerTeamQueryCacheRef.current.get(cacheKey);
+    if (cached) {
+      setScheduleSearchPlayerTeamIds(cached.teamIds);
+      setScheduleSearchPlayerTeamNames(cached.teamNames);
       setScheduleSearchLoading(false);
       return;
     }
@@ -2653,8 +2663,39 @@ export default function BirdDogPage() {
         const matchedTeamNames = Array.from(new Set(
           matched.map((row) => String(row.teamName || "").trim()).filter(Boolean)
         ));
+        if (!matchedTeamIds.length && normalizedQuery.length >= 3 && selectedTournamentTeams.length) {
+          const fallbackTeamIds = new Set(matchedTeamIds.map((value) => String(value || "").trim()).filter(Boolean));
+          const fallbackTeamNames = new Set(matchedTeamNames.map((value) => String(value || "").trim()).filter(Boolean));
+          const chunkSize = 14;
+          for (let start = 0; start < selectedTournamentTeams.length; start += chunkSize) {
+            const chunk = selectedTournamentTeams.slice(start, start + chunkSize);
+            const loaded = await Promise.all(chunk.map(async (team) => ({
+              team,
+              roster: await loadRosterForSmartSearch(team).catch(() => [])
+            })));
+            loaded.forEach(({ team, roster }) => {
+              const hasMatch = roster.some((row) => {
+                const nameBlob = normalizeSmartSearch(row.name);
+                if (!nameBlob) return false;
+                return tokens.every((token) => nameBlob.includes(token));
+              });
+              if (!hasMatch) return;
+              const teamId = String(team.id || "").trim();
+              const teamName = String(team.name || "").trim();
+              if (teamId) fallbackTeamIds.add(teamId);
+              if (teamName) fallbackTeamNames.add(teamName);
+            });
+            if (cancelled) return;
+          }
+          matchedTeamIds.splice(0, matchedTeamIds.length, ...Array.from(fallbackTeamIds));
+          matchedTeamNames.splice(0, matchedTeamNames.length, ...Array.from(fallbackTeamNames));
+        }
         setScheduleSearchPlayerTeamIds(matchedTeamIds);
         setScheduleSearchPlayerTeamNames(matchedTeamNames);
+        schedulePlayerTeamQueryCacheRef.current.set(cacheKey, {
+          teamIds: matchedTeamIds,
+          teamNames: matchedTeamNames
+        });
       } catch {
         if (!cancelled) {
           setScheduleSearchPlayerTeamIds([]);
@@ -2668,7 +2709,7 @@ export default function BirdDogPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedInventorySlug, selectedTournamentId, teamsSearchQuery]);
+  }, [selectedInventorySlug, selectedTournamentId, selectedTournamentTeams.length, teamsSearchQuery]);
 
   useEffect(() => {
     const merged = readTeamRosterCartCanonical();
