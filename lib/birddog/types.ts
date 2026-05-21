@@ -56,12 +56,17 @@ export type OrgBrand = {
 export type SessionUser = {
   userId: string;
   name: string;
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
   email: string;
   orgId: string;
   orgName: string;
   orgPrimary?: string;
   orgAccent?: string;
   orgLogoUrl?: string;
+  state?: string;
+  country?: string;
   isAdmin?: boolean;
   authMethod?: "admin" | "password" | "password_mfa" | "passkey";
   gender?: "MALE" | "FEMALE" | "UNSPECIFIED";

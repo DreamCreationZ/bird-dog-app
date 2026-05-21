@@ -1,6 +1,7 @@
 import Stripe from "stripe";
 import { NextRequest, NextResponse } from "next/server";
 import { unlockTournamentForOrg } from "@/lib/birddog/repository";
+import { isTournamentUnlockBlockedEmail } from "@/lib/birddog/tournamentAccessPolicy";
 export const runtime = "nodejs";
 const TOURNAMENT_UNLOCK_AMOUNT_CENTS = 50000;
 
@@ -28,9 +29,17 @@ export async function POST(req: NextRequest) {
       const orgId = session.metadata?.org_id || "";
       const userId = session.metadata?.user_id || "";
       const inventorySlug = session.metadata?.inventory_slug || "";
+      const emailDomain = session.metadata?.email_domain || "";
       const amountTotal = Number(session.amount_total || 0);
 
-      if (orgId && userId && inventorySlug && Number.isFinite(amountTotal) && amountTotal >= TOURNAMENT_UNLOCK_AMOUNT_CENTS) {
+      if (
+        orgId
+        && userId
+        && inventorySlug
+        && Number.isFinite(amountTotal)
+        && amountTotal >= TOURNAMENT_UNLOCK_AMOUNT_CENTS
+        && !isTournamentUnlockBlockedEmail(`user@${String(emailDomain || "").trim()}`)
+      ) {
         await unlockTournamentForOrg({
           orgId,
           userId,

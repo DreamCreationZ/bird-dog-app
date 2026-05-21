@@ -15,6 +15,11 @@ type Props = {
     returnTournamentId: string;
     returnCompany?: string;
     teamView?: string;
+    sourceGameId?: string;
+    sourceGameStartAt?: string;
+    sourceGameTimeLabel?: string;
+    sourceGameOpponent?: string;
+    sourceGameField?: string;
   };
   inlineMode?: boolean;
   onClose?: () => void;
@@ -56,6 +61,11 @@ type CrossTeamCartPlayer = {
   hometown?: string;
   sourceTeamId?: string;
   sourceTeamName?: string;
+  sourceGameId?: string;
+  sourceGameStartAt?: string;
+  sourceGameTimeLabel?: string;
+  sourceGameOpponent?: string;
+  sourceGameField?: string;
 };
 
 type GeneratedCoachStep = {
@@ -478,7 +488,12 @@ function readRosterCartStorage(key: string): CrossTeamCartPlayer[] {
         team: String(item?.team || ""),
         hometown: item?.hometown ? String(item.hometown) : undefined,
         sourceTeamId: item?.sourceTeamId ? String(item.sourceTeamId) : undefined,
-        sourceTeamName: item?.sourceTeamName ? String(item.sourceTeamName) : undefined
+        sourceTeamName: item?.sourceTeamName ? String(item.sourceTeamName) : undefined,
+        sourceGameId: item?.sourceGameId ? String(item.sourceGameId) : undefined,
+        sourceGameStartAt: item?.sourceGameStartAt ? String(item.sourceGameStartAt) : undefined,
+        sourceGameTimeLabel: item?.sourceGameTimeLabel ? String(item.sourceGameTimeLabel) : undefined,
+        sourceGameOpponent: item?.sourceGameOpponent ? String(item.sourceGameOpponent) : undefined,
+        sourceGameField: item?.sourceGameField ? String(item.sourceGameField) : undefined
       }))
       .filter((item) => item.playerId && item.name && item.team);
     return dedupeCartPlayersByIdentity(rows);
@@ -1944,7 +1959,12 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
         team: row.team || initialParams.teamName || "Unknown Team",
         hometown: row.hometown || "",
         sourceTeamId: initialParams.teamId || "",
-        sourceTeamName: initialParams.teamName || row.team || ""
+        sourceTeamName: initialParams.teamName || row.team || "",
+        sourceGameId: initialParams.sourceGameId || undefined,
+        sourceGameStartAt: initialParams.sourceGameStartAt || undefined,
+        sourceGameTimeLabel: initialParams.sourceGameTimeLabel || undefined,
+        sourceGameOpponent: initialParams.sourceGameOpponent || undefined,
+        sourceGameField: initialParams.sourceGameField || undefined
       };
       const identity = cartPlayerIdentityKey(candidate);
       if (identity && identitySet.has(identity)) {
@@ -2380,6 +2400,9 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     }));
 
     const payload = {
+      company: cartCompany,
+      inventorySlug: cartInventorySlug,
+      tournamentId: initialParams.returnTournamentId || "",
       flightSource: firstLeg?.from || coachStartLocation,
       flightDestination: lastLeg?.to || "",
       flightArrivalTime: generatedSteps[0]?.at || "",

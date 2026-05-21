@@ -4,7 +4,7 @@ import { getOrgByEmail } from "@/lib/birddog/mockData";
 import { upsertScoutUser } from "@/lib/birddog/repository";
 import {
   buildTrustedAuthToken,
-  isUniversityEmail,
+  isSupportedScoutEmail,
   normalizeEmail,
   readTrustedAuthFromRequest,
   setTrustedAuthCookie
@@ -29,6 +29,14 @@ function normalizeCountryCallingCode(value: unknown) {
   return String(value || "").replace(/[^\d]/g, "").trim();
 }
 
+function splitNameParts(value: string) {
+  const parts = String(value || "").trim().split(/\s+/).filter(Boolean);
+  const firstName = parts[0] || "";
+  const lastName = parts.length > 1 ? parts[parts.length - 1] : "";
+  const middleName = parts.length > 2 ? parts.slice(1, -1).join(" ") : "";
+  return { firstName, middleName, lastName };
+}
+
 export async function PATCH(req: NextRequest) {
   const session = readSessionFromRequest(req);
   if (!session) {
@@ -41,6 +49,8 @@ export async function PATCH(req: NextRequest) {
   const nextGender = normalizeGender(body?.gender, (session.gender || "UNSPECIFIED") as GenderValue);
   const nextPhone = normalizePhone(body?.phone ?? session.phone);
   const nextCode = normalizeCountryCallingCode((body?.countryCallingCode ?? session.countryCallingCode) || "1");
+  const nextState = String(body?.state ?? session.state ?? "").trim();
+  const nextCountry = String(body?.country ?? session.country ?? "").trim();
 
   if (!nextEmail.includes("@")) {
     return NextResponse.json({ error: "Valid email is required." }, { status: 400 });
@@ -52,8 +62,8 @@ export async function PATCH(req: NextRequest) {
     if (isPrivilegedAdminEmail(nextEmail)) {
       return NextResponse.json({ error: "That email is reserved for admin access." }, { status: 400 });
     }
-    if (!isUniversityEmail(nextEmail)) {
-      return NextResponse.json({ error: "Only university email addresses are allowed." }, { status: 400 });
+    if (!isSupportedScoutEmail(nextEmail)) {
+      return NextResponse.json({ error: "Use a valid email address." }, { status: 400 });
     }
   }
   if (!nextCode || nextCode.length > 4) {
@@ -65,15 +75,21 @@ export async function PATCH(req: NextRequest) {
 
   const nextIsAdmin = Boolean(session.isAdmin) || isPrivilegedAdminEmail(nextEmail);
   const org = getOrgByEmail(nextEmail);
+  const nameParts = splitNameParts(nextName);
   const nextUser: SessionUser = {
     userId: nextIsAdmin ? adminUserIdFromEmail(nextEmail) : `u_${Buffer.from(nextEmail).toString("base64url")}`,
     name: nextName,
+    firstName: nameParts.firstName,
+    middleName: nameParts.middleName,
+    lastName: nameParts.lastName,
     email: nextEmail,
     orgId: nextIsAdmin ? "admin" : org.orgId,
     orgName: nextIsAdmin ? "Apoint Scout Admin" : org.name,
     orgPrimary: org.primary,
     orgAccent: org.accent,
     orgLogoUrl: org.logoUrl || "",
+    state: nextState,
+    country: nextCountry,
     isAdmin: nextIsAdmin,
     authMethod: session.authMethod,
     gender: nextGender,
@@ -89,6 +105,12 @@ export async function PATCH(req: NextRequest) {
     await setTrustedAuthCookie(
       buildTrustedAuthToken({
         email: nextEmail,
+        name: nextName,
+        firstName: nameParts.firstName,
+        middleName: nameParts.middleName,
+        lastName: nameParts.lastName,
+        state: nextState,
+        country: nextCountry,
         passwordHash: trusted.passwordHash,
         gender: nextGender,
         phone: nextPhone,

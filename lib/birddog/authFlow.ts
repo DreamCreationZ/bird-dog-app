@@ -13,6 +13,12 @@ const MFA_TTL_SECONDS = 60 * 10;
 export type TrustedAuthPayload = {
   v: number;
   email: string;
+  name?: string;
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
+  state?: string;
+  country?: string;
   passwordHash: string;
   gender?: "MALE" | "FEMALE" | "UNSPECIFIED";
   phone?: string;
@@ -23,6 +29,11 @@ export type TrustedAuthPayload = {
 export type PendingMfaPayload = {
   v: number;
   name: string;
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
+  state?: string;
+  country?: string;
   email: string;
   passwordHash: string;
   codeHash?: string;
@@ -105,11 +116,10 @@ export function normalizeEmail(input: string) {
   return String(input || "").trim().toLowerCase();
 }
 
-export function isUniversityEmail(email: string) {
-  const at = email.indexOf("@");
-  if (at < 1) return false;
-  const domain = email.slice(at + 1);
-  return /\.edu$/i.test(domain);
+export function isSupportedScoutEmail(email: string) {
+  const clean = normalizeEmail(email);
+  if (!clean) return false;
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(clean);
 }
 
 export function getAdminCredentials() {
@@ -139,6 +149,12 @@ export function isAdminLogin(email: string, password: string) {
 
 export function buildTrustedAuthToken(input: {
   email: string;
+  name?: string;
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
+  state?: string;
+  country?: string;
   passwordHash: string;
   gender?: "MALE" | "FEMALE" | "UNSPECIFIED";
   phone?: string;
@@ -147,6 +163,12 @@ export function buildTrustedAuthToken(input: {
   const payload: TrustedAuthPayload = {
     v: VERSION,
     email: normalizeEmail(input.email),
+    name: String(input.name || "").trim(),
+    firstName: String(input.firstName || "").trim(),
+    middleName: String(input.middleName || "").trim(),
+    lastName: String(input.lastName || "").trim(),
+    state: String(input.state || "").trim(),
+    country: String(input.country || "").trim(),
     passwordHash: input.passwordHash,
     gender: input.gender,
     phone: String(input.phone || "").trim(),
@@ -182,6 +204,11 @@ export async function clearTrustedAuthCookie() {
 
 export function buildPendingMfaToken(input: {
   name: string;
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
+  state?: string;
+  country?: string;
   email: string;
   passwordHash: string;
   codeHash: string;
@@ -192,6 +219,11 @@ export function buildPendingMfaToken(input: {
   const payload: PendingMfaPayload = {
     v: VERSION,
     name: String(input.name || "").trim(),
+    firstName: String(input.firstName || "").trim(),
+    middleName: String(input.middleName || "").trim(),
+    lastName: String(input.lastName || "").trim(),
+    state: String(input.state || "").trim(),
+    country: String(input.country || "").trim(),
     email: normalizeEmail(input.email),
     passwordHash: input.passwordHash,
     codeHash: input.codeHash,

@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHarvestJob, listHarvestJobs, listOrgUnlocks } from "@/lib/birddog/repository";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
-import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
-import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
+import { isTournamentUnlockBlockedEmail } from "@/lib/birddog/tournamentAccessPolicy";
 
 export async function GET(req: NextRequest) {
   const session = readSessionFromRequest(req);
@@ -39,19 +38,15 @@ export async function POST(req: NextRequest) {
       process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
       && process.env.NODE_ENV !== "production";
     const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
+    const isBlockedUnlockEmail = !isAdminUser && isTournamentUnlockBlockedEmail(session.email);
     const unlocked = await listOrgUnlocks(session.orgId);
-    const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
-    const displayDate = seedMeta?.displayDate || "";
-    const archiveCandidates = [seedMeta?.name, tournamentHint, inventorySlug].filter(Boolean) as string[];
-    const isArchive = archiveCandidates.some((name) =>
-      isFreeTournamentAccess({
-        slug: inventorySlug,
-        name,
-        displayDate
-      })
-    );
-    if (!previewUnlockAll && !isAdminUser && !isArchive && !unlocked.includes(inventorySlug)) {
-      return NextResponse.json({ error: "Tournament is locked for your organization." }, { status: 402 });
+    if (isBlockedUnlockEmail) {
+      return NextResponse.json({
+        error: "Tournament access is locked for Gmail accounts. Sign in with your university domain email."
+      }, { status: 402 });
+    }
+    if (!previewUnlockAll && !isAdminUser && !unlocked.includes(inventorySlug)) {
+      return NextResponse.json({ error: "Tournament is locked for your organization domain." }, { status: 402 });
     }
 
     const job = await createHarvestJob({

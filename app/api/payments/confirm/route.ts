@@ -2,6 +2,7 @@ import Stripe from "stripe";
 import { NextRequest, NextResponse } from "next/server";
 import { unlockTournamentForOrg } from "@/lib/birddog/repository";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
+import { isTournamentUnlockBlockedEmail } from "@/lib/birddog/tournamentAccessPolicy";
 
 export const runtime = "nodejs";
 const TOURNAMENT_UNLOCK_AMOUNT_CENTS = 50000;
@@ -22,6 +23,11 @@ export async function POST(req: NextRequest) {
   const user = readSessionFromRequest(req);
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (isTournamentUnlockBlockedEmail(user.email)) {
+    return NextResponse.json({
+      error: "Gmail accounts cannot unlock tournaments. Use your university domain email to subscribe."
+    }, { status: 403 });
   }
 
   const body = await req.json().catch(() => ({}));

@@ -20,7 +20,12 @@ export default async function TeamDetailsPage({
     first(params.teamName),
     first(params.eventId),
     first(params.teamUrl),
-    first(params.teamView)
+    first(params.teamView),
+    first(params.sourceGameId),
+    first(params.sourceGameStartAt),
+    first(params.sourceGameTimeLabel),
+    first(params.sourceGameOpponent),
+    first(params.sourceGameField)
   ].join("|");
   return (
     <TeamDetailsClient
@@ -36,7 +41,12 @@ export default async function TeamDetailsPage({
         returnInventorySlug: first(params.returnInventorySlug),
         returnTournamentId: first(params.returnTournamentId),
         returnCompany: first(params.returnCompany),
-        teamView: first(params.teamView)
+        teamView: first(params.teamView),
+        sourceGameId: first(params.sourceGameId),
+        sourceGameStartAt: first(params.sourceGameStartAt),
+        sourceGameTimeLabel: first(params.sourceGameTimeLabel),
+        sourceGameOpponent: first(params.sourceGameOpponent),
+        sourceGameField: first(params.sourceGameField)
       }}
     />
   );

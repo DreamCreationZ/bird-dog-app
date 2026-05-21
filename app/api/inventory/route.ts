@@ -7,6 +7,7 @@ import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 import { fetchPbrTournamentCatalog } from "@/lib/birddog/pbrTournamentCatalog";
 import { fetchPgTournamentCatalog } from "@/lib/birddog/pgTournamentCatalog";
+import { isTournamentUnlockBlockedEmail } from "@/lib/birddog/tournamentAccessPolicy";
 
 const LIVE_CATALOG_CACHE_TTL_MS = 45 * 1000;
 const LAST_GOOD_INVENTORY_TTL_MS = 30 * 60 * 1000;
@@ -199,6 +200,7 @@ function applyLiveInventory(
   livePg: InventoryItem[],
   livePbr: InventoryItem[]
 ) {
+  const basePg = baseInventory.filter((item) => item.company === "PG");
   const basePbr = baseInventory.filter((item) => item.company === "PBR");
 
   const mapLiveItem = (item: InventoryItem, baseRows: InventoryItem[]) => {
@@ -222,8 +224,9 @@ function applyLiveInventory(
     return [...mappedLive, ...fallbackBase];
   };
 
-  // PG should mirror live website catalog. Do not fall back to stale seeded rows.
-  const nextPg = livePg;
+  // PG feed can occasionally return partial rows on network/timeout windows.
+  // Keep unmatched known rows so the dashboard does not flicker or collapse.
+  const nextPg = mergeLiveWithBase(livePg, basePg);
   const nextPbr = mergeLiveWithBase(livePbr, basePbr);
 
   const staticOther = baseInventory.filter((item) => item.company !== "PG" && item.company !== "PBR");
@@ -253,8 +256,9 @@ function isSeedOnlyInventory(items: InventoryItem[]) {
 
 function mapInventoryForResponse(
   inventory: InventoryItem[],
-  previewUnlockAll: boolean,
-  unlockedSet: Set<string>
+  forceUnlocked: boolean,
+  unlockedSet: Set<string>,
+  forceLocked = false
 ) {
   const normalizedInventory = normalizeSortAndDedupeInventory(inventory);
   return normalizedInventory.map((item) => {
@@ -269,7 +273,7 @@ function mapInventoryForResponse(
       name: item.name,
       season: item.season,
       company: item.company,
-      locked: previewUnlockAll ? false : (isArchive ? false : !unlockedSet.has(item.slug)),
+      locked: forceUnlocked ? false : (forceLocked ? true : !unlockedSet.has(item.slug)),
       isArchive,
       harvestHint: item.harvestHint || inventoryHarvestHint(item),
       displayDate: item.displayDate || "",
@@ -286,10 +290,11 @@ export async function GET(req: NextRequest) {
   }
 
   const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
+  const isBlockedUnlockEmail = !isAdminUser && isTournamentUnlockBlockedEmail(session.email);
   const previewUnlockAll =
     process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
     && process.env.NODE_ENV !== "production";
-  const forceUnlocked = previewUnlockAll || isAdminUser;
+  const forceUnlocked = !isBlockedUnlockEmail && (previewUnlockAll || isAdminUser);
   const fallbackBaseInventory = buildFallbackInventory();
 
   try {
@@ -299,7 +304,7 @@ export async function GET(req: NextRequest) {
         subscribed: forceUnlocked,
         fallback: true,
         source: "seed_inventory",
-        inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, new Set<string>())
+        inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, new Set<string>(), isBlockedUnlockEmail)
       });
     }
     const seedMetaBySlug = new Map(INVENTORY_SEED.map((item) => [item.slug, item]));
@@ -327,7 +332,7 @@ export async function GET(req: NextRequest) {
         subscribed: forceUnlocked,
         fallback: true,
         warning: "Inventory table was empty. Showing seeded tournaments.",
-        inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, new Set<string>())
+        inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, new Set<string>(), isBlockedUnlockEmail)
       });
     }
     const liveCatalogCache = getLiveCatalogCache();
@@ -335,10 +340,11 @@ export async function GET(req: NextRequest) {
       Date.now() - liveCatalogCache.fetchedAt < LIVE_CATALOG_CACHE_TTL_MS
       && liveCatalogCache.pbr.length > 0;
 
-    // Force-refresh PG catalog each request so dashboard stays aligned with website.
-    const [nextLivePg, nextLivePbr] = await Promise.all([
+    // Prefer cached PG catalog between short intervals to avoid partial refresh flicker
+    // under heavy load, while still keeping near-live updates.
+    const [nextLivePgRaw, nextLivePbrRaw] = await Promise.all([
       withTimeoutFallback(
-        fetchPgTournamentCatalog(true).then((result) => result.items as InventoryItem[]),
+        fetchPgTournamentCatalog(false).then((result) => result.items as InventoryItem[]),
         9000,
         liveCatalogCache.pg
       ),
@@ -351,8 +357,18 @@ export async function GET(req: NextRequest) {
         )
     ]);
 
-    const livePg = nextLivePg;
-    const livePbr = nextLivePbr;
+    const previousLivePg = Array.isArray(liveCatalogCache.pg) ? liveCatalogCache.pg : [];
+    const previousLivePbr = Array.isArray(liveCatalogCache.pbr) ? liveCatalogCache.pbr : [];
+    const looksLikePartialPgRefresh =
+      previousLivePg.length >= 20
+      && nextLivePgRaw.length > 0
+      && nextLivePgRaw.length < Math.floor(previousLivePg.length * 0.5);
+
+    const livePg = looksLikePartialPgRefresh
+      ? previousLivePg
+      : nextLivePgRaw;
+    const livePbr = nextLivePbrRaw.length ? nextLivePbrRaw : previousLivePbr;
+
     if (livePg.length > 0 || livePbr.length > 0) {
       liveCatalogCache.fetchedAt = Date.now();
       liveCatalogCache.pg = livePg;
@@ -376,8 +392,10 @@ export async function GET(req: NextRequest) {
     const hasPgRows = mergedInventory.some((item) => item.company === "PG");
     const warmupWarning = !hasPgRows
       ? "PG tournaments are still syncing from the live site. Please refresh in a few seconds."
-      : undefined;
-    const unlockedSet = new Set(unlockedSlugs);
+      : (looksLikePartialPgRefresh
+        ? "PG live sync was partial, so we kept the last complete list to avoid missing tournaments."
+        : undefined);
+    const unlockedSet = isBlockedUnlockEmail ? new Set<string>() : new Set(unlockedSlugs);
 
     return NextResponse.json({
       subscribed: forceUnlocked || unlockedSet.size > 0,
@@ -391,7 +409,7 @@ export async function GET(req: NextRequest) {
         const isArchive = isFreeTournamentAccess({ slug: item.slug, name: item.name, displayDate });
         return {
           ...item,
-          locked: forceUnlocked ? false : (isArchive ? false : !unlockedSet.has(item.slug)),
+          locked: forceUnlocked ? false : (isBlockedUnlockEmail ? true : !unlockedSet.has(item.slug)),
           isArchive,
           harvestHint: item.harvestHint || inventoryHarvestHint(item),
           displayDate,
@@ -413,7 +431,7 @@ export async function GET(req: NextRequest) {
         subscribed: forceUnlocked,
         fallback: true,
         source: "seed_inventory",
-        inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, new Set<string>())
+        inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, new Set<string>(), isBlockedUnlockEmail)
       });
     }
     return NextResponse.json({
@@ -424,8 +442,8 @@ export async function GET(req: NextRequest) {
         : "Failed to read inventory from database. Showing seeded tournaments.",
       detail,
       inventory: hasFreshLastGood
-        ? mapInventoryForResponse(lastGoodInventory.inventory, forceUnlocked, new Set<string>())
-        : mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, new Set<string>())
+        ? mapInventoryForResponse(lastGoodInventory.inventory, forceUnlocked, new Set<string>(), isBlockedUnlockEmail)
+        : mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, new Set<string>(), isBlockedUnlockEmail)
     });
   }
 }

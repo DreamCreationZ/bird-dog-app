@@ -3,10 +3,10 @@ import { getHarvestedTournament, listOrgUnlocks } from "@/lib/birddog/repository
 import { resolvePgTeamUrl, scrapePgTeamLive } from "@/lib/birddog/pgScraper";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
-import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 import { fetchPbrTournamentCatalog } from "@/lib/birddog/pbrTournamentCatalog";
 import { Tournament } from "@/lib/birddog/types";
+import { isTournamentUnlockBlockedEmail } from "@/lib/birddog/tournamentAccessPolicy";
 
 type TeamScheduleRow = {
   gameNo: string;
@@ -57,9 +57,16 @@ function teamMatches(candidate: string, target: string) {
   const bTokens = teamTokens(target);
   if (!aTokens.length || !bTokens.length) return false;
 
-  // Single-token team names must be exact to avoid cross-team bleed
-  // (e.g. "Forceout" matching every "Forceout X" variant).
-  if (aTokens.length === 1 || bTokens.length === 1) return false;
+  // Handle single-token aliases (e.g. "Forceout") without allowing weak fuzzy matches.
+  if (aTokens.length === 1 || bTokens.length === 1) {
+    const single = (aTokens.length === 1 ? aTokens[0] : bTokens[0]) || "";
+    const multi = aTokens.length === 1 ? bTokens : aTokens;
+    if (!single || single.length < 5 || !multi.length) return false;
+    if (multi.includes(single)) return true;
+    const compactMulti = multi.join("");
+    if (compactMulti.includes(single) && single.length >= 8) return true;
+    return false;
+  }
 
   if (a.includes(b) || b.includes(a)) {
     return Math.min(a.length, b.length) >= 8;
@@ -557,6 +564,17 @@ function parsePbrTeamPageUrl(teamsHtml: string, targetTeamName: string, targetTe
     const anchorKey = normalize(anchorText);
     if (!anchorKey) continue;
     if (anchorKey === targetKey) return toAbsolutePbrUrl(href);
+    if (teamMatches(anchorText, targetTeamName)) {
+      const anchorTokens = teamTokens(anchorText);
+      const targetSet = new Set(targetTokens);
+      const overlap = anchorTokens.filter((token) => targetSet.has(token)).length;
+      const ratio = overlap / Math.max(anchorTokens.length || 1, targetTokens.length || 1);
+      const score = 1 + ratio + (anchorTokens[0] === targetTokens[0] ? 0.15 : 0);
+      if (score > (best?.score || 0)) {
+        best = { href, score };
+      }
+      continue;
+    }
 
     const anchorTokens = teamTokens(anchorText);
     if (!anchorTokens.length || !targetTokens.length) continue;
@@ -569,9 +587,21 @@ function parsePbrTeamPageUrl(teamsHtml: string, targetTeamName: string, targetTe
     if (score > (best?.score || 0)) {
       best = { href, score };
     }
+
+    // Single-token team aliases are common on PBR ("Forceout", "Canes", etc).
+    // Accept only when token is meaningful and present in the anchor tokens.
+    if (targetTokens.length === 1) {
+      const token = targetTokens[0] || "";
+      if (token.length >= 5 && anchorTokens.includes(token)) {
+        const aliasScore = 0.72 + (anchorTokens[0] === token ? 0.12 : 0) - Math.max(0, anchorTokens.length - 2) * 0.05;
+        if (aliasScore > (best?.score || 0)) {
+          best = { href, score: aliasScore };
+        }
+      }
+    }
   }
 
-  if (best && best.score >= 0.6) return toAbsolutePbrUrl(best.href);
+  if (best && best.score >= 0.5) return toAbsolutePbrUrl(best.href);
   return "";
 }
 
@@ -580,6 +610,7 @@ async function tryFetchPbrLiveTeamData(input: {
   targetTeamId: string;
   targetTeamName: string;
   fallbackIsoDate: string;
+  providedTeamUrl?: string;
 }) {
   const eventBase = toPbrEventBase(input.eventHint) || toPbrEventBase(toAbsolutePbrUrl(input.eventHint));
   if (!eventBase) {
@@ -648,8 +679,32 @@ async function tryFetchPbrLiveTeamData(input: {
       awayScore: row.awayScore
     }));
 
-  let teamUrl = "";
+  const fetchRosterFromTeamUrl = async (candidateUrl: string) => {
+    const absolute = toAbsolutePbrUrl(candidateUrl);
+    if (!absolute || !/\/team\/details\//i.test(absolute)) {
+      return { teamUrl: "", roster: [] as TeamRosterRow[] };
+    }
+    const teamRes = await fetch(absolute, {
+      cache: "no-store",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      }
+    }).catch(() => null);
+    const teamHtml = teamRes && teamRes.ok ? await teamRes.text() : "";
+    const rosterRows = teamHtml ? parsePbrRosterRows(teamHtml) : [];
+    return { teamUrl: absolute, roster: rosterRows };
+  };
+
+  let teamUrl = toAbsolutePbrUrl(input.providedTeamUrl || "");
   let roster: TeamRosterRow[] = [];
+  if (teamUrl) {
+    const direct = await fetchRosterFromTeamUrl(teamUrl);
+    teamUrl = direct.teamUrl || teamUrl;
+    roster = direct.roster;
+  }
+
   const teamsRes = await fetch(`${eventBase}/teams`, {
     cache: "no-store",
     headers: {
@@ -659,20 +714,13 @@ async function tryFetchPbrLiveTeamData(input: {
     }
   }).catch(() => null);
   const teamsHtml = teamsRes && teamsRes.ok ? await teamsRes.text() : "";
-  if (teamsHtml) {
+  if (teamsHtml && (!teamUrl || !roster.length)) {
     teamUrl = parsePbrTeamPageUrl(teamsHtml, input.targetTeamName, input.targetTeamId);
   }
-  if (teamUrl) {
-    const teamRes = await fetch(teamUrl, {
-      cache: "no-store",
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-      }
-    }).catch(() => null);
-    const teamHtml = teamRes && teamRes.ok ? await teamRes.text() : "";
-    if (teamHtml) roster = parsePbrRosterRows(teamHtml);
+  if (teamUrl && !roster.length) {
+    const resolved = await fetchRosterFromTeamUrl(teamUrl);
+    teamUrl = resolved.teamUrl || teamUrl;
+    roster = resolved.roster;
   }
 
   return {
@@ -917,21 +965,18 @@ export async function POST(req: NextRequest) {
     process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
     && process.env.NODE_ENV !== "production";
   const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
+  const isBlockedUnlockEmail = !isAdminUser && isTournamentUnlockBlockedEmail(session.email);
   const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   const unlockedResult = await withTimeout(listOrgUnlocks(session.orgId), 1800);
   const unlocked: string[] = Array.isArray(unlockedResult) ? unlockedResult : [];
   const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
-  const displayDate = seedMeta?.displayDate || "";
-  const archiveCandidates = [seedMeta?.name, inventorySlug, tournamentId, teamName].filter(Boolean) as string[];
-  const isArchive = archiveCandidates.some((name) =>
-    isFreeTournamentAccess({
-      slug: inventorySlug,
-      name,
-      displayDate
-    })
-  );
-  if (!previewUnlockAll && !isAdminUser && !isArchive && !unlocked.includes(inventorySlug)) {
-    return NextResponse.json({ error: "Tournament is locked for your organization." }, { status: 402 });
+  if (isBlockedUnlockEmail) {
+    return NextResponse.json({
+      error: "Tournament access is locked for Gmail accounts. Sign in with your university domain email."
+    }, { status: 402 });
+  }
+  if (!previewUnlockAll && !isAdminUser && !unlocked.includes(inventorySlug)) {
+    return NextResponse.json({ error: "Tournament is locked for your organization domain." }, { status: 402 });
   }
 
   try {
@@ -980,14 +1025,15 @@ export async function POST(req: NextRequest) {
             tournament,
             teamUrl,
             tournamentName
-          }), 2200) || "";
+          }), 5000) || "";
           if (eventHint) {
             const livePbr = await withTimeout(tryFetchPbrLiveTeamData({
               eventHint,
               targetTeamId: teamId,
               targetTeamName: targetTeamName || teamName,
-              fallbackIsoDate: asIsoDate(tournament.date)
-            }), 3000) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[], teamUrl: "" };
+              fallbackIsoDate: asIsoDate(tournament.date),
+              providedTeamUrl: teamUrl
+            }), 7000) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[], teamUrl: "" };
 
             if (livePbr.schedule.length || livePbr.roster.length) {
               const mergedRosterMap = new Map<string, TeamRosterRow>(

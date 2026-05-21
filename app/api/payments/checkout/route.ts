@@ -3,8 +3,8 @@ import Stripe from "stripe";
 import { listOrgUnlocks } from "@/lib/birddog/repository";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
-import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
 import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
+import { emailDomainFromAddress, isTournamentUnlockBlockedEmail } from "@/lib/birddog/tournamentAccessPolicy";
 
 const DEFAULT_UNLOCK_AMOUNT_CENTS = 50000;
 export const runtime = "nodejs";
@@ -51,15 +51,16 @@ export async function POST(req: NextRequest) {
       const successRedirect = withQuery(withQuery(returnTo, "inventorySlug", inventorySlug), "payment", "success");
       return NextResponse.json({ alreadyUnlocked: true, freeUnlock: true, redirectTo: successRedirect });
     }
+    if (isTournamentUnlockBlockedEmail(session.email)) {
+      return NextResponse.json({
+        error: "Gmail accounts cannot unlock tournaments. Use your university domain email to subscribe."
+      }, { status: 403 });
+    }
     const selected = seedMetaBySlug.get(inventorySlug) || null;
     const unlockAmountCents = DEFAULT_UNLOCK_AMOUNT_CENTS;
     const unlocked = await listOrgUnlocks(session.orgId).catch(() => [] as string[]);
     if (unlocked.includes(inventorySlug)) {
       return NextResponse.json({ alreadyUnlocked: true, redirectTo: "/bird-dog?subscription=active" });
-    }
-    const displayDate = selected?.displayDate || "";
-    if (selected && isFreeTournamentAccess({ slug: inventorySlug, name: selected.name, displayDate })) {
-      return NextResponse.json({ alreadyUnlocked: true, redirectTo: "/bird-dog?subscription=archive" });
     }
     const hasSupabaseConfig = Boolean(
       process.env.SUPABASE_URL?.trim()
@@ -86,7 +87,8 @@ export async function POST(req: NextRequest) {
       metadata: {
         org_id: session.orgId,
         user_id: session.userId,
-        inventory_slug: inventorySlug
+        inventory_slug: inventorySlug,
+        email_domain: emailDomainFromAddress(session.email)
       },
       line_items: [
         {

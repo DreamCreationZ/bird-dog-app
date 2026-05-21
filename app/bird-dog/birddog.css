@@ -20,6 +20,11 @@
   font-size: 15px;
 }
 
+.bd-root.app-like {
+  padding-top: calc(10px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+}
+
 .bd-root h1,
 .bd-root h2,
 .bd-root h3,
@@ -209,6 +214,124 @@
   margin-top: 8px;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
   backdrop-filter: blur(10px);
+}
+
+.bd-root .planner-shell {
+  border-color: rgba(184, 204, 236, 0.35);
+  box-shadow: 0 14px 34px rgba(4, 10, 22, 0.42);
+}
+
+.bd-root .planner-toolbar {
+  position: sticky;
+  top: calc(58px + env(safe-area-inset-top, 0px));
+  z-index: 12;
+  background: linear-gradient(180deg, rgba(6, 11, 22, 0.96) 0%, rgba(6, 11, 22, 0.78) 80%, rgba(6, 11, 22, 0) 100%);
+  padding: 4px 0 8px;
+}
+
+.bd-root .planner-question {
+  background: linear-gradient(160deg, rgba(22, 36, 59, 0.4), rgba(9, 18, 34, 0.85));
+  border-color: rgba(184, 204, 236, 0.28);
+}
+
+.bd-root .planner-question-header strong {
+  font-size: clamp(1.05rem, 2.4vw, 1.16rem);
+}
+
+.bd-root .planner-question-toggle {
+  min-width: 52px;
+  min-height: 46px;
+}
+
+.bd-root .planner-question-body {
+  margin-top: 10px;
+}
+
+.bd-root .planner-autocomplete-shell {
+  position: relative;
+}
+
+.bd-root .planner-autocomplete-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 24;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid rgba(169, 193, 231, 0.34);
+  border-radius: 10px;
+  background: rgba(7, 16, 30, 0.98);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+  padding: 4px;
+}
+
+.bd-root .planner-autocomplete-option {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 0;
+  font-weight: 600;
+  background: transparent;
+  color: #e9f3ff;
+  cursor: pointer;
+}
+
+.bd-root .planner-autocomplete-option:hover,
+.bd-root .planner-autocomplete-option:focus-visible {
+  background: rgba(57, 90, 136, 0.35);
+  outline: none;
+  box-shadow: none;
+  transform: none;
+  filter: none;
+}
+
+.bd-root .planner-autocomplete-empty {
+  padding: 8px 10px;
+  color: rgba(202, 218, 243, 0.85);
+  font-size: 0.9rem;
+}
+
+.bd-root .planner-table-wrap {
+  border-color: rgba(169, 193, 231, 0.28);
+}
+
+.bd-root .hotel-suggestion-panel {
+  border: 1px solid rgba(169, 193, 231, 0.25);
+  border-radius: 12px;
+  background: rgba(9, 18, 34, 0.66);
+  padding: 10px;
+}
+
+.bd-root .hotel-suggestion-intro {
+  color: rgba(220, 234, 255, 0.86);
+}
+
+.bd-root .hotel-suggestion-list {
+  display: grid;
+  gap: 8px;
+}
+
+.bd-root .hotel-suggestion-card {
+  border: 1px solid rgba(167, 191, 230, 0.24);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(6, 14, 27, 0.7);
+  display: grid;
+  gap: 8px;
+}
+
+.bd-root .hotel-suggestion-card p {
+  margin: 4px 0 0;
+}
+
+.bd-root .hotel-suggestion-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 
 .bd-root .grid2 {
@@ -586,6 +709,45 @@
     padding-bottom: 66px;
   }
 
+  .bd-root.app-like {
+    padding-inline: 10px;
+    padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .bd-root .top-menu {
+    top: 6px;
+    margin-bottom: 12px;
+  }
+
+  .bd-root .planner-toolbar {
+    top: calc(50px + env(safe-area-inset-top, 0px));
+    padding-bottom: 10px;
+  }
+
+  .bd-root .planner-toolbar button {
+    min-height: 44px;
+    min-width: 140px;
+  }
+
+  .bd-root .planner-question-header strong {
+    max-width: calc(100% - 64px);
+    line-height: 1.25;
+  }
+
+  .bd-root .planner-question-toggle {
+    min-width: 48px;
+    min-height: 42px;
+  }
+
+  .bd-root .hotel-suggestion-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .bd-root .hotel-suggestion-actions .secondary {
+    width: 100%;
+  }
+
   .bd-root .pulse-box,
   .bd-root .row {
     align-items: stretch;
@@ -631,6 +793,7 @@
   .bd-root .planner-preview-table td {
     border-bottom: 1px solid rgba(154, 176, 212, 0.2);
     padding: 10px 12px;
+    overflow-wrap: anywhere;
   }
 
   .bd-root .planner-player-table td:last-child,
@@ -652,15 +815,22 @@
 
   .bd-root .planner-player-table td.action-cell {
     min-width: 0;
+    display: grid;
+    gap: 6px;
   }
 
   .bd-root .planner-player-table td.action-cell .secondary {
     width: 100%;
-    margin-top: 6px;
+    margin-top: 0;
+    min-height: 42px;
   }
 
   .bd-root .planner-player-table td.empty-cell::before,
   .bd-root .planner-preview-table td.empty-cell::before {
     display: none;
+  }
+
+  .bd-root .table-wrap {
+    -webkit-overflow-scrolling: touch;
   }
 }

@@ -66,8 +66,11 @@ const DEFAULT_COUNTRY_CODE_OPTIONS: CountryCodeOption[] = [
 export default function LoginPage() {
   const router = useRouter();
   const [authIntent, setAuthIntent] = useState<"signup" | "signin">("signin");
-  const [firstName, setFirstName] = useState("Scout");
-  const [lastName, setLastName] = useState("User");
+  const [firstName, setFirstName] = useState("");
+  const [middleName, setMiddleName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [stateInput, setStateInput] = useState("");
+  const [countryInput, setCountryInput] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [gender, setGender] = useState<"MALE" | "FEMALE" | "UNSPECIFIED">("UNSPECIFIED");
@@ -86,7 +89,11 @@ export default function LoginPage() {
 
   const org = useMemo(() => getOrgByEmail(email), [email]);
   const isAdminEmail = isPrivilegedAdminEmail(email);
-  const fullName = `${firstName} ${lastName}`.trim() || "Scout User";
+  const fullName = [firstName, middleName, lastName].filter(Boolean).join(" ").trim();
+  const countryNameOptions = useMemo(
+    () => Array.from(new Set(countryCodeOptions.map((item) => item.country))).sort((a, b) => a.localeCompare(b)),
+    [countryCodeOptions]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -150,10 +157,6 @@ export default function LoginPage() {
     ) || null;
   }
 
-  function isUniversityEmailInput(value: string) {
-    return /^[^@\s]+@[^@\s]+\.edu$/i.test(String(value || "").trim());
-  }
-
   function dashboardTarget(provider: DashboardProvider) {
     return provider === "PBR"
       ? "/bird-dog?company=PBR&provider=PBR"
@@ -165,8 +168,8 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
     setInfo("");
-    if (authIntent === "signup" && !isAdminEmail && !isUniversityEmailInput(email)) {
-      setError("Use your university email address to create an account.");
+    if (!email.includes("@")) {
+      setError("Enter a valid email address.");
       setLoading(false);
       return;
     }
@@ -180,12 +183,17 @@ export default function LoginPage() {
           mode: "start",
           authIntent,
           name: fullName,
+          firstName,
+          middleName,
+          lastName,
           email,
           password,
           ...(authIntent === "signup" && !isAdminEmail ? {
             gender,
             phone,
-            countryCallingCode
+            countryCallingCode,
+            state: stateInput,
+            country: countryInput
           } : {})
         }),
         signal: controller.signal
@@ -230,6 +238,9 @@ export default function LoginPage() {
           mode: "verify",
           authIntent,
           name: fullName,
+          firstName,
+          middleName,
+          lastName,
           email,
           password,
           mfaCode
@@ -382,7 +393,7 @@ export default function LoginPage() {
           className="login-brand-mark"
         />
         <h1 className="login-title">APOINT SCOUT</h1>
-        <p className="login-subtitle">Sign up or sign in with your university email.</p>
+        <p className="login-subtitle">Sign up or sign in with your email.</p>
         <div className="auth-toggle" role="tablist" aria-label="Circuit dashboard">
           <button
             type="button"
@@ -434,19 +445,23 @@ export default function LoginPage() {
                   <input value={firstName} onChange={(e) => setFirstName(e.target.value)} required />
                 </label>
                 <label>
+                  Middle Name
+                  <input value={middleName} onChange={(e) => setMiddleName(e.target.value)} placeholder="Optional" />
+                </label>
+                <label>
                   Last Name
                   <input value={lastName} onChange={(e) => setLastName(e.target.value)} required />
                 </label>
               </>
             ) : null}
             <label className="login-field">
-              University Email
+              Email
               <div className="input-shell">
                 <input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@university.edu"
+                  placeholder="name@example.com"
                   required
                 />
                 <span className="input-icon" aria-hidden="true">
@@ -498,6 +513,30 @@ export default function LoginPage() {
                     <option value="MALE">Male</option>
                     <option value="FEMALE">Female</option>
                   </select>
+                </label>
+                <label>
+                  State
+                  <input
+                    value={stateInput}
+                    onChange={(e) => setStateInput(e.target.value)}
+                    placeholder="State / Province"
+                    required
+                  />
+                </label>
+                <label>
+                  Country
+                  <input
+                    list="countries"
+                    value={countryInput}
+                    onChange={(e) => setCountryInput(e.target.value)}
+                    placeholder="Country"
+                    required
+                  />
+                  <datalist id="countries">
+                    {countryNameOptions.map((name) => (
+                      <option key={name} value={name} />
+                    ))}
+                  </datalist>
                 </label>
                 <label>
                   Country Code
@@ -556,7 +595,7 @@ export default function LoginPage() {
           </>
         ) : (
           <form onSubmit={verifyMfa}>
-            <p className="muted">Enter the MFA code sent to your university email to verify account ownership.</p>
+            <p className="muted">Enter the MFA code sent to your email to verify account ownership.</p>
             <label>
               MFA Code
               <input value={mfaCode} onChange={(e) => setMfaCode(e.target.value)} inputMode="numeric" required />

@@ -639,6 +639,27 @@ export async function getHarvestedTournament(orgId: string, tournamentId: string
   };
 }
 
+export async function getHarvestedTournamentByExternalId(
+  orgId: string,
+  company: DataProvider,
+  externalId: string
+): Promise<Tournament | null> {
+  const cleanExternalId = String(externalId || "").trim();
+  if (!cleanExternalId) return null;
+  const rows = (await supabaseRequest("harvested_tournaments", {
+    query: {
+      org_id: `eq.${orgId}`,
+      company: `eq.${company}`,
+      external_id: `eq.${cleanExternalId}`,
+      select: "id",
+      limit: "1"
+    }
+  }).catch(() => [])) as Array<{ id: string }>;
+  const matchId = String(rows[0]?.id || "").trim();
+  if (!matchId) return null;
+  return getHarvestedTournament(orgId, matchId);
+}
+
 export async function upsertHarvestedTournament(input: {
   orgId: string;
   company: DataProvider;

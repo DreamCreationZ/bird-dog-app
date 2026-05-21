@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getHarvestedTournament, listCircuitInventory, listHarvestedTournaments, listOrgUnlocks, upsertHarvestedTournament } from "@/lib/birddog/repository";
+import { getHarvestedTournament, getHarvestedTournamentByExternalId, listCircuitInventory, listHarvestedTournaments, listOrgUnlocks, upsertHarvestedTournament } from "@/lib/birddog/repository";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { scrapePgTournamentLive } from "@/lib/birddog/pgScraper";
 import { INVENTORY_SEED, inventoryHarvestHint } from "@/lib/birddog/inventoryCatalog";
@@ -8,6 +8,7 @@ import { bestGroupedEventMatch, fetchPgGroupedEvents } from "@/lib/birddog/pgGro
 import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 import { fetchPbrTournamentCatalog } from "@/lib/birddog/pbrTournamentCatalog";
 import { Game, Tournament } from "@/lib/birddog/types";
+import { isTournamentUnlockBlockedEmail } from "@/lib/birddog/tournamentAccessPolicy";
 
 type ParticipatingTeam = NonNullable<Tournament["teams"]>[number];
 
@@ -696,6 +697,7 @@ export async function POST(req: NextRequest) {
     process.env.BIRD_DOG_PREVIEW_UNLOCK_ALL === "true"
     && process.env.NODE_ENV !== "production";
   const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
+  const isBlockedUnlockEmail = !isAdminUser && isTournamentUnlockBlockedEmail(session.email);
   const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   const [unlocked, inventory] = await Promise.all([
     listOrgUnlocks(session.orgId).catch(() => [] as string[]),
@@ -723,8 +725,13 @@ export async function POST(req: NextRequest) {
       displayDate
     })
   );
-  if (!previewUnlockAll && !isAdminUser && !isArchive && !unlocked.includes(inventorySlug)) {
-    return NextResponse.json({ error: "Tournament is locked for your organization." }, { status: 402 });
+  if (isBlockedUnlockEmail) {
+    return NextResponse.json({
+      error: "Tournament access is locked for Gmail accounts. Sign in with your university domain email."
+    }, { status: 402 });
+  }
+  if (!previewUnlockAll && !isAdminUser && !unlocked.includes(inventorySlug)) {
+    return NextResponse.json({ error: "Tournament is locked for your organization domain." }, { status: 402 });
   }
 
   try {
@@ -833,11 +840,39 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      if (hasSupabaseConfig) {
+        const tournamentByExternal = await getHarvestedTournamentByExternalId(
+          session.orgId,
+          company,
+          inventorySlug
+        ).catch(() => null);
+        if (tournamentByExternal) {
+          const existingTeamCount = teamCount(tournamentByExternal.teams);
+          const existingGameCount = teamCount(tournamentByExternal.games);
+          if (shouldRefreshImportedSnapshot(existingTeamCount) || existingGameCount === 0) {
+            const refreshedHydrated = await refreshFromLive(tournamentByExternal.name || preferredTournamentName);
+            if (refreshedHydrated) {
+              return NextResponse.json({
+                ok: true,
+                tournament: refreshedHydrated,
+                source: "archive_live_refresh_by_external_id"
+              });
+            }
+          }
+          return NextResponse.json({
+            ok: true,
+            tournament: tournamentByExternal,
+            source: "imported_dataset_by_external_id"
+          });
+        }
+      }
+
       if (hasSupabaseConfig && tournamentId) {
         const tournamentById = await getHarvestedTournament(session.orgId, tournamentId);
         if (tournamentById) {
           const existingTeamCount = teamCount(tournamentById.teams);
-          if (shouldRefreshImportedSnapshot(existingTeamCount)) {
+          const existingGameCount = teamCount(tournamentById.games);
+          if (shouldRefreshImportedSnapshot(existingTeamCount) || existingGameCount === 0) {
             const refreshedHydrated = await refreshFromLive(tournamentById.name || preferredTournamentName);
             if (refreshedHydrated) {
               return NextResponse.json({
@@ -877,7 +912,8 @@ export async function POST(req: NextRequest) {
           const hydrated = await getHarvestedTournament(session.orgId, found.id).catch(() => null);
           const existingTournament = hydrated || found;
           const existingTeamCount = teamCount(existingTournament?.teams);
-          if (shouldRefreshImportedSnapshot(existingTeamCount)) {
+          const existingGameCount = teamCount(existingTournament?.games);
+          if (shouldRefreshImportedSnapshot(existingTeamCount) || existingGameCount === 0) {
             const refreshedHydrated = await refreshFromLive(found.name || preferredTournamentName);
             if (refreshedHydrated) {
               return NextResponse.json({

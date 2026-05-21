@@ -126,6 +126,11 @@ type DesiredPlayer = {
   hometown?: string;
   sourceTeamId?: string;
   sourceTeamName?: string;
+  sourceGameId?: string;
+  sourceGameStartAt?: string;
+  sourceGameTimeLabel?: string;
+  sourceGameOpponent?: string;
+  sourceGameField?: string;
 };
 
 type CoachSchedule = {
@@ -225,6 +230,8 @@ type TeamRosterSearchRow = {
 
 type TournamentScheduleRowView = {
   key: string;
+  gameId?: string;
+  startAt?: string;
   dayKey: string;
   dayLabel: string;
   sortAt: number;
@@ -351,6 +358,16 @@ function formatScheduleDayLabel(value: Date) {
   }).toUpperCase();
 }
 
+function formatTournamentGameDate(valueMs: number) {
+  if (!Number.isFinite(valueMs)) return "";
+  return new Date(valueMs).toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric"
+  });
+}
+
 function formatTournamentGameDateTime(valueMs: number) {
   if (!Number.isFinite(valueMs)) return "Time TBD";
   return new Date(valueMs).toLocaleString(undefined, {
@@ -362,6 +379,28 @@ function formatTournamentGameDateTime(valueMs: number) {
     minute: "2-digit",
     hour12: true
   });
+}
+
+function gameTimeLabelFromGame(game: Game, startMs: number) {
+  const rawGame = game as unknown as Record<string, unknown>;
+  const explicitTime = String(rawGame.timeLabel || "").trim();
+  if (explicitTime) return explicitTime;
+  if (!Number.isFinite(startMs)) return "";
+  return new Date(startMs).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "UTC"
+  });
+}
+
+function formatTournamentGameDisplay(startMs: number, explicitTimeLabel: string) {
+  const cleanTime = String(explicitTimeLabel || "").trim();
+  if (!Number.isFinite(startMs)) {
+    return cleanTime || "Time TBD";
+  }
+  if (!cleanTime) return formatTournamentGameDateTime(startMs);
+  const dateLabel = formatTournamentGameDate(startMs);
+  return dateLabel ? `${dateLabel}, ${cleanTime}` : cleanTime;
 }
 
 function extractGameNoLabel(game: Game, index: number) {
@@ -511,10 +550,6 @@ function sanitizeInventoryRows(rows: unknown): InventoryTournament[] {
       } as InventoryTournament;
     })
     .filter((item) => item.slug && item.name);
-}
-
-function keepOnlyLivePgRows(rows: InventoryTournament[]) {
-  return rows.filter((item) => item.company !== "PG" || item.slug.startsWith("pg-live-"));
 }
 
 function readInventoryCacheSnapshot(user: SessionUser | null, maxAgeMs = 10 * 60 * 1000) {
@@ -756,7 +791,12 @@ function readRosterCartStorage(key: string) {
       team: String(item?.team || ""),
       hometown: item?.hometown ? String(item.hometown) : undefined,
       sourceTeamId: item?.sourceTeamId ? String(item.sourceTeamId) : undefined,
-      sourceTeamName: item?.sourceTeamName ? String(item.sourceTeamName) : undefined
+      sourceTeamName: item?.sourceTeamName ? String(item.sourceTeamName) : undefined,
+      sourceGameId: item?.sourceGameId ? String(item.sourceGameId) : undefined,
+      sourceGameStartAt: item?.sourceGameStartAt ? String(item.sourceGameStartAt) : undefined,
+      sourceGameTimeLabel: item?.sourceGameTimeLabel ? String(item.sourceGameTimeLabel) : undefined,
+      sourceGameOpponent: item?.sourceGameOpponent ? String(item.sourceGameOpponent) : undefined,
+      sourceGameField: item?.sourceGameField ? String(item.sourceGameField) : undefined
     }))
     .filter((item) => item.playerId && item.name && item.team);
   return dedupeDesiredPlayersByIdentity(rows);
@@ -798,7 +838,12 @@ function readDesiredPlayersStorage(key: string) {
       team: String(item?.team || ""),
       hometown: item?.hometown ? String(item.hometown) : undefined,
       sourceTeamId: item?.sourceTeamId ? String(item.sourceTeamId) : undefined,
-      sourceTeamName: item?.sourceTeamName ? String(item.sourceTeamName) : undefined
+      sourceTeamName: item?.sourceTeamName ? String(item.sourceTeamName) : undefined,
+      sourceGameId: item?.sourceGameId ? String(item.sourceGameId) : undefined,
+      sourceGameStartAt: item?.sourceGameStartAt ? String(item.sourceGameStartAt) : undefined,
+      sourceGameTimeLabel: item?.sourceGameTimeLabel ? String(item.sourceGameTimeLabel) : undefined,
+      sourceGameOpponent: item?.sourceGameOpponent ? String(item.sourceGameOpponent) : undefined,
+      sourceGameField: item?.sourceGameField ? String(item.sourceGameField) : undefined
     }))
     .filter((item) => item.playerId && item.name && item.team);
   return dedupeDesiredPlayersByIdentity(rows);
@@ -1093,6 +1138,42 @@ function normalizeTournamentName(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function tournamentGameCount(value: Tournament | null | undefined) {
+  return Array.isArray(value?.games) ? value.games.length : 0;
+}
+
+function tournamentTeamCount(value: Tournament | null | undefined) {
+  return Array.isArray(value?.teams) ? value.teams.length : 0;
+}
+
+function chooseStableTournamentSnapshot(existing: Tournament | null | undefined, incoming: Tournament) {
+  if (!existing) return incoming;
+  const existingGames = tournamentGameCount(existing);
+  const incomingGames = tournamentGameCount(incoming);
+  const existingTeams = tournamentTeamCount(existing);
+  const incomingTeams = tournamentTeamCount(incoming);
+
+  const keepExistingGames = existingGames > 0 && incomingGames === 0;
+  const keepExistingTeams = existingTeams > 0 && incomingTeams === 0;
+
+  if (!keepExistingGames && !keepExistingTeams) return incoming;
+  return {
+    ...incoming,
+    games: keepExistingGames ? existing.games : incoming.games,
+    teams: keepExistingTeams ? existing.teams : incoming.teams
+  };
+}
+
+function mergeTournamentSnapshotList(existingList: Tournament[], incoming: Tournament) {
+  const existing = existingList.find((item) => item.id === incoming.id);
+  const stable = chooseStableTournamentSnapshot(existing, incoming);
+  const filtered = existingList.filter((item) => item.id !== incoming.id);
+  return {
+    tournament: stable,
+    list: [stable, ...filtered]
+  };
+}
+
 function normalizeSmartSearch(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -1225,6 +1306,41 @@ function mapsSearchUrl(label: string, point?: GeoLocation | null) {
     ? `${point.lat},${point.lng}`
     : label;
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
+function mapsSearchUrlForHotel(hotel: HotelSuggestion) {
+  const query = [hotel.name, hotel.address].filter(Boolean).join(", ").trim() || "hotel";
+  const params = new URLSearchParams({ api: "1", query });
+  if (hotel.placeId) {
+    params.set("query_place_id", hotel.placeId);
+  }
+  return `https://www.google.com/maps/search/?${params.toString()}`;
+}
+
+function hasReasonableHotelWindow(plan: PlanItem[]) {
+  if (!plan.length) return false;
+  const scoutTimes = plan
+    .filter((item) => /^scout game/i.test(String(item.title || "")))
+    .map((item) => Date.parse(String(item.at || "")))
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+  if (!scoutTimes.length) return false;
+
+  const travelTimes = plan
+    .filter((item) => /^travel\s+\d+:/i.test(String(item.title || "")))
+    .map((item) => Date.parse(String(item.at || "")))
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+  const firstReference = Number.isFinite(travelTimes[0]) ? travelTimes[0] : scoutTimes[0];
+  if (scoutTimes[0] - firstReference >= 45 * 60 * 1000) {
+    return true;
+  }
+  for (let index = 1; index < scoutTimes.length; index += 1) {
+    if (scoutTimes[index] - scoutTimes[index - 1] >= 90 * 60 * 1000) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function sanitizePlanMapUrl(value: string | undefined) {
@@ -1603,6 +1719,7 @@ export default function BirdDogPage() {
   const inventoryRef = useRef<InventoryTournament[]>([]);
   const inventoryFetchSeqRef = useRef(0);
   const schedulesFetchSeqRef = useRef(0);
+  const tournamentMutationSeqRef = useRef(0);
   const tabHistoryRef = useRef<BirdDogTab[]>([]);
 
   const [schedules, setSchedules] = useState<CoachSchedule[]>([]);
@@ -1623,9 +1740,20 @@ export default function BirdDogPage() {
   });
   const [destinationSuggestions, setDestinationSuggestions] = useState<PlaceSuggestion[]>([]);
   const [hotelSuggestions, setHotelSuggestions] = useState<HotelSuggestion[]>([]);
+  const [stateArrivalSuggestions, setStateArrivalSuggestions] = useState<Record<string, PlaceSuggestion[]>>({});
+  const [stateHotelNameSuggestions, setStateHotelNameSuggestions] = useState<Record<string, PlaceSuggestion[]>>({});
+  const [stateArrivalSuggestionsLoading, setStateArrivalSuggestionsLoading] = useState<Record<string, boolean>>({});
+  const [stateHotelNameSuggestionsLoading, setStateHotelNameSuggestionsLoading] = useState<Record<string, boolean>>({});
+  const [activeStateArrivalInput, setActiveStateArrivalInput] = useState("");
+  const [activeStateHotelInput, setActiveStateHotelInput] = useState("");
+  const stateArrivalSuggestionSeqRef = useRef<Record<string, number>>({});
+  const stateHotelSuggestionSeqRef = useRef<Record<string, number>>({});
   const [tournamentSearchQuery, setTournamentSearchQuery] = useState("");
   const [teamsSearchQuery, setTeamsSearchQuery] = useState("");
   const [playerSearchQuery, setPlayerSearchQuery] = useState("");
+  const [scheduleSearchPlayerTeamIds, setScheduleSearchPlayerTeamIds] = useState<string[]>([]);
+  const [scheduleSearchPlayerTeamNames, setScheduleSearchPlayerTeamNames] = useState<string[]>([]);
+  const [scheduleSearchLoading, setScheduleSearchLoading] = useState(false);
   const [playerSearchResults, setPlayerSearchResults] = useState<SmartPlayerResult[]>([]);
   const [playerSearchLoading, setPlayerSearchLoading] = useState(false);
   const [playerSearchStatus, setPlayerSearchStatus] = useState("");
@@ -1796,10 +1924,7 @@ export default function BirdDogPage() {
       const dayKey = hasValidStart ? start.toISOString().slice(0, 10) : `tbd-${index}`;
       const sortAt = hasValidStart ? start.getTime() : Number.MAX_SAFE_INTEGER - (games.length - index);
       const rawGame = game as unknown as Record<string, unknown>;
-      const explicitTime = String(rawGame.timeLabel || "").trim();
-      const time = explicitTime || (hasValidStart
-        ? start.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).replace(/^0/, "")
-        : "-");
+      const time = gameTimeLabelFromGame(game, hasValidStart ? start.getTime() : NaN) || "-";
       const homeTeam = String(game.homeTeam || "TBD");
       const awayTeam = String(game.awayTeam || "TBD");
       const explicitDayLabel = String(rawGame.dayLabel || "").trim();
@@ -1809,6 +1934,8 @@ export default function BirdDogPage() {
 
       return {
         key: `${game.id || "game"}-${index}`,
+        gameId: String(game.id || "").trim() || undefined,
+        startAt: String(game.startTime || "").trim() || undefined,
         dayKey,
         dayLabel,
         sortAt,
@@ -1845,11 +1972,97 @@ export default function BirdDogPage() {
 
     return Array.from(grouped.values()).sort((left, right) => left.daySort - right.daySort);
   }, [games]);
+  const scheduleSearchNormalized = useMemo(
+    () => normalizeSmartSearch(teamsSearchQuery),
+    [teamsSearchQuery]
+  );
+  const scheduleSearchTokens = useMemo(
+    () => scheduleSearchNormalized.split(" ").filter(Boolean),
+    [scheduleSearchNormalized]
+  );
+  const filteredTournamentScheduleGroups = useMemo(() => {
+    if (!scheduleSearchNormalized) return tournamentScheduleGroups;
+
+    const teamIdSet = new Set(
+      scheduleSearchPlayerTeamIds
+        .map((value) => String(value || "").trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const teamNameSet = new Set(
+      scheduleSearchPlayerTeamNames
+        .map((value) => normalizeSmartSearch(value))
+        .filter(Boolean)
+    );
+    const matchesQuery = (teamName: string) => {
+      const normalized = normalizeSmartSearch(teamName);
+      if (!normalized) return false;
+      return scheduleSearchTokens.every((token) => normalized.includes(token));
+    };
+
+    const filtered = tournamentScheduleGroups
+      .map((group) => {
+        const rows = group.rows.filter((row) => {
+          const homeId = String(row.homeTeamId || "").trim().toLowerCase();
+          const awayId = String(row.awayTeamId || "").trim().toLowerCase();
+          const homeName = normalizeSmartSearch(row.homeTeam);
+          const awayName = normalizeSmartSearch(row.awayTeam);
+          const directTeamMatch = matchesQuery(row.homeTeam) || matchesQuery(row.awayTeam);
+          const playerTeamMatch = (homeId && teamIdSet.has(homeId))
+            || (awayId && teamIdSet.has(awayId))
+            || teamNameSet.has(homeName)
+            || teamNameSet.has(awayName);
+          return directTeamMatch || playerTeamMatch;
+        });
+        return { ...group, rows };
+      })
+      .filter((group) => group.rows.length > 0);
+
+    return filtered;
+  }, [
+    scheduleSearchNormalized,
+    scheduleSearchPlayerTeamIds,
+    scheduleSearchPlayerTeamNames,
+    scheduleSearchTokens,
+    tournamentScheduleGroups
+  ]);
+  const filteredTournamentScheduleRowsCount = useMemo(
+    () => filteredTournamentScheduleGroups.reduce((total, group) => total + group.rows.length, 0),
+    [filteredTournamentScheduleGroups]
+  );
   const playerTeamTimingBySelectionKey = useMemo(() => {
     const map = new Map<string, string>();
     const nowMs = Date.now();
+    const gameById = new Map<string, Game>();
+    games.forEach((game) => {
+      const gameId = String(game.id || "").trim();
+      if (gameId) gameById.set(gameId, game);
+    });
     desiredPlayers.forEach((player) => {
       const key = desiredPlayerSelectionKey(player);
+      const sourceGameId = String(player.sourceGameId || "").trim();
+      const sourceGame = sourceGameId ? gameById.get(sourceGameId) : undefined;
+      const sourceStartMs = Date.parse(String(player.sourceGameStartAt || ""));
+      if (sourceGame || Number.isFinite(sourceStartMs) || String(player.sourceGameTimeLabel || "").trim()) {
+        const gameStartMs = Date.parse(String(sourceGame?.startTime || ""));
+        const startMs = Number.isFinite(gameStartMs) ? gameStartMs : sourceStartMs;
+        const side = sourceGame ? playerMatchSideForGame(player, sourceGame) : null;
+        const opponentFromGame = sourceGame
+          ? String((side === "home" ? sourceGame.awayTeam : side === "away" ? sourceGame.homeTeam : "") || "").trim()
+          : "";
+        const opponent = String(player.sourceGameOpponent || opponentFromGame || "TBD");
+        const field = String(player.sourceGameField || sourceGame?.field || "Field TBD");
+        const timeLabel = String(
+          player.sourceGameTimeLabel
+          || (sourceGame ? gameTimeLabelFromGame(sourceGame, startMs) : "")
+          || ""
+        ).trim();
+        map.set(
+          key,
+          `${formatTournamentGameDisplay(startMs, timeLabel)} · vs ${opponent} · ${field}`
+        );
+        return;
+      }
+
       const matches = games
         .map((game) => {
           const startMs = Date.parse(String(game.startTime || ""));
@@ -1859,11 +2072,12 @@ export default function BirdDogPage() {
           const opponent = side === "home" ? game.awayTeam : game.homeTeam;
           return {
             startMs,
+            timeLabel: gameTimeLabelFromGame(game, startMs),
             opponent: String(opponent || "TBD"),
             field: String(game.field || "Field TBD")
           };
         })
-        .filter((item): item is { startMs: number; opponent: string; field: string } => Boolean(item))
+        .filter((item): item is { startMs: number; timeLabel: string; opponent: string; field: string } => Boolean(item))
         .sort((a, b) => a.startMs - b.startMs);
       if (!matches.length) {
         map.set(key, "Time TBD");
@@ -1872,7 +2086,7 @@ export default function BirdDogPage() {
       const next = matches.find((item) => item.startMs >= nowMs) || matches[0];
       map.set(
         key,
-        `${formatTournamentGameDateTime(next.startMs)} · vs ${next.opponent} · ${next.field}`
+        `${formatTournamentGameDisplay(next.startMs, next.timeLabel)} · vs ${next.opponent} · ${next.field}`
       );
     });
     return map;
@@ -1918,6 +2132,25 @@ export default function BirdDogPage() {
       })),
     [hotelBooked, requiredStateCodes, stateHotelInputs]
   );
+  const primaryRequiredStateCode = requiredStateCodes[0] || "";
+  const hotelSuggestionDestination = useMemo(() => {
+    const fromFlight = String(scheduleForm.flightDestination || "").trim();
+    if (fromFlight.length >= 2) return fromFlight;
+    if (primaryRequiredStateCode) {
+      const fromArrival = String(stateArrivalInputs[primaryRequiredStateCode]?.arrivalLocation || "").trim();
+      if (fromArrival.length >= 2) return fromArrival;
+    }
+    const fromEvent = String(selectedInventory?.displayCity || selectedTournament?.city || eventLocationHint || "").trim();
+    if (fromEvent.length >= 2) return fromEvent;
+    return "";
+  }, [
+    eventLocationHint,
+    primaryRequiredStateCode,
+    scheduleForm.flightDestination,
+    selectedInventory?.displayCity,
+    selectedTournament?.city,
+    stateArrivalInputs
+  ]);
   const selectedTournamentTeams = selectedTournament?.teams || [];
   const teamsById = useMemo(() => {
     const map = new Map<string, TeamRef>();
@@ -2376,11 +2609,66 @@ export default function BirdDogPage() {
   useEffect(() => {
     setPlayerSearchResults([]);
     setPlayerSearchStatus("");
+    setTeamsSearchQuery("");
+    setScheduleSearchPlayerTeamIds([]);
+    setScheduleSearchPlayerTeamNames([]);
+    setScheduleSearchLoading(false);
     teamRosterSearchCacheRef.current.clear();
     tournamentPlayerIndexRef.current = [];
     tournamentPlayerIndexKeyRef.current = "";
     tournamentPlayerIndexLoadingRef.current = null;
   }, [selectedTournamentId, selectedInventorySlug]);
+
+  useEffect(() => {
+    const normalizedQuery = normalizeSmartSearch(teamsSearchQuery);
+    if (!normalizedQuery) {
+      setScheduleSearchPlayerTeamIds([]);
+      setScheduleSearchPlayerTeamNames([]);
+      setScheduleSearchLoading(false);
+      return;
+    }
+
+    const tokens = normalizedQuery.split(" ").filter(Boolean);
+    if (!tokens.length) {
+      setScheduleSearchPlayerTeamIds([]);
+      setScheduleSearchPlayerTeamNames([]);
+      setScheduleSearchLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setScheduleSearchLoading(true);
+    void (async () => {
+      try {
+        const rows = await loadTournamentPlayerIndex();
+        if (cancelled) return;
+        const matched = rows.filter((row) => {
+          const playerBlob = normalizeSmartSearch(row.name);
+          if (!playerBlob) return false;
+          return tokens.every((token) => playerBlob.includes(token));
+        });
+        const matchedTeamIds = Array.from(new Set(
+          matched.map((row) => String(row.teamId || "").trim()).filter(Boolean)
+        ));
+        const matchedTeamNames = Array.from(new Set(
+          matched.map((row) => String(row.teamName || "").trim()).filter(Boolean)
+        ));
+        setScheduleSearchPlayerTeamIds(matchedTeamIds);
+        setScheduleSearchPlayerTeamNames(matchedTeamNames);
+      } catch {
+        if (!cancelled) {
+          setScheduleSearchPlayerTeamIds([]);
+          setScheduleSearchPlayerTeamNames([]);
+        }
+      } finally {
+        if (!cancelled) setScheduleSearchLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedInventorySlug, selectedTournamentId, teamsSearchQuery]);
 
   useEffect(() => {
     const merged = readTeamRosterCartCanonical();
@@ -2532,7 +2820,7 @@ export default function BirdDogPage() {
     selectedTournamentHydrationKeyRef.current = hydrationKey;
     const hydrate = async () => {
       if (selectedInventory && !isTournamentLocked(selectedInventory, { forceUnlocked: isAdminUser })) {
-        await refreshTournamentByInventory(selectedInventory);
+        await refreshTournamentByInventory(selectedInventory, { onlyIfSelected: true, background: true });
         return;
       }
       await loadTournamentDetails(company, selectedTournamentId, true);
@@ -2548,27 +2836,158 @@ export default function BirdDogPage() {
     if (!canAccessLockedPages) {
       setDestinationSuggestions([]);
       setHotelSuggestions([]);
+      setStateArrivalSuggestions({});
+      setStateHotelNameSuggestions({});
+      setStateArrivalSuggestionsLoading({});
+      setStateHotelNameSuggestionsLoading({});
       return;
     }
-    const destinationQuery = scheduleForm.flightDestination.trim();
-    if (destinationQuery.length < 2) {
+    const destinationQuery = String(scheduleForm.flightDestination || "").trim();
+    const hotelQuery = String(hotelSuggestionDestination || "").trim();
+    if (destinationQuery.length < 2 && hotelQuery.length < 2) {
       setDestinationSuggestions([]);
       setHotelSuggestions([]);
       return;
     }
     const id = window.setTimeout(() => {
-      void fetch(`/api/maps/autocomplete?q=${encodeURIComponent(destinationQuery)}`)
-        .then((res) => (res.ok ? res.json() : { suggestions: [] }))
-        .then((data) => setDestinationSuggestions(Array.isArray(data?.suggestions) ? data.suggestions : []))
-        .catch(() => setDestinationSuggestions([]));
+      if (destinationQuery.length >= 2) {
+        void fetch(`/api/maps/autocomplete?q=${encodeURIComponent(destinationQuery)}`)
+          .then((res) => (res.ok ? res.json() : { suggestions: [] }))
+          .then((data) => setDestinationSuggestions(Array.isArray(data?.suggestions) ? data.suggestions : []))
+          .catch(() => setDestinationSuggestions([]));
+      } else {
+        setDestinationSuggestions([]);
+      }
 
-      void fetch(`/api/maps/hotels?destination=${encodeURIComponent(destinationQuery)}`)
-        .then((res) => (res.ok ? res.json() : { hotels: [] }))
-        .then((data) => setHotelSuggestions(Array.isArray(data?.hotels) ? data.hotels : []))
-        .catch(() => setHotelSuggestions([]));
+      if (hotelQuery.length >= 2) {
+        void fetch(`/api/maps/hotels?destination=${encodeURIComponent(hotelQuery)}`)
+          .then((res) => (res.ok ? res.json() : { hotels: [] }))
+          .then((data) => setHotelSuggestions(Array.isArray(data?.hotels) ? data.hotels : []))
+          .catch(() => setHotelSuggestions([]));
+      } else {
+        setHotelSuggestions([]);
+      }
     }, 320);
     return () => window.clearTimeout(id);
-  }, [scheduleForm.flightDestination, canAccessLockedPages]);
+  }, [canAccessLockedPages, hotelSuggestionDestination, scheduleForm.flightDestination]);
+
+  useEffect(() => {
+    if (!canAccessLockedPages || !questionOpen.arrival || !requiredStateCodes.length) {
+      setStateArrivalSuggestions({});
+      setStateArrivalSuggestionsLoading({});
+      return;
+    }
+
+    const timers: number[] = [];
+    requiredStateCodes.forEach((stateCode) => {
+      const query = String(stateArrivalInputs[stateCode]?.arrivalLocation || "").trim();
+      if (query.length < 2) {
+        setStateArrivalSuggestions((prev) => {
+          if (!prev[stateCode]) return prev;
+          const next = { ...prev };
+          delete next[stateCode];
+          return next;
+        });
+        setStateArrivalSuggestionsLoading((prev) => {
+          if (!prev[stateCode]) return prev;
+          const next = { ...prev };
+          delete next[stateCode];
+          return next;
+        });
+        return;
+      }
+
+      const seq = (stateArrivalSuggestionSeqRef.current[stateCode] || 0) + 1;
+      stateArrivalSuggestionSeqRef.current[stateCode] = seq;
+      setStateArrivalSuggestionsLoading((prev) => ({ ...prev, [stateCode]: true }));
+
+      const timer = window.setTimeout(() => {
+        const params = new URLSearchParams({
+          q: query,
+          kind: "arrival"
+        });
+        void fetch(`/api/maps/autocomplete?${params.toString()}`)
+          .then((res) => (res.ok ? res.json() : { suggestions: [] }))
+          .then((data) => {
+            if (stateArrivalSuggestionSeqRef.current[stateCode] !== seq) return;
+            const suggestions = Array.isArray(data?.suggestions) ? data.suggestions as PlaceSuggestion[] : [];
+            setStateArrivalSuggestions((prev) => ({ ...prev, [stateCode]: suggestions.slice(0, 8) }));
+          })
+          .catch(() => {
+            if (stateArrivalSuggestionSeqRef.current[stateCode] !== seq) return;
+            setStateArrivalSuggestions((prev) => ({ ...prev, [stateCode]: [] }));
+          })
+          .finally(() => {
+            if (stateArrivalSuggestionSeqRef.current[stateCode] !== seq) return;
+            setStateArrivalSuggestionsLoading((prev) => ({ ...prev, [stateCode]: false }));
+          });
+      }, 280);
+      timers.push(timer);
+    });
+
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [canAccessLockedPages, questionOpen.arrival, requiredStateCodes, stateArrivalInputs]);
+
+  useEffect(() => {
+    if (!canAccessLockedPages || hotelBooked !== "yes" || !questionOpen.hotel || !requiredStateCodes.length) {
+      setStateHotelNameSuggestions({});
+      setStateHotelNameSuggestionsLoading({});
+      return;
+    }
+
+    const timers: number[] = [];
+    requiredStateCodes.forEach((stateCode) => {
+      const query = String(stateHotelInputs[stateCode]?.hotelName || "").trim();
+      if (query.length < 2) {
+        setStateHotelNameSuggestions((prev) => {
+          if (!prev[stateCode]) return prev;
+          const next = { ...prev };
+          delete next[stateCode];
+          return next;
+        });
+        setStateHotelNameSuggestionsLoading((prev) => {
+          if (!prev[stateCode]) return prev;
+          const next = { ...prev };
+          delete next[stateCode];
+          return next;
+        });
+        return;
+      }
+
+      const seq = (stateHotelSuggestionSeqRef.current[stateCode] || 0) + 1;
+      stateHotelSuggestionSeqRef.current[stateCode] = seq;
+      setStateHotelNameSuggestionsLoading((prev) => ({ ...prev, [stateCode]: true }));
+
+      const timer = window.setTimeout(() => {
+        const params = new URLSearchParams({
+          q: query,
+          kind: "hotel"
+        });
+        void fetch(`/api/maps/autocomplete?${params.toString()}`)
+          .then((res) => (res.ok ? res.json() : { suggestions: [] }))
+          .then((data) => {
+            if (stateHotelSuggestionSeqRef.current[stateCode] !== seq) return;
+            const suggestions = Array.isArray(data?.suggestions) ? data.suggestions as PlaceSuggestion[] : [];
+            setStateHotelNameSuggestions((prev) => ({ ...prev, [stateCode]: suggestions.slice(0, 8) }));
+          })
+          .catch(() => {
+            if (stateHotelSuggestionSeqRef.current[stateCode] !== seq) return;
+            setStateHotelNameSuggestions((prev) => ({ ...prev, [stateCode]: [] }));
+          })
+          .finally(() => {
+            if (stateHotelSuggestionSeqRef.current[stateCode] !== seq) return;
+            setStateHotelNameSuggestionsLoading((prev) => ({ ...prev, [stateCode]: false }));
+          });
+      }, 280);
+      timers.push(timer);
+    });
+
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [canAccessLockedPages, hotelBooked, questionOpen.hotel, requiredStateCodes, stateHotelInputs]);
 
   useEffect(() => {
     if (!user) return;
@@ -2708,38 +3127,77 @@ export default function BirdDogPage() {
     return nextTournaments[0]?.id || "";
   }
 
+  function nextTournamentMutationSeq() {
+    const next = tournamentMutationSeqRef.current + 1;
+    tournamentMutationSeqRef.current = next;
+    return next;
+  }
+
+  function isTournamentMutationCurrent(seq: number) {
+    return seq === tournamentMutationSeqRef.current;
+  }
+
   async function loadCompanyData(nextCompany: "PG" | "PBR", forceRefresh = false, preferredTournamentId = "") {
+    const mutationSeq = nextTournamentMutationSeq();
+    const isCurrentMutation = () => isTournamentMutationCurrent(mutationSeq);
     setLoadingHarvest(true);
     setCompany(nextCompany);
-    setTournaments([]);
-    setSelectedTournamentId("");
-    setSelectedGameId("");
     try {
       const dataset = await loadHarvestDataset(nextCompany, forceRefresh);
+      if (!isCurrentMutation()) return;
       const nextTournaments: Tournament[] = dataset.tournaments || [];
       setTournaments(nextTournaments);
       const nextTournamentId = chooseTournamentIdForCompanyLoad(nextCompany, nextTournaments, preferredTournamentId);
+      if (!isCurrentMutation()) return;
       setSelectedTournamentId(nextTournamentId);
       if (nextTournamentId) {
-        await loadTournamentDetails(nextCompany, nextTournamentId, forceRefresh);
+        await loadTournamentDetails(nextCompany, nextTournamentId, forceRefresh, mutationSeq);
       } else {
         setSelectedGameId("");
       }
     } catch {
-      setOpenError(`Unable to load ${companyLabel(nextCompany)} tournaments right now. Please refresh in a moment.`);
+      if (isCurrentMutation()) {
+        setOpenError(`Unable to load ${companyLabel(nextCompany)} tournaments right now. Please refresh in a moment.`);
+      }
     } finally {
-      setLoadingHarvest(false);
+      if (isCurrentMutation()) {
+        setLoadingHarvest(false);
+      }
     }
   }
 
-  async function loadTournamentDetails(nextCompany: "PG" | "PBR", nextTournamentId: string, forceRefresh = false) {
+  async function loadTournamentDetails(
+    nextCompany: "PG" | "PBR",
+    nextTournamentId: string,
+    forceRefresh = false,
+    mutationSeq?: number
+  ) {
+    const activeMutationSeq = Number.isFinite(mutationSeq) ? Number(mutationSeq) : nextTournamentMutationSeq();
+    const isCurrentMutation = () => isTournamentMutationCurrent(activeMutationSeq);
     try {
       const tournament = await loadHarvestTournament(nextCompany, nextTournamentId, forceRefresh);
-      setTournaments((prev) => prev.map((item) => (item.id === nextTournamentId ? tournament : item)));
+      if (!isCurrentMutation()) return null;
+      let stableTournament = tournament;
+      setTournaments((prev) => {
+        const exists = prev.some((item) => item.id === nextTournamentId);
+        if (!exists) {
+          const merged = mergeTournamentSnapshotList(prev, tournament);
+          stableTournament = merged.tournament;
+          return merged.list;
+        }
+        return prev.map((item) => {
+          if (item.id !== nextTournamentId) return item;
+          stableTournament = chooseStableTournamentSnapshot(item, tournament);
+          return stableTournament;
+        });
+      });
+      if (!isCurrentMutation()) return stableTournament;
       setSelectedTournamentId(nextTournamentId);
-      setSelectedGameId(tournament.games?.[0]?.id || "");
+      setSelectedGameId(stableTournament.games?.[0]?.id || "");
+      return stableTournament;
     } catch {
       // Keep existing shallow tournament record.
+      return null;
     }
   }
 
@@ -2763,36 +3221,29 @@ export default function BirdDogPage() {
     if (isLatestRequest()) setOpenError("");
     const cachedSnapshot = readInventoryCacheSnapshot(user);
     const inMemoryInventory = inventoryRef.current;
-    const keepStableInventory = (message: string, options?: { filterNonLivePg?: boolean }) => {
+    const keepStableInventory = (message: string) => {
       const baseRows = inMemoryInventory.length
         ? inMemoryInventory
         : (cachedSnapshot?.inventory?.length ? cachedSnapshot.inventory : []);
-      const fallbackRows = options?.filterNonLivePg ? keepOnlyLivePgRows(baseRows) : baseRows;
       if (isLatestRequest()) {
-        setInventory(fallbackRows);
+        setInventory(baseRows);
         if (cachedSnapshot?.subscribed) {
           setSubscribed(true);
         }
         setOpenError(message);
       }
-      return fallbackRows;
+      return baseRows;
     };
 
     let res: Response;
     try {
       res = await fetch("/api/inventory", { cache: "no-store" });
     } catch {
-      return keepStableInventory(
-        "Tournament sync is temporarily unavailable. Showing last synced tournaments.",
-        { filterNonLivePg: true }
-      );
+      return keepStableInventory("Tournament sync is temporarily unavailable. Showing last synced tournaments.");
     }
 
     if (!res.ok) {
-      return keepStableInventory(
-        `Unable to sync tournaments right now (${res.status}). Showing last synced tournaments.`,
-        { filterNonLivePg: true }
-      );
+      return keepStableInventory(`Unable to sync tournaments right now (${res.status}). Showing last synced tournaments.`);
     }
 
     const data = await res.json().catch(() => ({}));
@@ -2800,10 +3251,7 @@ export default function BirdDogPage() {
     const nextSubscribed = Boolean(data?.subscribed);
 
     if (!nextInventory.length) {
-      return keepStableInventory(
-        "Tournament sync returned no rows. Showing last synced tournaments.",
-        { filterNonLivePg: true }
-      );
+      return keepStableInventory("Tournament sync returned no rows. Showing last synced tournaments.");
     }
 
     if (!isLatestRequest()) {
@@ -2821,13 +3269,25 @@ export default function BirdDogPage() {
     return nextInventory;
   }
 
-  async function refreshTournamentByInventory(item: InventoryTournament) {
+  async function refreshTournamentByInventory(
+    item: InventoryTournament,
+    options?: { mutationSeq?: number; onlyIfSelected?: boolean; background?: boolean }
+  ) {
+    const activeMutationSeq = Number.isFinite(options?.mutationSeq)
+      ? Number(options?.mutationSeq)
+      : options?.background
+        ? (tournamentMutationSeqRef.current || nextTournamentMutationSeq())
+      : nextTournamentMutationSeq();
+    const isCurrentMutation = () => isTournamentMutationCurrent(activeMutationSeq);
     try {
+      if (options?.onlyIfSelected && selectedInventorySlugRef.current !== item.slug) return;
       const preferredTournamentId = (
         selectedInventorySlugRef.current === item.slug
         && companyRef.current === item.company
       ) ? selectedTournamentIdRef.current : "";
       const targetTournamentId = await resolveTournamentIdForItem(item, preferredTournamentId);
+      if (!isCurrentMutation()) return;
+      if (options?.onlyIfSelected && selectedInventorySlugRef.current !== item.slug) return;
       const payload = {
         company: item.company,
         inventorySlug: item.slug,
@@ -2841,33 +3301,44 @@ export default function BirdDogPage() {
           body: JSON.stringify(payload)
         });
       let liveOpen = await attemptOpen();
+      if (!isCurrentMutation()) return;
       if (liveOpen.status === 401) {
         const sessionCheck = await fetch("/api/session/me", { cache: "no-store" });
         if (!sessionCheck.ok) {
-          setOpenError("Session expired. Please sign in again.");
+          if (isCurrentMutation() && !options?.background) {
+            setOpenError("Session expired. Please sign in again.");
+          }
           router.replace("/login");
           return;
         }
         liveOpen = await attemptOpen();
+        if (!isCurrentMutation()) return;
       }
       if (!liveOpen.ok) return;
       const data = await liveOpen.json();
       const openedTournament = data?.tournament as Tournament | undefined;
       if (!openedTournament) return;
+      if (!isCurrentMutation()) return;
+      if (options?.onlyIfSelected && selectedInventorySlugRef.current !== item.slug) return;
+      let stableTournament = openedTournament;
       setTournaments((prev) => {
-        const filtered = prev.filter((t) => t.id !== openedTournament.id);
-        return [openedTournament, ...filtered];
+        const merged = mergeTournamentSnapshotList(prev, openedTournament);
+        stableTournament = merged.tournament;
+        return merged.list;
       });
-      setSelectedTournamentId(openedTournament.id);
-      setSelectedGameId(openedTournament.games?.[0]?.id || "");
-      setTournamentViewTitle(openedTournament.name);
+      if (!isCurrentMutation()) return;
+      setSelectedTournamentId(stableTournament.id);
+      setSelectedGameId(stableTournament.games?.[0]?.id || "");
+      setTournamentViewTitle(stableTournament.name);
     } catch (error) {
       const detail = error instanceof Error ? error.message : "";
-      setOpenError(
-        detail && !/<html|<body|gateway|timeout/i.test(detail)
-          ? detail
-          : "Unable to refresh tournament details right now. Please retry in a few seconds."
-      );
+      if (isCurrentMutation() && !options?.background) {
+        setOpenError(
+          detail && !/<html|<body|gateway|timeout/i.test(detail)
+            ? detail
+            : "Unable to refresh tournament details right now. Please retry in a few seconds."
+        );
+      }
     }
   }
 
@@ -2882,6 +3353,32 @@ export default function BirdDogPage() {
       && companyRef.current === item.company
     ) {
       return currentlySelectedId;
+    }
+
+    if (item.company === "PBR") {
+      const bySameSlug = company === item.company
+        ? tournaments.find((t) => String(t.id || "").trim() === item.slug)?.id || ""
+        : "";
+      if (bySameSlug) return bySameSlug;
+
+      const wantedExact = normalizeTournamentName(item.name);
+      const exactCurrentMatches = company === item.company
+        ? tournaments.filter((t) => normalizeTournamentName(t.name) === wantedExact)
+        : [];
+      if (exactCurrentMatches.length === 1) {
+        return exactCurrentMatches[0].id;
+      }
+
+      try {
+        const dataset = await loadHarvestDataset(item.company);
+        const bySlug = dataset.tournaments.find((t) => String(t.id || "").trim() === item.slug);
+        if (bySlug?.id) return bySlug.id;
+        const exactMatches = dataset.tournaments.filter((t) => normalizeTournamentName(t.name) === wantedExact);
+        if (exactMatches.length === 1) return exactMatches[0].id;
+        return "";
+      } catch {
+        return "";
+      }
     }
 
     const wanted = normalizeTournamentName(item.name);
@@ -2903,32 +3400,46 @@ export default function BirdDogPage() {
     }
   }
 
-  function applyOpenedTournament(openedTournament: Tournament) {
+  function applyOpenedTournament(openedTournament: Tournament, mutationSeq?: number) {
+    if (Number.isFinite(mutationSeq) && !isTournamentMutationCurrent(Number(mutationSeq))) return;
+    let stableTournament = openedTournament;
     setTournaments((prev) => {
-      const filtered = prev.filter((t) => t.id !== openedTournament.id);
-      return [openedTournament, ...filtered];
+      const merged = mergeTournamentSnapshotList(prev, openedTournament);
+      stableTournament = merged.tournament;
+      return merged.list;
     });
-    setSelectedTournamentId(openedTournament.id);
-    setSelectedGameId(openedTournament.games?.[0]?.id || "");
-    setTournamentViewTitle(openedTournament.name);
+    if (Number.isFinite(mutationSeq) && !isTournamentMutationCurrent(Number(mutationSeq))) return;
+    setSelectedTournamentId(stableTournament.id);
+    setSelectedGameId(stableTournament.games?.[0]?.id || "");
+    setTournamentViewTitle(stableTournament.name);
     navigateTab("notes");
   }
 
-  async function openTournamentFromExistingData(item: InventoryTournament, targetTournamentId?: string) {
+  async function openTournamentFromExistingData(
+    item: InventoryTournament,
+    targetTournamentId?: string,
+    mutationSeq?: number
+  ) {
+    if (Number.isFinite(mutationSeq) && !isTournamentMutationCurrent(Number(mutationSeq))) return false;
     const wanted = normalizeTournamentName(item.name);
     const inMemoryMatch = company === item.company ? tournaments.find((t) => {
       const normalized = normalizeTournamentName(t.name);
+      if (item.company === "PBR") {
+        if (String(t.id || "").trim() === item.slug) return true;
+        return normalized === wanted;
+      }
       return normalized === wanted || normalized.includes(wanted) || wanted.includes(normalized);
     }) : undefined;
     if (inMemoryMatch) {
-      applyOpenedTournament(inMemoryMatch);
+      applyOpenedTournament(inMemoryMatch, mutationSeq);
       return true;
     }
 
     const tryOpenById = async (candidateId: string) => {
       const details = await loadHarvestTournament(item.company, candidateId).catch(() => null);
+      if (Number.isFinite(mutationSeq) && !isTournamentMutationCurrent(Number(mutationSeq))) return false;
       if (details) {
-        applyOpenedTournament(details);
+        applyOpenedTournament(details, mutationSeq);
         return true;
       }
       return false;
@@ -2940,16 +3451,21 @@ export default function BirdDogPage() {
     }
 
     const dataset = await loadHarvestDataset(item.company).catch(() => null);
+    if (Number.isFinite(mutationSeq) && !isTournamentMutationCurrent(Number(mutationSeq))) return false;
     if (!dataset?.tournaments?.length) return false;
     const match = dataset.tournaments.find((t) => {
       const normalized = normalizeTournamentName(t.name);
+      if (item.company === "PBR") {
+        if (String(t.id || "").trim() === item.slug) return true;
+        return normalized === wanted;
+      }
       return normalized === wanted || normalized.includes(wanted) || wanted.includes(normalized);
     });
     if (!match) return false;
 
     const opened = await tryOpenById(match.id);
     if (opened) return true;
-    applyOpenedTournament(match);
+    applyOpenedTournament(match, mutationSeq);
     return true;
   }
 
@@ -2964,7 +3480,7 @@ export default function BirdDogPage() {
       const selectedItem = nextInventory.find((item) => item.slug === selectedSlug);
       if (!selectedItem) return;
       if (isTournamentLocked(selectedItem, { forceUnlocked: isAdminUser })) return;
-      await refreshTournamentByInventory(selectedItem);
+      await refreshTournamentByInventory(selectedItem, { onlyIfSelected: true, background: true });
     } finally {
       setInventoryRefreshing(false);
     }
@@ -3123,7 +3639,12 @@ export default function BirdDogPage() {
           team: String(item?.team || ""),
           hometown: item?.hometown ? String(item.hometown) : undefined,
           sourceTeamId: item?.sourceTeamId ? String(item.sourceTeamId) : undefined,
-          sourceTeamName: item?.sourceTeamName ? String(item.sourceTeamName) : undefined
+          sourceTeamName: item?.sourceTeamName ? String(item.sourceTeamName) : undefined,
+          sourceGameId: item?.sourceGameId ? String(item.sourceGameId) : undefined,
+          sourceGameStartAt: item?.sourceGameStartAt ? String(item.sourceGameStartAt) : undefined,
+          sourceGameTimeLabel: item?.sourceGameTimeLabel ? String(item.sourceGameTimeLabel) : undefined,
+          sourceGameOpponent: item?.sourceGameOpponent ? String(item.sourceGameOpponent) : undefined,
+          sourceGameField: item?.sourceGameField ? String(item.sourceGameField) : undefined
         }))
         .filter((item) => item.playerId && item.name && item.team)
       : [];
@@ -3157,7 +3678,11 @@ export default function BirdDogPage() {
   async function fetchSchedules() {
     const fetchSeq = schedulesFetchSeqRef.current + 1;
     schedulesFetchSeqRef.current = fetchSeq;
-    const res = await fetch("/api/schedules");
+    const scopeParams = new URLSearchParams();
+    scopeParams.set("company", company);
+    if (selectedInventorySlug) scopeParams.set("inventorySlug", selectedInventorySlug);
+    if (selectedTournamentId) scopeParams.set("tournamentId", selectedTournamentId);
+    const res = await fetch(`/api/schedules?${scopeParams.toString()}`);
     if (fetchSeq !== schedulesFetchSeqRef.current) return;
     if (!res.ok) {
       const local = readLocalFallbackSchedule();
@@ -3198,7 +3723,11 @@ export default function BirdDogPage() {
       setPlayerSearchStatus("No schedule found to remove.");
       return;
     }
-    const res = await fetch("/api/schedules", { method: "DELETE" });
+    const scopeParams = new URLSearchParams();
+    scopeParams.set("company", company);
+    if (selectedInventorySlug) scopeParams.set("inventorySlug", selectedInventorySlug);
+    if (selectedTournamentId) scopeParams.set("tournamentId", selectedTournamentId);
+    const res = await fetch(`/api/schedules?${scopeParams.toString()}`, { method: "DELETE" });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       setPlayerSearchStatus(body?.error || `Unable to remove schedule (${res.status}).`);
@@ -3322,6 +3851,9 @@ export default function BirdDogPage() {
     const payload = {
       ...activeForm,
       flightArrivalTime: normalizedFlightArrival,
+      company,
+      inventorySlug: selectedInventorySlug,
+      tournamentId: selectedTournamentId,
       desiredPlayers: desiredOverride ?? desiredPlayers,
       generatedPlan: generatedPlan ?? myGeneratedPlan
     };
@@ -3379,17 +3911,12 @@ export default function BirdDogPage() {
     const normalizedCode = profileForm.countryCallingCode.replace(/[^\d]/g, "");
     const normalizedPhone = profileForm.mobileNumber.replace(/[^\d]/g, "");
     const fullName = `${firstName} ${lastName}`.trim();
-    const isAdminEmail = isPrivilegedAdminEmail(normalizedEmail);
     if (!firstName) {
       setProfileStatus("First name is required.");
       return;
     }
     if (!normalizedEmail.includes("@")) {
-      setProfileStatus("Enter a valid university email.");
-      return;
-    }
-    if (!isAdminEmail && !/\.edu$/i.test(normalizedEmail)) {
-      setProfileStatus("Only university email addresses are allowed.");
+      setProfileStatus("Enter a valid email address.");
       return;
     }
     if (!normalizedCode || normalizedCode.length > 4) {
@@ -3510,7 +4037,14 @@ export default function BirdDogPage() {
   function viewTeamScheduleAndRoster(
     team: TeamRef,
     returnTab: "notes" | "schedule" = "notes",
-    teamView: "schedule" | "roster" = "roster"
+    teamView: "schedule" | "roster" = "roster",
+    gameContext?: {
+      gameId?: string;
+      startAt?: string;
+      timeLabel?: string;
+      opponent?: string;
+      field?: string;
+    }
   ) {
     const params = new URLSearchParams();
     params.set("inventorySlug", selectedInventorySlug);
@@ -3524,6 +4058,11 @@ export default function BirdDogPage() {
     params.set("returnTournamentId", selectedTournamentId);
     params.set("returnCompany", company);
     params.set("teamView", teamView);
+    if (gameContext?.gameId) params.set("sourceGameId", gameContext.gameId);
+    if (gameContext?.startAt) params.set("sourceGameStartAt", gameContext.startAt);
+    if (gameContext?.timeLabel) params.set("sourceGameTimeLabel", gameContext.timeLabel);
+    if (gameContext?.opponent) params.set("sourceGameOpponent", gameContext.opponent);
+    if (gameContext?.field) params.set("sourceGameField", gameContext.field);
     router.push(`/bird-dog/team?${params.toString()}`);
   }
 
@@ -3813,6 +4352,26 @@ export default function BirdDogPage() {
         ...patch
       }
     }));
+  }
+
+  function applyStateArrivalSuggestion(stateCode: string, suggestion: PlaceSuggestion) {
+    updateStateArrivalInput(stateCode, { arrivalLocation: String(suggestion.label || "").trim() });
+    setActiveStateArrivalInput("");
+    setStateArrivalSuggestions((prev) => ({ ...prev, [stateCode]: [] }));
+  }
+
+  function applyStateHotelSuggestion(stateCode: string, suggestion: PlaceSuggestion) {
+    updateStateHotelInput(stateCode, { hotelName: String(suggestion.label || "").trim() });
+    setActiveStateHotelInput("");
+    setStateHotelNameSuggestions((prev) => ({ ...prev, [stateCode]: [] }));
+  }
+
+  function applyHotelSuggestion(hotel: HotelSuggestion) {
+    const cleanName = String(hotel.name || "").trim();
+    if (!cleanName) return;
+    setScheduleForm((prev) => ({ ...prev, hotelName: cleanName }));
+    setPlayerSearchStatus(`Nearby stay selected: ${cleanName}`);
+    setPlanWorkflowNote("Nearby stay selected. Recreate schedule to include this recommendation.");
   }
 
   function toggleSmartPlayerSelection(item: SmartPlayerResult) {
@@ -4466,21 +5025,21 @@ export default function BirdDogPage() {
     };
   }
 
-  async function suggestHotelForDestination(destination: string) {
+  async function suggestHotelForDestination(destination: string): Promise<HotelSuggestion | null> {
     const cleanDestination = destination.trim();
-    if (!cleanDestination) return "";
+    if (!cleanDestination) return null;
     try {
       const res = await fetch(`/api/maps/hotels?destination=${encodeURIComponent(cleanDestination)}`, { cache: "no-store" });
       const data = await res.json().catch(() => ({}));
       const hotels = Array.isArray(data?.hotels) ? data.hotels as HotelSuggestion[] : [];
       if (hotels.length) {
         setHotelSuggestions(hotels);
-        return hotels[0]?.name || "";
+        return hotels[0] || null;
       }
     } catch {
       // Ignore and use fallback label.
     }
-    return "";
+    return null;
   }
 
   function buildInstantRecommendation(targetPlayers: DesiredPlayer[], sourceOverride?: string): PlanItem[] {
@@ -4712,13 +5271,41 @@ export default function BirdDogPage() {
       const primaryState = earliestArrival?.stateCode || requiredStates[0] || "";
       const bookedHotelName = primaryState ? String(hotelPayloadByState[primaryState]?.hotelName || "").trim() : "";
       const wantsHotelRouting = isFeasible && hotelBooked === "yes";
+      const canSuggestOptionalHotel = isFeasible && hotelBooked === "no" && hasReasonableHotelWindow(optimized.plan);
+      const activeHotelName = String(scheduleForm.hotelName || "").trim();
+      const activeHotelSuggestion = activeHotelName
+        ? hotelSuggestions.find((item) => normalizeSmartSearch(item.name) === normalizeSmartSearch(activeHotelName)) || null
+        : null;
+      const suggestedBookedHotel = wantsHotelRouting
+        ? await suggestHotelForDestination(hotelHubDestination || destination)
+        : null;
+      const suggestedOptionalHotel = canSuggestOptionalHotel
+        ? (activeHotelSuggestion || await suggestHotelForDestination(hotelHubDestination || destination))
+        : null;
       const hotelName = wantsHotelRouting
-        ? (bookedHotelName || scheduleForm.hotelName.trim() || await suggestHotelForDestination(hotelHubDestination || destination))
-        : "";
+        ? (bookedHotelName || activeHotelName || suggestedBookedHotel?.name || "")
+        : (canSuggestOptionalHotel ? (activeHotelName || suggestedOptionalHotel?.name || "") : "");
       const withHotelPlan = wantsHotelRouting
         ? withHotelReturnLeg(optimized.plan, hotelName)
         : optimized.plan;
-      const finalPlanBase = withHotelPlan;
+      const withOptionalHotelPlan = (!wantsHotelRouting && canSuggestOptionalHotel && hotelName)
+        ? [
+          ...withHotelPlan,
+          {
+            at: withHotelPlan[0]?.at || new Date().toISOString(),
+            title: "Optional nearby hotel",
+            detail: suggestedOptionalHotel?.address
+              ? `${hotelName} · ${suggestedOptionalHotel.address}. If you need rest between games, this is a nearby stay option.`
+              : `${hotelName}. If you need rest between games, this is a nearby stay option.`,
+            mapUrl: mapsSearchUrlForHotel({
+              name: hotelName,
+              address: suggestedOptionalHotel?.address || "",
+              placeId: suggestedOptionalHotel?.placeId || ""
+            })
+          }
+        ]
+        : withHotelPlan;
+      const finalPlanBase = withOptionalHotelPlan;
       const finalPlan = applyHotelStayMilestones(
         finalPlanBase,
         Object.entries(hotelPayloadByState).map(([stateCode, row]) => ({
@@ -4739,7 +5326,9 @@ export default function BirdDogPage() {
           isFeasible
             ? (wantsHotelRouting && hotelName
               ? "Auto-generated coach route with travel + hotel recommendation."
-              : "Auto-generated coach route from selected players.")
+              : (canSuggestOptionalHotel && hotelName
+                ? "Auto-generated coach route with optional nearby stay recommendation."
+                : "Auto-generated coach route from selected players."))
             : ""
         )
       };
@@ -4764,9 +5353,11 @@ export default function BirdDogPage() {
       } else {
         const resolvedHotel = String(hotelName || "").trim();
         setPlayerSearchStatus(
-          resolvedHotel
+          wantsHotelRouting && resolvedHotel
             ? `Schedule created. Recommended hotel: ${resolvedHotel}.`
-            : "Schedule created."
+            : (canSuggestOptionalHotel && resolvedHotel
+              ? `Schedule created. Nearby stay option found: ${resolvedHotel}.`
+              : "Schedule created.")
         );
       }
     } catch {
@@ -4961,16 +5552,16 @@ export default function BirdDogPage() {
   }
 
   async function openUnlockedTournament(item: InventoryTournament) {
+    const mutationSeq = nextTournamentMutationSeq();
+    const isCurrentMutation = () => isTournamentMutationCurrent(mutationSeq);
     setOpenError("");
     setOpeningSlug(item.slug);
     setSelectedInventorySlug(item.slug);
     setCompany(item.company);
-    setTournaments([]);
-    setSelectedTournamentId("");
-    setSelectedGameId("");
     setJobHint(item.name);
     try {
       const targetTournamentId = await resolveTournamentIdForItem(item);
+      if (!isCurrentMutation()) return;
       const payload = {
         company: item.company,
         inventorySlug: item.slug,
@@ -4984,30 +5575,39 @@ export default function BirdDogPage() {
           body: JSON.stringify(payload)
         });
       let liveOpen = await attemptOpen();
+      if (!isCurrentMutation()) return;
       if (liveOpen.status === 401) {
         const sessionCheck = await fetch("/api/session/me", { cache: "no-store" });
         if (!sessionCheck.ok) {
-          setOpenError("Session expired. Please sign in again.");
+          if (isCurrentMutation()) {
+            setOpenError("Session expired. Please sign in again.");
+          }
           router.replace("/login");
           return;
         }
         liveOpen = await attemptOpen();
+        if (!isCurrentMutation()) return;
       }
       if (!liveOpen.ok) {
         const data = await liveOpen.json().catch(() => ({}));
+        if (!isCurrentMutation()) return;
         const detailText = typeof data?.detail === "string" ? data.detail : "";
         const missingSupabaseConfig = liveOpen.status === 503
           && /SUPABASE_URL|SUPABASE_SERVICE_ROLE_KEY/i.test(detailText);
         if (missingSupabaseConfig) {
-          const openedFromLocal = await openTournamentFromExistingData(item, targetTournamentId || undefined);
+          const openedFromLocal = await openTournamentFromExistingData(item, targetTournamentId || undefined, mutationSeq);
           if (openedFromLocal) {
-            setOpenError("");
+            if (isCurrentMutation()) {
+              setOpenError("");
+            }
             return;
           }
         }
         if (liveOpen.status === 409) {
           await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
-          setOpenError(scheduleNotUploadedMessage(item.company));
+          if (isCurrentMutation()) {
+            setOpenError(scheduleNotUploadedMessage(item.company));
+          }
           return;
         }
         const detail = typeof data?.detail === "string" && data.detail ? ` (${data.detail})` : "";
@@ -5017,34 +5617,45 @@ export default function BirdDogPage() {
         throw new Error(data?.error ? `${data.error}${detail}` : `Unable to load tournament details (${liveOpen.status}).${detail}`);
       }
       const data = await liveOpen.json();
+      if (!isCurrentMutation()) return;
       const openedTournament = data?.tournament as Tournament | undefined;
       if (!openedTournament) {
         throw new Error("Tournament data was empty.");
       }
-      applyOpenedTournament(openedTournament);
+      applyOpenedTournament(openedTournament, mutationSeq);
       const gameCount = Array.isArray(openedTournament.games) ? openedTournament.games.length : 0;
       const teamCount = Array.isArray(openedTournament.teams) ? openedTournament.teams.length : 0;
       if (gameCount === 0) {
-        setOpenError(scheduleNotUploadedMessage(item.company));
+        if (isCurrentMutation()) {
+          setOpenError(scheduleNotUploadedMessage(item.company));
+        }
         await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
         window.setTimeout(() => {
-          void refreshTournamentByInventory(item);
+          void refreshTournamentByInventory(item, { onlyIfSelected: true, background: true });
         }, 6000);
       } else if (teamCount === 0) {
-        setOpenError("Tournament details are syncing. Rechecking shortly...");
+        if (isCurrentMutation()) {
+          setOpenError("Tournament details are syncing. Rechecking shortly...");
+        }
         await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
         window.setTimeout(() => {
-          void refreshTournamentByInventory(item);
+          void refreshTournamentByInventory(item, { onlyIfSelected: true, background: true });
         }, 6000);
       } else {
-        setOpenError("");
+        if (isCurrentMutation()) {
+          setOpenError("");
+        }
       }
     } catch (error) {
-      setOpenError(error instanceof Error ? error.message : "Failed to open tournament.");
+      if (isCurrentMutation()) {
+        setOpenError(error instanceof Error ? error.message : "Failed to open tournament.");
+      }
       await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
-      await loadCompanyData(item.company, true);
+      if (isCurrentMutation()) {
+        await loadCompanyData(item.company, true);
+      }
     } finally {
-      setOpeningSlug("");
+      setOpeningSlug((prev) => (prev === item.slug ? "" : prev));
     }
   }
 
@@ -5736,7 +6347,7 @@ export default function BirdDogPage() {
 
   return (
     <main
-      className="bd-root"
+      className="bd-root app-like"
       style={{
         ["--org-primary" as string]: orgPrimary,
         ["--org-accent" as string]: orgAccent,
@@ -5861,12 +6472,12 @@ export default function BirdDogPage() {
               />
             </label>
             <label>
-              University Email
+              Email
               <input
                 type="email"
                 value={profileForm.universityEmail}
                 onChange={(e) => setProfileForm((prev) => ({ ...prev, universityEmail: e.target.value }))}
-                placeholder="name@university.edu"
+                placeholder="name@example.com"
               />
             </label>
             <label>
@@ -5994,8 +6605,30 @@ export default function BirdDogPage() {
             <p className="muted" style={{ marginTop: 6, marginBottom: 8 }}>
               Click a team name to open that team roster, select players with checkboxes, and add them to the final cart.
             </p>
-            {tournamentScheduleGroups.length ? (
-              tournamentScheduleGroups.map((group) => (
+            <div style={{ marginBottom: 10 }}>
+              <label htmlFor="tournament-schedule-search" className="muted" style={{ display: "block", marginBottom: 6 }}>
+                Search Teams Or Players
+              </label>
+              <input
+                id="tournament-schedule-search"
+                type="text"
+                value={teamsSearchQuery}
+                onChange={(event) => setTeamsSearchQuery(event.target.value)}
+                placeholder="Search team name or player name"
+                autoComplete="off"
+              />
+            </div>
+            {teamsSearchQuery.trim() ? (
+              <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
+                {scheduleSearchLoading
+                  ? "Searching players and teams..."
+                  : filteredTournamentScheduleRowsCount
+                    ? `Showing ${filteredTournamentScheduleRowsCount} game${filteredTournamentScheduleRowsCount === 1 ? "" : "s"}`
+                    : "No games matched this team/player search."}
+              </p>
+            ) : null}
+            {filteredTournamentScheduleGroups.length ? (
+              filteredTournamentScheduleGroups.map((group) => (
                 <div key={`${group.dayLabel}-${group.daySort}`} style={{ marginTop: 8 }}>
                   <h4 style={{ marginBottom: 6 }}>{group.dayLabel}</h4>
                   <div className="table-wrap">
@@ -6026,7 +6659,13 @@ export default function BirdDogPage() {
                                   <button
                                     type="button"
                                     className="secondary"
-                                    onClick={() => viewTeamScheduleAndRoster(homeTeam, "notes", "roster")}
+                                    onClick={() => viewTeamScheduleAndRoster(homeTeam, "notes", "roster", {
+                                      gameId: row.gameId,
+                                      startAt: row.startAt,
+                                      timeLabel: row.time,
+                                      opponent: row.awayTeam,
+                                      field: row.location
+                                    })}
                                     style={{ border: "none", background: "transparent", padding: 0, textDecoration: "underline" }}
                                   >
                                     {row.homeTeam}
@@ -6039,7 +6678,13 @@ export default function BirdDogPage() {
                                   <button
                                     type="button"
                                     className="secondary"
-                                    onClick={() => viewTeamScheduleAndRoster(awayTeam, "notes", "roster")}
+                                    onClick={() => viewTeamScheduleAndRoster(awayTeam, "notes", "roster", {
+                                      gameId: row.gameId,
+                                      startAt: row.startAt,
+                                      timeLabel: row.time,
+                                      opponent: row.homeTeam,
+                                      field: row.location
+                                    })}
                                     style={{ border: "none", background: "transparent", padding: 0, textDecoration: "underline" }}
                                   >
                                     {row.awayTeam}
@@ -6056,7 +6701,9 @@ export default function BirdDogPage() {
               ))
             ) : (
               <p className="muted" style={{ marginTop: 6 }}>
-                {scheduleNotUploadedMessage(company)}
+                {tournamentScheduleGroups.length
+                  ? "No teams or players matched your search."
+                  : scheduleNotUploadedMessage(company)}
               </p>
             )}
           </div>
@@ -6065,8 +6712,8 @@ export default function BirdDogPage() {
       ) : null}
 
       {showMyPlayersSchedule ? (
-      <section className="panel" id="generated-schedule-panel" ref={generatedSchedulePanelRef}>
-        <div className="row wrap" style={{ alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+      <section className="panel planner-shell" id="generated-schedule-panel" ref={generatedSchedulePanelRef}>
+        <div className="row wrap planner-toolbar" style={{ alignItems: "center", justifyContent: "space-between", gap: 8 }}>
           <h3 style={{ marginTop: 0, marginBottom: 0 }}>My Players & Schedule</h3>
           <div className="row wrap" style={{ gap: 8 }}>
             <button
@@ -6099,9 +6746,9 @@ export default function BirdDogPage() {
             <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
               Planner builds route from your answers.
             </p>
-            <div className="panel" style={{ marginBottom: 8 }}>
+            <div className="panel planner-question" style={{ marginBottom: 8 }}>
               <div
-                className="row wrap"
+                className="row wrap planner-question-header"
                 style={{ alignItems: "center", justifyContent: "space-between", gap: 8, cursor: "pointer" }}
                 role="button"
                 tabIndex={0}
@@ -6117,7 +6764,7 @@ export default function BirdDogPage() {
                 <strong>1. Is your flight booked?</strong>
                 <button
                   type="button"
-                  className="secondary"
+                  className="secondary planner-question-toggle"
                   onClick={(event) => {
                     event.stopPropagation();
                     setQuestionOpen((prev) => ({ ...prev, flight: !prev.flight }));
@@ -6127,7 +6774,7 @@ export default function BirdDogPage() {
                 </button>
               </div>
               {questionOpen.flight ? (
-                <div style={{ marginTop: 8 }}>
+                <div className="planner-question-body" style={{ marginTop: 8 }}>
                   <select
                     id="flight-booked"
                     value={flightBooked}
@@ -6144,9 +6791,9 @@ export default function BirdDogPage() {
               ) : null}
             </div>
             {requiredStateCodes.length ? (
-              <div className="panel" style={{ marginBottom: 8 }}>
+              <div className="panel planner-question" style={{ marginBottom: 8 }}>
                 <div
-                  className="row wrap"
+                  className="row wrap planner-question-header"
                   style={{ alignItems: "center", justifyContent: "space-between", gap: 8, cursor: "pointer" }}
                   role="button"
                   tabIndex={0}
@@ -6162,7 +6809,7 @@ export default function BirdDogPage() {
                   <strong>2. When will you reach each event state?</strong>
                   <button
                     type="button"
-                    className="secondary"
+                    className="secondary planner-question-toggle"
                     onClick={(event) => {
                       event.stopPropagation();
                       setQuestionOpen((prev) => ({ ...prev, arrival: !prev.arrival }));
@@ -6172,18 +6819,47 @@ export default function BirdDogPage() {
                   </button>
                 </div>
                 {questionOpen.arrival ? (
-                  <div style={{ marginTop: 8 }}>
+                  <div className="planner-question-body" style={{ marginTop: 8 }}>
                     {requiredStateCodes.map((stateCode) => (
                       <div key={stateCode} className="row wrap" style={{ gap: 8, marginBottom: 8, alignItems: "center" }}>
                         <strong style={{ minWidth: 54 }}>{stateCode}</strong>
-                        <input
-                          value={stateArrivalInputs[stateCode]?.arrivalLocation || ""}
-                          onChange={(event) => {
-                            updateStateArrivalInput(stateCode, { arrivalLocation: event.target.value });
-                          }}
-                          placeholder={`Arrival city/airport for ${stateCode}`}
-                          style={{ minWidth: 280, flex: "1 1 320px" }}
-                        />
+                        <div className="planner-autocomplete-shell" style={{ minWidth: 280, flex: "1 1 320px" }}>
+                          <input
+                            value={stateArrivalInputs[stateCode]?.arrivalLocation || ""}
+                            onChange={(event) => {
+                              updateStateArrivalInput(stateCode, { arrivalLocation: event.target.value });
+                              setActiveStateArrivalInput(stateCode);
+                            }}
+                            onFocus={() => setActiveStateArrivalInput(stateCode)}
+                            onBlur={() => {
+                              window.setTimeout(() => {
+                                setActiveStateArrivalInput((current) => (current === stateCode ? "" : current));
+                              }, 120);
+                            }}
+                            placeholder={`Arrival city/airport for ${stateCode}`}
+                          />
+                          {activeStateArrivalInput === stateCode ? (
+                            <div className="planner-autocomplete-list" role="listbox" aria-label={`Arrival suggestions for ${stateCode}`}>
+                              {stateArrivalSuggestionsLoading[stateCode] ? (
+                                <div className="planner-autocomplete-empty">Searching places...</div>
+                              ) : (stateArrivalSuggestions[stateCode] || []).length ? (
+                                (stateArrivalSuggestions[stateCode] || []).map((suggestion) => (
+                                  <button
+                                    type="button"
+                                    key={`${stateCode}-arrival-${suggestion.placeId || suggestion.label}`}
+                                    className="planner-autocomplete-option"
+                                    onMouseDown={(event) => event.preventDefault()}
+                                    onClick={() => applyStateArrivalSuggestion(stateCode, suggestion)}
+                                  >
+                                    {suggestion.label}
+                                  </button>
+                                ))
+                              ) : String(stateArrivalInputs[stateCode]?.arrivalLocation || "").trim().length >= 2 ? (
+                                <div className="planner-autocomplete-empty">No place options found.</div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
                         <input
                           type="datetime-local"
                           value={stateArrivalInputs[stateCode]?.arrivalTime || ""}
@@ -6197,9 +6873,9 @@ export default function BirdDogPage() {
                 ) : null}
               </div>
             ) : null}
-            <div className="panel" style={{ marginBottom: 0 }}>
+            <div className="panel planner-question" style={{ marginBottom: 0 }}>
               <div
-                className="row wrap"
+                className="row wrap planner-question-header"
                 style={{ alignItems: "center", justifyContent: "space-between", gap: 8, cursor: "pointer" }}
                 role="button"
                 tabIndex={0}
@@ -6215,7 +6891,7 @@ export default function BirdDogPage() {
                 <strong>3. Is your hotel booked?</strong>
                 <button
                   type="button"
-                  className="secondary"
+                  className="secondary planner-question-toggle"
                   onClick={(event) => {
                     event.stopPropagation();
                     setQuestionOpen((prev) => ({ ...prev, hotel: !prev.hotel }));
@@ -6225,7 +6901,7 @@ export default function BirdDogPage() {
                 </button>
               </div>
               {questionOpen.hotel ? (
-                <div style={{ marginTop: 8 }}>
+                <div className="planner-question-body" style={{ marginTop: 8 }}>
                   <select
                     value={hotelBooked}
                     onChange={(event) => {
@@ -6255,12 +6931,43 @@ export default function BirdDogPage() {
                       {requiredStateCodes.map((stateCode) => (
                         <div key={`hotel-${stateCode}`} className="row wrap" style={{ gap: 8, marginBottom: 8, alignItems: "center" }}>
                           <strong style={{ minWidth: 54 }}>{stateCode}</strong>
-                          <input
-                            value={stateHotelInputs[stateCode]?.hotelName || ""}
-                            onChange={(event) => updateStateHotelInput(stateCode, { hotelName: event.target.value })}
-                            placeholder={`Hotel name in ${stateCode}`}
-                            style={{ minWidth: 220, flex: "1 1 240px" }}
-                          />
+                          <div className="planner-autocomplete-shell" style={{ minWidth: 220, flex: "1 1 240px" }}>
+                            <input
+                              value={stateHotelInputs[stateCode]?.hotelName || ""}
+                              onChange={(event) => {
+                                updateStateHotelInput(stateCode, { hotelName: event.target.value });
+                                setActiveStateHotelInput(stateCode);
+                              }}
+                              onFocus={() => setActiveStateHotelInput(stateCode)}
+                              onBlur={() => {
+                                window.setTimeout(() => {
+                                  setActiveStateHotelInput((current) => (current === stateCode ? "" : current));
+                                }, 120);
+                              }}
+                              placeholder={`Hotel name in ${stateCode}`}
+                            />
+                            {activeStateHotelInput === stateCode ? (
+                              <div className="planner-autocomplete-list" role="listbox" aria-label={`Hotel suggestions for ${stateCode}`}>
+                                {stateHotelNameSuggestionsLoading[stateCode] ? (
+                                  <div className="planner-autocomplete-empty">Searching hotels...</div>
+                                ) : (stateHotelNameSuggestions[stateCode] || []).length ? (
+                                  (stateHotelNameSuggestions[stateCode] || []).map((suggestion) => (
+                                    <button
+                                      type="button"
+                                      key={`${stateCode}-hotel-${suggestion.placeId || suggestion.label}`}
+                                      className="planner-autocomplete-option"
+                                      onMouseDown={(event) => event.preventDefault()}
+                                      onClick={() => applyStateHotelSuggestion(stateCode, suggestion)}
+                                    >
+                                      {suggestion.label}
+                                    </button>
+                                  ))
+                                ) : String(stateHotelInputs[stateCode]?.hotelName || "").trim().length >= 2 ? (
+                                  <div className="planner-autocomplete-empty">No hotel options found.</div>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
                           <input
                             type="datetime-local"
                             value={stateHotelInputs[stateCode]?.checkIn || ""}
@@ -6274,17 +6981,51 @@ export default function BirdDogPage() {
                         </div>
                       ))}
                     </div>
-                  ) : null}
+                  ) : (
+                    <div className="hotel-suggestion-panel" style={{ marginTop: 10 }}>
+                      <p className="muted hotel-suggestion-intro" style={{ marginTop: 0, marginBottom: 8 }}>
+                        Not booked yet? We can suggest nearby stays based on {hotelSuggestionDestination || "event location"}.
+                      </p>
+                      {hotelSuggestions.length ? (
+                        <div className="hotel-suggestion-list">
+                          {hotelSuggestions.slice(0, 4).map((hotel) => (
+                            <article key={`${hotel.placeId || hotel.name}:${hotel.address}`} className="hotel-suggestion-card">
+                              <div>
+                                <strong>{hotel.name}</strong>
+                                {hotel.address ? <p className="muted">{hotel.address}</p> : null}
+                              </div>
+                              <div className="hotel-suggestion-actions">
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  onClick={() => applyHotelSuggestion(hotel)}
+                                >
+                                  Use This Stay
+                                </button>
+                                <a href={mapsSearchUrlForHotel(hotel)} target="_blank" rel="noreferrer">
+                                  Open in Maps
+                                </a>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="muted" style={{ margin: 0 }}>
+                          Nearby stays will appear once arrival city/destination is available.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : null}
             </div>
           </div>
-          {hotelBooked === "yes" && scheduleForm.hotelName ? (
+          {scheduleForm.hotelName ? (
             <p className="muted" style={{ marginTop: 0 }}>
               Recommended hotel: {scheduleForm.hotelName}
             </p>
           ) : null}
-          <div className="table-wrap" style={{ marginTop: 6 }}>
+          <div className="table-wrap planner-table-wrap" style={{ marginTop: 6 }}>
             <table className="roster-table planner-player-table">
               <thead>
                 <tr>
@@ -6344,7 +7085,7 @@ export default function BirdDogPage() {
           <div style={{ marginTop: 10 }}>
             <h4 style={{ marginTop: 0, marginBottom: 6 }}>Coach Schedule Preview</h4>
             {myGeneratedPlan.length ? (
-              <div className="table-wrap">
+              <div className="table-wrap planner-table-wrap">
                 <table className="roster-table planner-preview-table">
                   <thead>
                     <tr>

@@ -9,7 +9,7 @@ import {
   generateMfaCode,
   hashSecret,
   isAdminLogin,
-  isUniversityEmail,
+  isSupportedScoutEmail,
   normalizeEmail,
   readPendingMfaFromRequest,
   readTrustedAuthFromRequest,
@@ -38,9 +38,18 @@ function normalizeCountryCallingCode(value: unknown) {
   return String(value || "").replace(/[^\d]/g, "").trim();
 }
 
+function normalizeProfileText(value: unknown) {
+  return String(value || "").trim();
+}
+
 function buildUser(input: {
   name: string;
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
   email: string;
+  state?: string;
+  country?: string;
   isAdmin?: boolean;
   authMethod?: SessionUser["authMethod"];
   gender?: GenderValue;
@@ -51,12 +60,17 @@ function buildUser(input: {
   return {
     userId: input.isAdmin ? adminUserIdFromEmail(input.email) : `u_${Buffer.from(input.email).toString("base64url")}`,
     name: input.name,
+    firstName: input.firstName || "",
+    middleName: input.middleName || "",
+    lastName: input.lastName || "",
     email: input.email,
     orgId: input.isAdmin ? "admin" : org.orgId,
     orgName: input.isAdmin ? "Apoint Scout Admin" : org.name,
     orgPrimary: org.primary,
     orgAccent: org.accent,
     orgLogoUrl: org.logoUrl || "",
+    state: input.state || "",
+    country: input.country || "",
     isAdmin: Boolean(input.isAdmin),
     authMethod: input.authMethod,
     gender: input.gender || "UNSPECIFIED",
@@ -96,6 +110,13 @@ export async function POST(req: NextRequest) {
   const biometricOnly = Boolean(body?.biometric);
 
   const name = String(body?.name || "").trim() || "Scout User";
+  const firstName = normalizeProfileText(body?.firstName);
+  const middleName = normalizeProfileText(body?.middleName);
+  const lastName = normalizeProfileText(body?.lastName);
+  const state = normalizeProfileText(body?.state);
+  const country = normalizeProfileText(body?.country);
+  const composedName = [firstName, middleName, lastName].filter(Boolean).join(" ").trim();
+  const displayName = composedName || name || "Scout User";
   const email = normalizeEmail(String(body?.email || ""));
   const password = String(body?.password || "");
   const mfaCode = String(body?.mfaCode || "").trim();
@@ -103,14 +124,17 @@ export async function POST(req: NextRequest) {
   const phone = normalizePhone(body?.phone);
   const countryCallingCode = normalizeCountryCallingCode(body?.countryCallingCode || "1");
 
-  if (!email.includes("@")) {
+  if (!isSupportedScoutEmail(email)) {
     return NextResponse.json({ error: "Valid email is required." }, { status: 400 });
   }
 
   if (isPrivilegedAdminEmail(email)) {
     if (isAdminLogin(email, password)) {
       const adminUser = buildUser({
-        name: name || "Admin",
+        name: displayName || "Admin",
+        firstName,
+        middleName,
+        lastName,
         email,
         isAdmin: true,
         authMethod: "admin"
@@ -120,16 +144,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid admin credentials." }, { status: 401 });
   }
 
-  if (!isUniversityEmail(email)) {
-    return NextResponse.json({ error: "Only university email addresses can be used to create and access scout accounts." }, { status: 400 });
-  }
-
   const trusted = readTrustedAuthFromRequest(req);
   if (biometricOnly) {
     if (trusted && trusted.email === email) {
       const user = buildUser({
-        name,
+        name: trusted.name || displayName,
+        firstName: trusted.firstName || firstName,
+        middleName: trusted.middleName || middleName,
+        lastName: trusted.lastName || lastName,
         email,
+        state: trusted.state || state,
+        country: trusted.country || country,
         authMethod: "passkey",
         gender: trusted.gender,
         phone: trusted.phone,
@@ -148,8 +173,13 @@ export async function POST(req: NextRequest) {
 
   if (trusted && trusted.email === email && trusted.passwordHash === passwordHash && mode !== "verify") {
     const user = buildUser({
-      name,
+      name: trusted.name || displayName,
+      firstName: trusted.firstName || firstName,
+      middleName: trusted.middleName || middleName,
+      lastName: trusted.lastName || lastName,
       email,
+      state: trusted.state || state,
+      country: trusted.country || country,
       authMethod: "password",
       gender: trusted.gender,
       phone: trusted.phone,
@@ -165,6 +195,20 @@ export async function POST(req: NextRequest) {
   }
 
   if (mode !== "verify") {
+    if (authIntent === "signup") {
+      if (!firstName) {
+        return NextResponse.json({ error: "First name is required for sign up." }, { status: 400 });
+      }
+      if (!lastName) {
+        return NextResponse.json({ error: "Last name is required for sign up." }, { status: 400 });
+      }
+      if (!state) {
+        return NextResponse.json({ error: "State is required for sign up." }, { status: 400 });
+      }
+      if (!country) {
+        return NextResponse.json({ error: "Country is required for sign up." }, { status: 400 });
+      }
+    }
     if (!countryCallingCode || countryCallingCode.length < 1 || countryCallingCode.length > 4) {
       return NextResponse.json({ error: "Enter a valid country code like 1 or 91." }, { status: 400 });
     }
@@ -176,7 +220,12 @@ export async function POST(req: NextRequest) {
   if (mode !== "verify") {
     const nextMfaCode = generateMfaCode();
     const pendingToken = buildPendingMfaToken({
-      name,
+      name: displayName,
+      firstName,
+      middleName,
+      lastName,
+      state,
+      country,
       email,
       passwordHash,
       codeHash: hashSecret(nextMfaCode),
@@ -198,12 +247,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         ok: true,
         mfaRequired: true,
-        message: "A verification code has been sent to your university email."
+        message: "A verification code has been sent to your email."
       }, { status: 202 });
     }
 
     return NextResponse.json({
-      error: "We could not send the MFA code to your university email right now. Please try again."
+      error: "We could not send the MFA code to your email right now. Please try again."
     }, { status: 503 });
   }
 
@@ -224,6 +273,12 @@ export async function POST(req: NextRequest) {
   await clearPendingMfaCookie();
   await setTrustedAuthCookie(buildTrustedAuthToken({
     email,
+    name: pending.name || displayName,
+    firstName: pending.firstName || firstName,
+    middleName: pending.middleName || middleName,
+    lastName: pending.lastName || lastName,
+    state: pending.state || state,
+    country: pending.country || country,
     passwordHash,
     gender: pending.gender || "UNSPECIFIED",
     phone: pending.phone || "",
@@ -231,8 +286,13 @@ export async function POST(req: NextRequest) {
   }));
 
   const user = buildUser({
-    name: pending.name || name,
+    name: pending.name || displayName,
+    firstName: pending.firstName || firstName,
+    middleName: pending.middleName || middleName,
+    lastName: pending.lastName || lastName,
     email,
+    state: pending.state || state,
+    country: pending.country || country,
     authMethod: "password_mfa",
     gender: pending.gender || "UNSPECIFIED",
     phone: pending.phone || "",
