@@ -1178,6 +1178,43 @@ function normalizeSmartSearch(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function smartSearchFallbackTeamId(name: string, teamId?: string) {
+  const explicitId = String(teamId || "").trim();
+  if (explicitId) return explicitId;
+  const normalizedName = normalizeSmartSearch(name);
+  if (!normalizedName) return "";
+  return `smart-team-${normalizedName.replace(/\s+/g, "-")}`;
+}
+
+function smartSearchTeamCacheKey(input: { id?: string; name?: string; href?: string }) {
+  const id = String(input.id || "").trim().toLowerCase();
+  if (id) return `id:${id}`;
+  const href = String(input.href || "").trim().toLowerCase();
+  if (href) return `href:${href}`;
+  const normalizedName = normalizeSmartSearch(String(input.name || ""));
+  if (normalizedName) return `name:${normalizedName}`;
+  return "";
+}
+
+function buildSmartSearchFallbackTeamRef(
+  teamName: string,
+  teamId?: string,
+  teamHref?: string
+): TeamRef | null {
+  const cleanedName = String(teamName || "").trim();
+  if (!cleanedName || isRosterPlaceholderTeamName(cleanedName)) return null;
+  const id = smartSearchFallbackTeamId(cleanedName, teamId);
+  if (!id && !String(teamHref || "").trim()) return null;
+  const href = String(teamHref || "").trim();
+  const stableFallbackId = id || `smart-team-${encodeURIComponent(cleanedName.toLowerCase())}`;
+  return {
+    id: stableFallbackId,
+    name: cleanedName,
+    from: "",
+    href: href || undefined
+  };
+}
+
 function teamNameTokens(value: string) {
   const generic = new Set([
     "team",
@@ -2179,6 +2216,43 @@ export default function BirdDogPage() {
     });
     return map;
   }, [selectedTournamentTeams]);
+  const scheduleSearchFallbackTeams = useMemo(() => {
+    const list: TeamRef[] = [];
+    const seen = new Set<string>();
+    const add = (team: TeamRef | null | undefined) => {
+      if (!team) return;
+      const key = smartSearchTeamCacheKey(team);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      list.push(team);
+    };
+
+    selectedTournamentTeams.forEach((team) => add(team));
+    tournamentScheduleGroups.forEach((group) => {
+      group.rows.forEach((row) => {
+        const homeTeam = (
+          (row.homeTeamId ? teamsById.get(String(row.homeTeamId || "").trim().toLowerCase()) : undefined)
+          || (row.homeTeamHref ? teamsByHref.get(String(row.homeTeamHref || "").trim().toLowerCase()) : undefined)
+          || teamsByNormalizedName.get(normalizeSmartSearch(row.homeTeam))
+          || buildSmartSearchFallbackTeamRef(row.homeTeam, row.homeTeamId, row.homeTeamHref)
+        );
+        const awayTeam = (
+          (row.awayTeamId ? teamsById.get(String(row.awayTeamId || "").trim().toLowerCase()) : undefined)
+          || (row.awayTeamHref ? teamsByHref.get(String(row.awayTeamHref || "").trim().toLowerCase()) : undefined)
+          || teamsByNormalizedName.get(normalizeSmartSearch(row.awayTeam))
+          || buildSmartSearchFallbackTeamRef(row.awayTeam, row.awayTeamId, row.awayTeamHref)
+        );
+        add(homeTeam);
+        add(awayTeam);
+      });
+    });
+
+    return list;
+  }, [selectedTournamentTeams, teamsByHref, teamsById, teamsByNormalizedName, tournamentScheduleGroups]);
+  const scheduleSearchFallbackTeamsScopeKey = useMemo(
+    () => scheduleSearchFallbackTeams.map((team) => smartSearchTeamCacheKey(team)).join("|"),
+    [scheduleSearchFallbackTeams]
+  );
 
   const [watchlist, setWatchlist] = useState<string[]>([]);
   const watchlistSet = useMemo(() => new Set(watchlist), [watchlist]);
@@ -2637,7 +2711,7 @@ export default function BirdDogPage() {
       setScheduleSearchLoading(false);
       return;
     }
-    const cacheKey = `${selectedInventorySlug}:${selectedTournamentId}:${selectedTournamentTeams.length}:${normalizedQuery}`;
+    const cacheKey = `${selectedInventorySlug}:${selectedTournamentId}:${scheduleSearchFallbackTeamsScopeKey}:${normalizedQuery}`;
     const cached = schedulePlayerTeamQueryCacheRef.current.get(cacheKey);
     if (cached) {
       setScheduleSearchPlayerTeamIds(cached.teamIds);
@@ -2663,12 +2737,12 @@ export default function BirdDogPage() {
         const matchedTeamNames = Array.from(new Set(
           matched.map((row) => String(row.teamName || "").trim()).filter(Boolean)
         ));
-        if (!matchedTeamIds.length && normalizedQuery.length >= 3 && selectedTournamentTeams.length) {
+        if (!matchedTeamIds.length && normalizedQuery.length >= 3 && scheduleSearchFallbackTeams.length) {
           const fallbackTeamIds = new Set(matchedTeamIds.map((value) => String(value || "").trim()).filter(Boolean));
           const fallbackTeamNames = new Set(matchedTeamNames.map((value) => String(value || "").trim()).filter(Boolean));
           const chunkSize = 14;
-          for (let start = 0; start < selectedTournamentTeams.length; start += chunkSize) {
-            const chunk = selectedTournamentTeams.slice(start, start + chunkSize);
+          for (let start = 0; start < scheduleSearchFallbackTeams.length; start += chunkSize) {
+            const chunk = scheduleSearchFallbackTeams.slice(start, start + chunkSize);
             const loaded = await Promise.all(chunk.map(async (team) => ({
               team,
               roster: await loadRosterForSmartSearch(team).catch(() => [])
@@ -2709,7 +2783,13 @@ export default function BirdDogPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedInventorySlug, selectedTournamentId, selectedTournamentTeams.length, teamsSearchQuery]);
+  }, [
+    scheduleSearchFallbackTeams,
+    scheduleSearchFallbackTeamsScopeKey,
+    selectedInventorySlug,
+    selectedTournamentId,
+    teamsSearchQuery
+  ]);
 
   useEffect(() => {
     const merged = readTeamRosterCartCanonical();
@@ -3151,7 +3231,7 @@ export default function BirdDogPage() {
     preferredTournamentId?: string
   ) {
     const preferred = String(preferredTournamentId || "").trim();
-    if (preferred && nextTournaments.some((item) => item.id === preferred)) {
+    if (preferred) {
       return preferred;
     }
 
@@ -3192,7 +3272,17 @@ export default function BirdDogPage() {
       if (!isCurrentMutation()) return;
       setSelectedTournamentId(nextTournamentId);
       if (nextTournamentId) {
-        await loadTournamentDetails(nextCompany, nextTournamentId, forceRefresh, mutationSeq);
+        const loaded = await loadTournamentDetails(nextCompany, nextTournamentId, forceRefresh, mutationSeq);
+        if (!loaded && String(preferredTournamentId || "").trim()) {
+          const fallbackTournamentId = chooseTournamentIdForCompanyLoad(nextCompany, nextTournaments, "");
+          if (fallbackTournamentId && fallbackTournamentId !== nextTournamentId) {
+            if (!isCurrentMutation()) return;
+            setSelectedTournamentId(fallbackTournamentId);
+            await loadTournamentDetails(nextCompany, fallbackTournamentId, forceRefresh, mutationSeq);
+          } else if (!fallbackTournamentId) {
+            setSelectedGameId("");
+          }
+        }
       } else {
         setSelectedGameId("");
       }
@@ -4087,16 +4177,28 @@ export default function BirdDogPage() {
       field?: string;
     }
   ) {
+    const currentSearch = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
+    const returnInventorySlug = String(
+      selectedInventorySlug
+      || currentSearch.get("inventorySlug")
+      || ""
+    ).trim();
+    const returnTournamentId = String(
+      selectedTournamentId
+      || currentSearch.get("tournamentId")
+      || ""
+    ).trim();
+
     const params = new URLSearchParams();
-    params.set("inventorySlug", selectedInventorySlug);
+    params.set("inventorySlug", returnInventorySlug);
     params.set("teamId", team.id);
     params.set("teamName", team.name);
     params.set("teamUrl", team.href || "");
     params.set("eventId", currentEventNumber());
     params.set("tournamentName", selectedTournament?.name || tournamentViewTitle || "");
     params.set("returnTab", returnTab);
-    params.set("returnInventorySlug", selectedInventorySlug);
-    params.set("returnTournamentId", selectedTournamentId);
+    params.set("returnInventorySlug", returnInventorySlug);
+    params.set("returnTournamentId", returnTournamentId);
     params.set("returnCompany", company);
     params.set("teamView", teamView);
     if (gameContext?.gameId) params.set("sourceGameId", gameContext.gameId);
@@ -4174,33 +4276,41 @@ export default function BirdDogPage() {
   }
 
   async function loadRosterForSmartSearch(team: TeamRef): Promise<TeamRosterSearchRow[]> {
-    const cached = teamRosterSearchCacheRef.current.get(team.id);
+    const cacheKey = smartSearchTeamCacheKey(team) || smartSearchFallbackTeamId(team.name, team.id);
+    const cached = teamRosterSearchCacheRef.current.get(cacheKey);
     if (cached) return cached;
-    const res = await fetch("/api/harvest/team", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        inventorySlug: selectedInventorySlug,
-        teamId: team.id,
-        teamUrl: team.href || "",
-        teamName: team.name,
-        tournamentName: selectedTournament?.name || tournamentViewTitle || "",
-        eventId: currentEventNumber(),
-        tournamentId: selectedTournamentId,
-        searchOnly: true
-      })
-    });
-    if (!res.ok) return [];
-    const data = await res.json().catch(() => ({}));
-    const roster = Array.isArray(data?.roster) ? data.roster as Array<Record<string, unknown>> : [];
-    const normalized = roster
-      .map((row) => ({
-        no: String(row?.no || ""),
-        name: String(row?.name || ""),
-        hometown: String(row?.hometown || team.from || "")
-      }))
-      .filter((row) => row.name.trim().length > 1);
-    teamRosterSearchCacheRef.current.set(team.id, normalized);
+    const runFetch = async (searchOnly: boolean) => {
+      const res = await fetch("/api/harvest/team", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inventorySlug: selectedInventorySlug,
+          teamId: smartSearchFallbackTeamId(team.name, team.id),
+          teamUrl: team.href || "",
+          teamName: team.name,
+          tournamentName: selectedTournament?.name || tournamentViewTitle || "",
+          eventId: currentEventNumber(),
+          tournamentId: selectedTournamentId,
+          searchOnly
+        })
+      });
+      if (!res.ok) return [] as TeamRosterSearchRow[];
+      const data = await res.json().catch(() => ({}));
+      const roster = Array.isArray(data?.roster) ? data.roster as Array<Record<string, unknown>> : [];
+      return roster
+        .map((row) => ({
+          no: String(row?.no || ""),
+          name: String(row?.name || ""),
+          hometown: String(row?.hometown || team.from || "")
+        }))
+        .filter((row) => row.name.trim().length > 1);
+    };
+
+    let normalized = await runFetch(true);
+    if (!normalized.length) {
+      normalized = await runFetch(false);
+    }
+    teamRosterSearchCacheRef.current.set(cacheKey, normalized);
     return normalized;
   }
 

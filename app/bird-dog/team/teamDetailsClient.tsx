@@ -1433,13 +1433,23 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   }
 
   function openAppTab(tab: "tournaments" | "notes" | "myPlayersSchedule" | "profile") {
+    const currentSearch = new URLSearchParams(window.location.search);
     const nextParams = new URLSearchParams();
     nextParams.set("tab", tab);
-    if (initialParams.returnInventorySlug || initialParams.inventorySlug) {
-      nextParams.set("inventorySlug", initialParams.returnInventorySlug || initialParams.inventorySlug);
+    const nextInventory = initialParams.returnInventorySlug
+      || initialParams.inventorySlug
+      || currentSearch.get("returnInventorySlug")
+      || currentSearch.get("inventorySlug")
+      || "";
+    if (nextInventory) {
+      nextParams.set("inventorySlug", nextInventory);
     }
-    if (initialParams.returnTournamentId) {
-      nextParams.set("tournamentId", initialParams.returnTournamentId);
+    const nextTournament = initialParams.returnTournamentId
+      || currentSearch.get("returnTournamentId")
+      || currentSearch.get("tournamentId")
+      || "";
+    if (nextTournament) {
+      nextParams.set("tournamentId", nextTournament);
     }
     const nextCompany = resolveReturnCompany();
     if (nextCompany) {
