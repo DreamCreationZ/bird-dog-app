@@ -826,7 +826,8 @@ function parseTeamRosterFromHtml(html: string): PgTeamRosterRow[] {
     if (!cellsRaw.length) continue;
     const cells = cellsRaw.map((cell) => cleanCellWithBreaks(cell));
     const rawNo = cells[noIdx >= 0 ? noIdx : 0] || "";
-    if (!/^\d+$/.test(rawNo.trim())) continue;
+    const normalizedNo = rawNo.trim();
+    if (normalizedNo && !/^\d+$/.test(normalizedNo)) continue;
     const rawNameCell = cellsRaw[nameIdx >= 0 ? nameIdx : 1] || "";
     const nameParts = splitCellLines(rawNameCell);
     const fallbackNameCell = cells[nameIdx >= 0 ? nameIdx : 1] || "";
@@ -843,7 +844,7 @@ function parseTeamRosterFromHtml(html: string): PgTeamRosterRow[] {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({
-      no: rawNo,
+      no: normalizedNo,
       name,
       position: nameParts[1] || inlinePosition || "",
       height: (htIdx >= 0 ? cells[htIdx] : "") || "",

@@ -2044,16 +2044,24 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
     setPlannerStatus("Final player cart cleared.");
   }
 
-  function createScheduleFromRosterSelection() {
+  function navigateToPlayersScheduleFromRoster(input?: { announceDuplicates?: boolean }) {
     let nextCart = crossTeamCartPlayers;
     if (selectedBestPlayerRows.length) {
-      nextCart = mergeRosterSelectionsIntoFinalCart(selectedBestPlayerRows, false);
+      nextCart = mergeRosterSelectionsIntoFinalCart(selectedBestPlayerRows, Boolean(input?.announceDuplicates));
     }
     if (!nextCart.length) {
       setPlannerStatus("Select at least one player, then create schedule.");
       return;
     }
     goToCoachScheduleTab();
+  }
+
+  function createScheduleFromRosterSelection() {
+    navigateToPlayersScheduleFromRoster({ announceDuplicates: false });
+  }
+
+  function goToPlayersScheduleFromTeamRoster() {
+    navigateToPlayersScheduleFromRoster({ announceDuplicates: true });
   }
 
   function goToTournamentRosterSelection() {
@@ -2940,6 +2948,13 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
             </button>
             <button type="button" onClick={addSelectedPlayersToCart} disabled={!selectedPlayers.length}>
               Add Selected To Final Cart
+            </button>
+            <button
+              type="button"
+              onClick={goToPlayersScheduleFromTeamRoster}
+              disabled={!selectedPlayers.length && !crossTeamCartPlayers.length}
+            >
+              Go To My Players & Schedule
             </button>
             <button type="button" className="secondary" onClick={clearCrossTeamCart} disabled={!crossTeamCartPlayers.length}>
               Clear Final Cart
