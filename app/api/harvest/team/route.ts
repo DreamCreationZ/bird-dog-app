@@ -1060,7 +1060,7 @@ export async function POST(req: NextRequest) {
               return NextResponse.json({
                 ok: true,
                 source: "pbr_live_team_schedule",
-                schedule: livePbr.schedule.length ? livePbr.schedule : schedule,
+                schedule: schedule.length ? schedule : livePbr.schedule,
                 roster: Array.from(mergedRosterMap.values()),
                 teamUrl: livePbr.teamUrl || eventHint
               });
@@ -1113,7 +1113,7 @@ export async function POST(req: NextRequest) {
               return NextResponse.json({
                 ok: true,
                 source: importedReady ? "imported_plus_pg_live" : "pg_live_fallback",
-                schedule: live.schedule.length ? live.schedule : schedule,
+                schedule: schedule.length ? schedule : live.schedule,
                 roster: Array.from(mergedRosterMap.values()),
                 teamUrl: fallbackTeamUrl
               });

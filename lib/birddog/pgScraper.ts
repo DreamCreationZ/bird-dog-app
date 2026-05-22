@@ -186,6 +186,21 @@ function teamNameMatches(a: string, b: string) {
   return na === nb || na.includes(nb) || nb.includes(na);
 }
 
+function looksLikeVenueLabel(value: string) {
+  const v = cleanText(value).toLowerCase();
+  if (!v) return false;
+  if (/^field\s*\d+$/i.test(v)) return true;
+  return /little league|complex|park|field|stadium|academy|facility|ballpark|sportsplex|athletic|baseball|softball|, [a-z]{2}\b| - [a-z]{2}\b/.test(v);
+}
+
+function isLikelyScheduleTeamLabel(value: string) {
+  const v = cleanText(value);
+  if (!v || v.length < 2) return false;
+  if (looksLikeVenueLabel(v)) return false;
+  if (/seed\s+\d+|winner of game|loser of game|tbd/i.test(v)) return true;
+  return !/visit team page|game recap|probable pitchers|diamondkast|final|standings|roster|results|bracket|schedule|leaders|top performers|login|sign in|register|account/i.test(v);
+}
+
 function findFirstEventUrl(html: string) {
   const links = [...html.matchAll(/href=["']([^"']+)["']/gi)].map((m) => m[1]);
   const eventHref = links.find((href) =>
@@ -580,8 +595,12 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
   };
 }
 
-function parseTeamScheduleFromHtml(html: string): ParsedTeamScheduleRow[] {
+function parseTeamScheduleFromHtml(
+  html: string,
+  options?: { teamName?: string }
+): ParsedTeamScheduleRow[] {
   const out: ParsedTeamScheduleRow[] = [];
+  const selectedTeam = cleanText(options?.teamName || "");
   const blocks = html.split(/(?=Gm#\s*\d+)/gi).slice(0, 80);
 
   for (const block of blocks) {
@@ -589,18 +608,59 @@ function parseTeamScheduleFromHtml(html: string): ParsedTeamScheduleRow[] {
     if (!gm) continue;
     const date = block.match(/\b(\d{1,2}\/\d{1,2}\/\d{4})\b/i)?.[1] || "";
     const time = block.match(/\b(\d{1,2}:\d{2}\s*(?:AM|PM))\b/i)?.[1] || "";
-    const field = cleanText(block.match(/(?:Field\s+\d+\s*@\s*|Baseball\s*@\s*)([^<\n]+)/i)?.[0] || "");
-    const teamNames = [...block.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/gi)]
+    const explicitHome = cleanText(
+      block.match(/hlHomeTeam(?:Name)?[^>]*>([\s\S]*?)<\/a>/i)?.[1]
+      || block.match(/hlVisitorTeam(?:Name)?[^>]*>([\s\S]*?)<\/a>/i)?.[1]
+      || ""
+    );
+    const explicitAway = cleanText(
+      block.match(/hlAwayTeam(?:Name)?[^>]*>([\s\S]*?)<\/a>/i)?.[1]
+      || block.match(/hlOpponent(?:Name)?[^>]*>([\s\S]*?)<\/a>/i)?.[1]
+      || ""
+    );
+    const linkTexts = [...block.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/gi)]
       .map((m) => cleanText(m[1]))
-      .filter((name) =>
-        name
-        && name.length > 2
-        && !/visit team page|game recap|probable pitchers|diamondkast|final/i.test(name)
-      );
+      .filter(Boolean);
+    const venueFromLink = linkTexts.find((name) => looksLikeVenueLabel(name)) || "";
+    const field = cleanText(
+      block.match(/(?:Field\s*\d+\s*@\s*|Baseball\s*@\s*|Softball\s*@\s*|Stadium\s*@\s*)([^<\n]+)/i)?.[0]
+      || ""
+    ) || venueFromLink;
+    const teamNames = [explicitHome, explicitAway, ...linkTexts]
+      .map((name) => cleanText(name))
+      .filter((name) => isLikelyScheduleTeamLabel(name));
     const uniqueTeams: string[] = [];
     for (const name of teamNames) {
       if (!uniqueTeams.includes(name)) uniqueTeams.push(name);
       if (uniqueTeams.length >= 2) break;
+    }
+    if (uniqueTeams[0] && looksLikeVenueLabel(uniqueTeams[0])) {
+      uniqueTeams.shift();
+    }
+    if (selectedTeam && !uniqueTeams.some((name) => teamNameMatches(name, selectedTeam))) {
+      if (uniqueTeams.length >= 2) {
+        if (!teamNameMatches(uniqueTeams[0], selectedTeam) && !teamNameMatches(uniqueTeams[1], selectedTeam)) {
+          uniqueTeams[0] = selectedTeam;
+        }
+      } else {
+        uniqueTeams.unshift(selectedTeam);
+      }
+    }
+    if (uniqueTeams.length < 2) {
+      const fallbackVs = cleanText(block).match(/(.+?)\s+vs\.?\s+(.+?)(?:\s+\d{1,2}:\d{2}\s*(?:AM|PM)|$)/i);
+      if (fallbackVs) {
+        const first = cleanText(fallbackVs[1] || "");
+        const second = cleanText(fallbackVs[2] || "");
+        [first, second].forEach((candidate) => {
+          if (!isLikelyScheduleTeamLabel(candidate)) return;
+          if (!uniqueTeams.some((name) => teamNameMatches(name, candidate))) {
+            uniqueTeams.push(candidate);
+          }
+        });
+      }
+    }
+    if (uniqueTeams.length < 2 && selectedTeam && !uniqueTeams.some((name) => teamNameMatches(name, selectedTeam))) {
+      uniqueTeams.unshift(selectedTeam);
     }
 
     const recapUrl = block.match(/href=["']([^"']*GameRecap\.aspx[^"']*)["']/i)?.[1];
@@ -609,8 +669,8 @@ function parseTeamScheduleFromHtml(html: string): ParsedTeamScheduleRow[] {
       date,
       time,
       field: field || "Field TBD",
-      homeTeam: uniqueTeams[0] || "Team A",
-      awayTeam: uniqueTeams[1] || "Team B",
+      homeTeam: uniqueTeams[0] || selectedTeam || "Team A",
+      awayTeam: uniqueTeams[1] || "TBD",
       recapUrl: recapUrl ? toAbsolutePgUrl(recapUrl) : ""
     });
   }
@@ -665,7 +725,7 @@ function parseNestedTeamScheduleFromHtml(
     const date = mm && day && year ? `${mm}/${String(Number(day))}/${year}` : monthDay;
 
     const homeAway = cleanText(row.match(/lblHomeAway"[^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
-    const opponent = cleanText(row.match(/hlOpponentName"[^>]*>([\s\S]*?)<\/a>/i)?.[1] || "");
+    const opponentRaw = cleanText(row.match(/hlOpponentName"[^>]*>([\s\S]*?)<\/a>/i)?.[1] || "");
     const fieldPrefix = cleanText(row.match(/lblField"[^>]*>([\s\S]*?)<\/span>/i)?.[1] || "");
     const ballpark = cleanText(
       row.match(/(?:hlBallpark|hlBallPark|hlFacility|hlLocation)"[^>]*>([\s\S]*?)<\/a>/i)?.[1]
@@ -676,16 +736,21 @@ function parseNestedTeamScheduleFromHtml(
     const recapRaw = row.match(/href=["']([^"']*GameRecap\.aspx[^"']*)["']/i)?.[1] || "";
     const time = cleanText(row.match(/(?:\b\d{1,2}:\d{2}\s*(?:AM|PM)\b)/i)?.[0] || "");
 
-    if (!opponent && !gameNo) continue;
-    const homeTeam = homeAway.includes("@") ? (opponent || "Team A") : (teamName || "Team A");
-    const awayTeam = homeAway.includes("@") ? (teamName || "Team B") : (opponent || "Team B");
     const linkTexts = [...row.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/gi)]
       .map((m) => cleanText(m[1]))
       .filter(Boolean);
+    const opponentFromLinks = linkTexts.find((txt) =>
+      isLikelyScheduleTeamLabel(txt)
+      && !teamNameMatches(txt, teamName || "")
+      && !looksLikeVenueLabel(txt)
+    ) || "";
+    const opponent = !looksLikeVenueLabel(opponentRaw) ? opponentRaw : opponentFromLinks;
+    if (!opponent && !gameNo) continue;
+    const homeTeam = homeAway.includes("@") ? (opponent || "Team A") : (teamName || "Team A");
+    const awayTeam = homeAway.includes("@") ? (teamName || "Team B") : (opponent || "Team B");
     const fallbackVenue = linkTexts.find((txt) =>
       !teamNameMatches(txt, teamName || "")
-      && !/probable pitchers|standings|roster|results|bracket|schedule|leaders|top performers|game recap|diamondkast/i.test(txt)
-      && /high school|complex|park|facility|stadium|academy|field|, [A-Z]{2}\b| - [A-Z]{2}\b/i.test(txt)
+      && looksLikeVenueLabel(txt)
     ) || "";
     const venue = ballpark || fallbackVenue;
     let field = "Field TBD";
@@ -1011,7 +1076,7 @@ export async function scrapePgTeamLive(
         numericEvent = inferEventIdFromTeamHtml(html);
       }
       const nestedSchedule = parseNestedTeamScheduleFromHtml(html, options);
-      const classicSchedule = parseTeamScheduleFromHtml(html);
+      const classicSchedule = parseTeamScheduleFromHtml(html, options);
       const schedule = nestedSchedule.length ? nestedSchedule : classicSchedule;
       const roster = parseTeamRosterFromHtml(html);
       if (schedule.length > bestSchedule.length) {

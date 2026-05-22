@@ -198,7 +198,7 @@ function teamDetailsCacheKey(input: Props["initialParams"]) {
     input.teamName || "",
     input.eventId || ""
   ].join("|");
-  return `bird_dog:team_details:v6:${identity}`;
+  return `bird_dog:team_details:v7:${identity}`;
 }
 
 function parseTeamDetailsCacheEntry(raw: string): TeamDetailsCachePayload | null {
