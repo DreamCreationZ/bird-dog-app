@@ -351,15 +351,19 @@ async function buildTournamentGamesFromScoreboardPages(input: {
   const scheduleDates = extractScheduleDatesFromHtml(input.firstScheduleHtml)
     .map((value) => normalizeScheduleDateValue(value))
     .filter(Boolean);
-  const allDates = Array.from(new Set([currentDate, ...scheduleDates].filter(Boolean)));
+  const headingDate = normalizeScheduleDateValue(
+    input.firstScheduleHtml.match(/SCHEDULE\s*&\s*SCORES\s*FOR\s*([0-9/]+)/i)?.[1] || ""
+  );
+  const allDates = Array.from(new Set([currentDate, ...scheduleDates, headingDate].filter(Boolean)));
   if (!allDates.length) return [];
 
   const eventUrl = `https://www.perfectgame.org/events/TournamentSchedule.aspx?event=${input.eventNum}`;
   const pagesByDate = new Map<string, string>();
-  if (currentDate) {
+  const firstPageRows = parseEventScoreboardRows(input.firstScheduleHtml);
+  // Only trust the first page when we know which date it represents.
+  // Non-schedule PG pages can still contain mixed scoreboard markup.
+  if (currentDate && firstPageRows.length) {
     pagesByDate.set(currentDate, input.firstScheduleHtml);
-  } else {
-    pagesByDate.set(allDates[0], input.firstScheduleHtml);
   }
 
   for (const dateValue of allDates) {
@@ -795,13 +799,26 @@ function inferEventIdFromTeamHtml(html: string) {
 }
 
 function parseEventScoreboardRows(html: string): EventScoreboardRow[] {
+  const looksLikePlaceholderTeam = (value: string) => {
+    const team = cleanText(value || "");
+    if (!team) return true;
+    return /^seed\s*#?\d+/i.test(team)
+      || /^winner/i.test(team)
+      || /^loser/i.test(team)
+      || /\bTBD\b/i.test(team)
+      || /\bto be determined\b/i.test(team)
+      || /\bbye\b/i.test(team);
+  };
+
   const dedupeRows = (rows: EventScoreboardRow[]) => {
     const out: EventScoreboardRow[] = [];
     const seen = new Set<string>();
     const push = (row: EventScoreboardRow) => {
       if (!row.homeTeam || !row.awayTeam) return;
+      if (looksLikePlaceholderTeam(row.homeTeam) || looksLikePlaceholderTeam(row.awayTeam)) return;
       const key = [
         cleanText(row.time || ""),
+        cleanText(row.field || ""),
         normalizeTeam(row.homeTeam),
         normalizeTeam(row.awayTeam)
       ].join("|");
@@ -902,10 +919,11 @@ function parseEventScoreboardRows(html: string): EventScoreboardRow[] {
 
   const normalizedCardRows = dedupeRows(cardRows);
   const normalizedLegacyRows = dedupeRows(legacyRows);
-  if (normalizedCardRows.length && normalizedCardRows.length >= normalizedLegacyRows.length) {
+  // `repSchedule` rows reflect the selected day schedule and are the most reliable.
+  if (normalizedCardRows.length) {
     return normalizedCardRows;
   }
-  return dedupeRows([...normalizedLegacyRows, ...normalizedCardRows]);
+  return normalizedLegacyRows;
 }
 
 function extractScheduleDatesFromHtml(html: string): string[] {

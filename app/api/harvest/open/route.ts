@@ -677,6 +677,21 @@ async function buildPbrLiveTournament(input: {
   return tournament;
 }
 
+function canonicalizeTournamentForInventory(input: {
+  tournament: Tournament;
+  inventorySlug: string;
+  preferredName?: string;
+}) {
+  const canonicalId = cleanText(input.inventorySlug);
+  if (!canonicalId) return input.tournament;
+  const preferredName = cleanText(input.preferredName || "");
+  return {
+    ...input.tournament,
+    id: canonicalId,
+    name: preferredName || input.tournament.name
+  } as Tournament;
+}
+
 export async function POST(req: NextRequest) {
   const session = readSessionFromRequest(req);
   if (!session) {
@@ -745,16 +760,17 @@ export async function POST(req: NextRequest) {
     });
     const preferredTournamentName = selected?.name || seedMeta?.name || "";
 
-    const shouldRefreshImportedSnapshot = (existingTeamCount: number) => {
-      if (existingTeamCount === 0) return true;
-      if (company === "PG" && isArchive && existingTeamCount > 0 && existingTeamCount <= 120) return true;
-      return false;
-    };
+  const shouldRefreshImportedSnapshot = (existingTeamCount: number) => {
+    if (existingTeamCount === 0) return true;
+    if (company === "PG" && isArchive && existingTeamCount > 0 && existingTeamCount <= 120) return true;
+    return false;
+  };
+  const shouldForcePgLiveRefresh = company === "PG";
 
     const refreshFromLive = async (fallbackName: string) => {
       const preferredName = fallbackName || preferredTournamentName || (company === "PBR" ? "PBR Tournament" : "Perfect Game Tournament");
       try {
-        const liveTournament = company === "PBR"
+        const rawLiveTournament = company === "PBR"
           ? await buildPbrLiveTournament({
             inventorySlug,
             tournamentHint,
@@ -767,6 +783,13 @@ export async function POST(req: NextRequest) {
               company
             })
           );
+        const liveTournament = rawLiveTournament
+          ? canonicalizeTournamentForInventory({
+            tournament: rawLiveTournament,
+            inventorySlug,
+            preferredName
+          })
+          : null;
         if (!liveTournament) return null;
         if (!hasSupabaseConfig) {
           return liveTournament;
@@ -786,7 +809,14 @@ export async function POST(req: NextRequest) {
 
     const liveFirstPg = async () => {
       if (company !== "PG") return null as Tournament | null;
-      const liveTournament = await withTimeout(scrapePgTournamentLive(pgLiveHint), 22000);
+      const rawLiveTournament = await withTimeout(scrapePgTournamentLive(pgLiveHint), 22000);
+      const liveTournament = rawLiveTournament
+        ? canonicalizeTournamentForInventory({
+          tournament: rawLiveTournament,
+          inventorySlug,
+          preferredName: preferredTournamentName
+        })
+        : null;
       if (!liveTournament) return null;
       if (!hasSupabaseConfig) return liveTournament;
       const dbId = await upsertHarvestedTournament({
@@ -801,11 +831,18 @@ export async function POST(req: NextRequest) {
 
     const liveFirstPbr = async () => {
       if (company !== "PBR") return null as Tournament | null;
-      const liveTournament = await withTimeout(buildPbrLiveTournament({
+      const rawLiveTournament = await withTimeout(buildPbrLiveTournament({
         inventorySlug,
         tournamentHint,
         preferredName: selected?.name || seedMeta?.name || ""
       }), 22000);
+      const liveTournament = rawLiveTournament
+        ? canonicalizeTournamentForInventory({
+          tournament: rawLiveTournament,
+          inventorySlug,
+          preferredName: selected?.name || seedMeta?.name || ""
+        })
+        : null;
       if (!liveTournament) return null;
       if (!hasSupabaseConfig) return liveTournament;
       const dbId = await upsertHarvestedTournament({
@@ -849,13 +886,13 @@ export async function POST(req: NextRequest) {
         if (tournamentByExternal) {
           const existingTeamCount = teamCount(tournamentByExternal.teams);
           const existingGameCount = teamCount(tournamentByExternal.games);
-          if (shouldRefreshImportedSnapshot(existingTeamCount) || existingGameCount === 0) {
+          if (shouldForcePgLiveRefresh || shouldRefreshImportedSnapshot(existingTeamCount) || existingGameCount === 0) {
             const refreshedHydrated = await refreshFromLive(tournamentByExternal.name || preferredTournamentName);
             if (refreshedHydrated) {
               return NextResponse.json({
                 ok: true,
                 tournament: refreshedHydrated,
-                source: "archive_live_refresh_by_external_id"
+                source: shouldForcePgLiveRefresh ? "pg_live_refresh_by_external_id" : "archive_live_refresh_by_external_id"
               });
             }
           }
@@ -872,13 +909,13 @@ export async function POST(req: NextRequest) {
         if (tournamentById) {
           const existingTeamCount = teamCount(tournamentById.teams);
           const existingGameCount = teamCount(tournamentById.games);
-          if (shouldRefreshImportedSnapshot(existingTeamCount) || existingGameCount === 0) {
+          if (shouldForcePgLiveRefresh || shouldRefreshImportedSnapshot(existingTeamCount) || existingGameCount === 0) {
             const refreshedHydrated = await refreshFromLive(tournamentById.name || preferredTournamentName);
             if (refreshedHydrated) {
               return NextResponse.json({
                 ok: true,
                 tournament: refreshedHydrated,
-                source: "archive_live_refresh_by_id"
+                source: shouldForcePgLiveRefresh ? "pg_live_refresh_by_id" : "archive_live_refresh_by_id"
               });
             }
           }
@@ -903,8 +940,10 @@ export async function POST(req: NextRequest) {
         const found = wantedList
           .map((wanted) =>
             all.find((t) => normalize(t.name) === wanted)
-            || all.find((t) => normalize(t.name).includes(wanted))
-            || all.find((t) => wanted.includes(normalize(t.name)))
+            || (company === "PBR"
+              ? all.find((t) => normalize(t.name).includes(wanted))
+                || all.find((t) => wanted.includes(normalize(t.name)))
+              : null)
           )
           .find((item) => Boolean(item));
 
@@ -913,13 +952,13 @@ export async function POST(req: NextRequest) {
           const existingTournament = hydrated || found;
           const existingTeamCount = teamCount(existingTournament?.teams);
           const existingGameCount = teamCount(existingTournament?.games);
-          if (shouldRefreshImportedSnapshot(existingTeamCount) || existingGameCount === 0) {
+          if (shouldForcePgLiveRefresh || shouldRefreshImportedSnapshot(existingTeamCount) || existingGameCount === 0) {
             const refreshedHydrated = await refreshFromLive(found.name || preferredTournamentName);
             if (refreshedHydrated) {
               return NextResponse.json({
                 ok: true,
                 tournament: refreshedHydrated,
-                source: "archive_live_refresh"
+                source: shouldForcePgLiveRefresh ? "pg_live_refresh_by_name" : "archive_live_refresh"
               });
             }
           }
@@ -932,11 +971,18 @@ export async function POST(req: NextRequest) {
       }
 
       if (company === "PBR") {
-        const livePbr = await buildPbrLiveTournament({
+        const livePbrRaw = await buildPbrLiveTournament({
           inventorySlug,
           tournamentHint,
           preferredName: selected?.name || seedMeta?.name || ""
         }).catch(() => null);
+        const livePbr = livePbrRaw
+          ? canonicalizeTournamentForInventory({
+            tournament: livePbrRaw,
+            inventorySlug,
+            preferredName: selected?.name || seedMeta?.name || ""
+          })
+          : null;
         if (livePbr) {
           if (hasSupabaseConfig) {
             try {
@@ -971,7 +1017,12 @@ export async function POST(req: NextRequest) {
           company
         });
         try {
-          const scrapedTournament = await scrapePgTournamentLive(scrapeHint);
+          const scrapedRaw = await scrapePgTournamentLive(scrapeHint);
+          const scrapedTournament = canonicalizeTournamentForInventory({
+            tournament: scrapedRaw,
+            inventorySlug,
+            preferredName: selected?.name || seedMeta?.name || ""
+          });
           try {
             const dbId = await upsertHarvestedTournament({
               orgId: session.orgId,
@@ -1003,7 +1054,12 @@ export async function POST(req: NextRequest) {
           company
         });
         try {
-          const scrapedTournament = await scrapePgTournamentLive(scrapeHint);
+          const scrapedRaw = await scrapePgTournamentLive(scrapeHint);
+          const scrapedTournament = canonicalizeTournamentForInventory({
+            tournament: scrapedRaw,
+            inventorySlug,
+            preferredName: selected?.name || seedMeta?.name || ""
+          });
           return NextResponse.json({
             ok: true,
             tournament: scrapedTournament,
@@ -1029,11 +1085,18 @@ export async function POST(req: NextRequest) {
     }
 
     if (company !== "PG") {
-      const livePbr = await buildPbrLiveTournament({
+      const livePbrRaw = await buildPbrLiveTournament({
         inventorySlug,
         tournamentHint,
         preferredName: selected?.name || seedMeta?.name || ""
       }).catch(() => null);
+      const livePbr = livePbrRaw
+        ? canonicalizeTournamentForInventory({
+          tournament: livePbrRaw,
+          inventorySlug,
+          preferredName: selected?.name || seedMeta?.name || ""
+        })
+        : null;
       if (livePbr) {
         if (hasSupabaseConfig) {
           try {
@@ -1065,7 +1128,12 @@ export async function POST(req: NextRequest) {
       }, { status: 409 });
     }
 
-    const scrapedTournament = await scrapePgTournamentLive(pgLiveHint);
+    const scrapedRaw = await scrapePgTournamentLive(pgLiveHint);
+    const scrapedTournament = canonicalizeTournamentForInventory({
+      tournament: scrapedRaw,
+      inventorySlug,
+      preferredName: selected?.name || seedMeta?.name || ""
+    });
     if (!hasSupabaseConfig) {
       return NextResponse.json({
         ok: true,

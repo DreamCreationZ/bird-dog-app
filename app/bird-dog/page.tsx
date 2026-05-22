@@ -3554,19 +3554,18 @@ export default function BirdDogPage() {
     }
 
     const wanted = normalizeTournamentName(item.name);
-    const byCurrentState = company === item.company ? tournaments.find((t) => {
-      const name = normalizeTournamentName(t.name);
-      return name === wanted || name.includes(wanted) || wanted.includes(name);
-    })?.id : "";
-    if (byCurrentState) return byCurrentState;
+    const exactCurrentMatches = company === item.company
+      ? tournaments.filter((t) => normalizeTournamentName(t.name) === wanted)
+      : [];
+    if (exactCurrentMatches.length === 1) {
+      return exactCurrentMatches[0].id;
+    }
 
     try {
       const dataset = await loadHarvestDataset(item.company);
-      const match = dataset.tournaments.find((t) => {
-        const name = normalizeTournamentName(t.name);
-        return name === wanted || name.includes(wanted) || wanted.includes(name);
-      });
-      return match?.id || "";
+      const exactMatches = dataset.tournaments.filter((t) => normalizeTournamentName(t.name) === wanted);
+      if (exactMatches.length === 1) return exactMatches[0].id;
+      return "";
     } catch {
       return "";
     }
@@ -3600,7 +3599,7 @@ export default function BirdDogPage() {
         if (String(t.id || "").trim() === item.slug) return true;
         return normalized === wanted;
       }
-      return normalized === wanted || normalized.includes(wanted) || wanted.includes(normalized);
+      return normalized === wanted;
     }) : undefined;
     if (inMemoryMatch) {
       applyOpenedTournament(inMemoryMatch, mutationSeq);
@@ -3631,7 +3630,7 @@ export default function BirdDogPage() {
         if (String(t.id || "").trim() === item.slug) return true;
         return normalized === wanted;
       }
-      return normalized === wanted || normalized.includes(wanted) || wanted.includes(normalized);
+      return normalized === wanted;
     });
     if (!match) return false;
 
@@ -6810,7 +6809,7 @@ export default function BirdDogPage() {
                 autoComplete="off"
               />
             </div>
-            {teamsSearchQuery.trim() && (scheduleSearchLoading || scheduleSearchPendingInput || filteredTournamentScheduleRowsCount > 0) ? (
+            {teamsSearchQuery.trim() && filteredTournamentScheduleGroups.length > 0 ? (
               <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
                 {(scheduleSearchLoading || scheduleSearchPendingInput)
                   ? "Searching players and teams..."
