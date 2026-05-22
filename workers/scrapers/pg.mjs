@@ -90,6 +90,10 @@ function parseGames(html) {
   return games.slice(0, 30);
 }
 
+function hasPgScheduleMarkup(html) {
+  return /repSchedule_lblGameNumber_|lblVisitorName_|ddlActiveDates|SCHEDULE\s*&\s*SCORES\s*FOR/i.test(html);
+}
+
 function findFirstEventUrl(html) {
   const link = html.match(/href=["']([^"']*TournamentTeams\.aspx\?event=\d+)["']/i);
   if (!link) return null;
@@ -266,7 +270,7 @@ export async function scrapePgTournament(hint) {
   const name = readTitle(html);
   const id = readEventId(target, hint);
   const date = parseDate(html);
-  const parsedGames = parseGames(html);
+  const parsedGames = hasPgScheduleMarkup(html) ? parseGames(html) : [];
   const teams = parseParticipatingTeams(html);
   const pagePlayers = parsePlayers(html);
   const teamPlayers = await enrichPlayersFromTeamPages(teams);
@@ -279,7 +283,9 @@ export async function scrapePgTournament(hint) {
       try {
         const scheduleUrl = `https://www.perfectgame.org/events/TournamentSchedule.aspx?event=${eventNum}`;
         const scheduleFetch = await fetchTournamentHtml("PG", scheduleUrl);
-        games = parseGames(scheduleFetch.html);
+        if (hasPgScheduleMarkup(scheduleFetch.html)) {
+          games = parseGames(scheduleFetch.html);
+        }
       } catch {
         // fall back to team-paired pseudo games below
       }

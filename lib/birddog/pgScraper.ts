@@ -155,6 +155,10 @@ function parseGames(html: string) {
   return games.slice(0, 40);
 }
 
+function hasPgScheduleMarkup(html: string) {
+  return /repSchedule_lblGameNumber_|lblVisitorName_|ddlActiveDates|SCHEDULE\s*&\s*SCORES\s*FOR/i.test(html);
+}
+
 function toAbsolutePgUrl(href: string) {
   const raw = String(href || "").trim();
   if (!raw) return "";
@@ -513,7 +517,7 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
   const id = readEventId(target, hint);
   const date = parseDate(html);
   const eventNum = numericEventId(target);
-  let games = parseGames(html);
+  let games = hasPgScheduleMarkup(html) ? parseGames(html) : [];
   let teams = parseParticipatingTeams(html);
 
   // TournamentSchedule page often does not include the full participating-team table.
@@ -548,7 +552,7 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
     if (eventNum) {
       const scheduleUrl = `https://www.perfectgame.org/events/TournamentSchedule.aspx?event=${eventNum}`;
       const schedule = await fetchHtml(scheduleUrl).catch(() => null);
-      if (schedule) {
+      if (schedule && hasPgScheduleMarkup(schedule.html)) {
         games = parseGames(schedule.html);
       }
     }
@@ -799,23 +803,13 @@ function inferEventIdFromTeamHtml(html: string) {
 }
 
 function parseEventScoreboardRows(html: string): EventScoreboardRow[] {
-  const looksLikePlaceholderTeam = (value: string) => {
-    const team = cleanText(value || "");
-    if (!team) return true;
-    return /^seed\s*#?\d+/i.test(team)
-      || /^winner/i.test(team)
-      || /^loser/i.test(team)
-      || /\bTBD\b/i.test(team)
-      || /\bto be determined\b/i.test(team)
-      || /\bbye\b/i.test(team);
-  };
-
   const dedupeRows = (rows: EventScoreboardRow[]) => {
     const out: EventScoreboardRow[] = [];
     const seen = new Set<string>();
     const push = (row: EventScoreboardRow) => {
       if (!row.homeTeam || !row.awayTeam) return;
-      if (looksLikePlaceholderTeam(row.homeTeam) || looksLikePlaceholderTeam(row.awayTeam)) return;
+      // Keep bracket placeholders (Seed/Winner/Loser/TBD) so per-day game counts
+      // match the selected PG schedule day exactly.
       const key = [
         cleanText(row.time || ""),
         cleanText(row.field || ""),
