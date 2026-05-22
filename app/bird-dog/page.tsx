@@ -1,6 +1,6 @@
 "use client";
 
-import { SetStateAction, TouchEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, SetStateAction, TouchEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Game, ItineraryStop, Player, PulseEvent, ScoutNote, SessionUser, Tournament } from "@/lib/birddog/types";
 import { loadHarvestDataset, loadHarvestOverview, loadHarvestTournament } from "@/lib/birddog/clientHarvest";
@@ -228,6 +228,34 @@ type TeamRosterSearchRow = {
   hometown?: string;
 };
 
+type TeamDetailsScheduleRow = {
+  gameNo: string;
+  date: string;
+  time: string;
+  field: string;
+  homeTeam: string;
+  awayTeam: string;
+  dayLabel?: string;
+  ageDiv?: string;
+  homeScore?: string;
+  awayScore?: string;
+};
+
+type TeamDetailsRosterRow = {
+  no: string;
+  name: string;
+  position: string;
+  school: string;
+  hometown?: string;
+  commitment?: string;
+  team?: string;
+};
+
+type TeamDetailsSnapshot = {
+  schedule: TeamDetailsScheduleRow[];
+  roster: TeamDetailsRosterRow[];
+};
+
 type TournamentScheduleRowView = {
   key: string;
   gameId?: string;
@@ -448,6 +476,59 @@ function pickAgeDivision(game: Game) {
   const explicitAgeDiv = String(rawGame.ageDiv || "").trim();
   if (explicitAgeDiv) return explicitAgeDiv;
   return inferAgeDivisionLabel(game.homeTeam, game.awayTeam);
+}
+
+function normalizeTeamDetailsScheduleRows(input: unknown) {
+  if (!Array.isArray(input)) return [] as TeamDetailsScheduleRow[];
+  return input
+    .map((row) => {
+      const item = row as Record<string, unknown>;
+      return {
+        gameNo: String(item?.gameNo || "").trim(),
+        date: String(item?.date || "").trim(),
+        time: String(item?.time || "").trim(),
+        field: String(item?.field || "").trim(),
+        homeTeam: String(item?.homeTeam || "").trim(),
+        awayTeam: String(item?.awayTeam || "").trim(),
+        dayLabel: String(item?.dayLabel || "").trim() || undefined,
+        ageDiv: String(item?.ageDiv || "").trim() || undefined,
+        homeScore: String(item?.homeScore || "").trim() || undefined,
+        awayScore: String(item?.awayScore || "").trim() || undefined
+      } satisfies TeamDetailsScheduleRow;
+    })
+    .filter((row) => row.homeTeam || row.awayTeam || row.gameNo || row.time || row.field);
+}
+
+function normalizeTeamDetailsRosterRows(input: unknown) {
+  if (!Array.isArray(input)) return [] as TeamDetailsRosterRow[];
+  return input
+    .map((row) => {
+      const item = row as Record<string, unknown>;
+      return {
+        no: String(item?.no || "").trim(),
+        name: String(item?.name || "").trim(),
+        position: String(item?.position || "").trim(),
+        school: String(item?.school || "").trim(),
+        hometown: String(item?.hometown || "").trim() || undefined,
+        commitment: String(item?.commitment || "").trim() || undefined,
+        team: String(item?.team || "").trim() || undefined
+      } satisfies TeamDetailsRosterRow;
+    })
+    .filter((row) => row.name);
+}
+
+function parseTeamDetailsScheduleSortMs(row: TeamDetailsScheduleRow, index: number) {
+  const candidates = [
+    `${String(row.date || "").trim()} ${String(row.time || "").trim()}`.trim(),
+    String(row.date || "").trim(),
+    String(row.dayLabel || "").trim()
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const parsed = Date.parse(candidate);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Number.MAX_SAFE_INTEGER - (1000 - (index % 1000));
 }
 
 function toInputDateTime(iso: string | null) {
@@ -1246,7 +1327,10 @@ function isRosterPlaceholderTeamName(value: string) {
   const normalized = normalizeSmartSearch(value);
   if (!normalized) return true;
   if (normalized === "tbd" || normalized === "home field") return true;
+  if (/^seed\s*#?\s*\d+$/i.test(normalized)) return true;
   if (/^(winner|loser)\s*#?\d+$/i.test(normalized)) return true;
+  if (/^(winner|loser)\s+of\s+(game|match)\s*#?\d+$/i.test(normalized)) return true;
+  if (/^(winner|loser)\s+(game|match)\s*#?\d+$/i.test(normalized)) return true;
   if (/^(pool|division|overall)\s+[a-z0-9]+\s+place\s+\d+$/i.test(normalized)) return true;
   return false;
 }
@@ -1788,6 +1872,12 @@ export default function BirdDogPage() {
   const [tournamentSearchQuery, setTournamentSearchQuery] = useState("");
   const [teamsSearchQuery, setTeamsSearchQuery] = useState("");
   const [teamsSearchStableQuery, setTeamsSearchStableQuery] = useState("");
+  const [teamListSearchQuery, setTeamListSearchQuery] = useState("");
+  const [notesSelectedTeam, setNotesSelectedTeam] = useState<TeamRef | null>(null);
+  const [notesTeamScheduleRows, setNotesTeamScheduleRows] = useState<TeamDetailsScheduleRow[]>([]);
+  const [notesTeamRosterRows, setNotesTeamRosterRows] = useState<TeamDetailsRosterRow[]>([]);
+  const [notesTeamLoading, setNotesTeamLoading] = useState(false);
+  const [notesTeamStatus, setNotesTeamStatus] = useState("");
   const [playerSearchQuery, setPlayerSearchQuery] = useState("");
   const [scheduleSearchPlayerTeamIds, setScheduleSearchPlayerTeamIds] = useState<string[]>([]);
   const [scheduleSearchPlayerTeamNames, setScheduleSearchPlayerTeamNames] = useState<string[]>([]);
@@ -2254,6 +2344,27 @@ export default function BirdDogPage() {
 
     return list;
   }, [selectedTournamentTeams, teamsByHref, teamsById, teamsByNormalizedName, tournamentScheduleGroups]);
+  const tournamentTeamsForNotes = useMemo(() => {
+    const list: TeamRef[] = [];
+    const seen = new Set<string>();
+    const add = (team: TeamRef | null | undefined) => {
+      if (!team) return;
+      const cleanName = String(team.name || "").trim();
+      if (!cleanName || isRosterPlaceholderTeamName(cleanName)) return;
+      const key = smartSearchTeamCacheKey(team) || `name:${normalizeSmartSearch(cleanName)}`;
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      list.push({
+        ...team,
+        name: cleanName
+      });
+    };
+
+    selectedTournamentTeams.forEach((team) => add(team));
+    scheduleSearchFallbackTeams.forEach((team) => add(team));
+
+    return list.sort((left, right) => left.name.localeCompare(right.name));
+  }, [scheduleSearchFallbackTeams, selectedTournamentTeams]);
   const scheduleSearchFallbackTeamsScopeKey = useMemo(
     () => scheduleSearchFallbackTeams.map((team) => smartSearchTeamCacheKey(team)).join("|"),
     [scheduleSearchFallbackTeams]
@@ -2283,6 +2394,8 @@ export default function BirdDogPage() {
   const pullTriggeredRef = useRef(false);
   const bottomRefreshAtRef = useRef(0);
   const teamRosterSearchCacheRef = useRef<Map<string, TeamRosterSearchRow[]>>(new Map());
+  const notesTeamDetailsCacheRef = useRef<Map<string, TeamDetailsSnapshot>>(new Map());
+  const notesTeamLoadSeqRef = useRef(0);
   const geocodeCacheRef = useRef<Map<string, GeoLocation | null>>(new Map());
   const tournamentPlayerIndexRef = useRef<TournamentPlayerIndexRow[]>([]);
   const tournamentPlayerIndexKeyRef = useRef("");
@@ -2691,10 +2804,18 @@ export default function BirdDogPage() {
     setPlayerSearchStatus("");
     setTeamsSearchQuery("");
     setTeamsSearchStableQuery("");
+    setTeamListSearchQuery("");
     setScheduleSearchPlayerTeamIds([]);
     setScheduleSearchPlayerTeamNames([]);
     setScheduleSearchLoading(false);
+    setNotesSelectedTeam(null);
+    setNotesTeamScheduleRows([]);
+    setNotesTeamRosterRows([]);
+    setNotesTeamStatus("");
+    setNotesTeamLoading(false);
+    notesTeamLoadSeqRef.current += 1;
     teamRosterSearchCacheRef.current.clear();
+    notesTeamDetailsCacheRef.current.clear();
     tournamentPlayerIndexRef.current = [];
     tournamentPlayerIndexKeyRef.current = "";
     tournamentPlayerIndexLoadingRef.current = null;
@@ -3412,6 +3533,18 @@ export default function BirdDogPage() {
       res = await fetch("/api/inventory", { cache: "no-store" });
     } catch {
       return keepStableInventory("Tournament sync is temporarily unavailable. Showing last synced tournaments.");
+    }
+
+    if (res.status === 401) {
+      const sessionCheck = await fetch("/api/session/me", { cache: "no-store" }).catch(() => null);
+      if (!sessionCheck || !sessionCheck.ok) {
+        if (isLatestRequest()) {
+          setOpenError("Session expired. Please sign in again.");
+        }
+        router.replace("/login");
+        return keepStableInventory("Session expired. Please sign in again.");
+      }
+      res = await fetch("/api/inventory", { cache: "no-store" }).catch(() => res);
     }
 
     if (!res.ok) {
@@ -4247,6 +4380,222 @@ export default function BirdDogPage() {
     if (gameContext?.opponent) params.set("sourceGameOpponent", gameContext.opponent);
     if (gameContext?.field) params.set("sourceGameField", gameContext.field);
     router.push(`/bird-dog/team?${params.toString()}`);
+  }
+
+  function notesTeamCacheKey(team: TeamRef) {
+    return smartSearchTeamCacheKey(team) || `name:${normalizeSmartSearch(team.name || "")}`;
+  }
+
+  function teamNameMatchesTarget(candidate: string, team: TeamRef) {
+    const normalized = normalizeSmartSearch(candidate);
+    if (!normalized || isRosterPlaceholderTeamName(normalized)) return false;
+    const wanted = normalizeSmartSearch(team.name || "");
+    if (!wanted) return false;
+    if (normalized === wanted) return true;
+
+    const compact = normalized.replace(/\s+/g, "");
+    const wantedCompact = wanted.replace(/\s+/g, "");
+    if (compact && wantedCompact && compact === wantedCompact) return true;
+    if (wanted.length >= 6 && (normalized.includes(wanted) || wanted.includes(normalized))) return true;
+
+    const wantedTokens = teamNameTokens(wanted);
+    const candidateTokens = teamNameTokens(normalized);
+    if (!candidateTokens.length || !wantedTokens.length) return false;
+    const candidateSet = new Set(candidateTokens);
+    const overlap = wantedTokens.filter((token) => candidateSet.has(token)).length;
+    if (!overlap) return false;
+    const ratio = overlap / Math.max(wantedTokens.length, candidateTokens.length);
+    return ratio >= 0.66 && overlap >= Math.min(2, wantedTokens.length);
+  }
+
+  function scheduleRowBelongsToTeam(row: TournamentScheduleRowView, team: TeamRef) {
+    const teamId = String(team.id || "").trim().toLowerCase();
+    const teamHref = String(team.href || "").trim().toLowerCase();
+
+    if (teamId) {
+      const homeId = String(row.homeTeamId || "").trim().toLowerCase();
+      const awayId = String(row.awayTeamId || "").trim().toLowerCase();
+      if (homeId === teamId || awayId === teamId) return true;
+    }
+
+    if (teamHref) {
+      const homeHref = String(row.homeTeamHref || "").trim().toLowerCase();
+      const awayHref = String(row.awayTeamHref || "").trim().toLowerCase();
+      if (homeHref === teamHref || awayHref === teamHref) return true;
+    }
+
+    return teamNameMatchesTarget(row.homeTeam, team) || teamNameMatchesTarget(row.awayTeam, team);
+  }
+
+  function fallbackScheduleRowsForTeam(team: TeamRef) {
+    const out: TeamDetailsScheduleRow[] = [];
+    const seen = new Set<string>();
+    tournamentScheduleGroups.forEach((group) => {
+      group.rows.forEach((row, index) => {
+        if (!scheduleRowBelongsToTeam(row, team)) return;
+        const dedupeKey = [
+          String(row.dayKey || "").trim(),
+          String(row.gameNo || "").trim(),
+          String(row.time || "").trim().toLowerCase(),
+          String(row.location || "").trim().toLowerCase(),
+          normalizeSmartSearch(row.homeTeam),
+          normalizeSmartSearch(row.awayTeam)
+        ].join("|");
+        if (seen.has(dedupeKey)) return;
+        seen.add(dedupeKey);
+        const parsedStart = Date.parse(String(row.startAt || ""));
+        out.push({
+          gameNo: String(row.gameNo || `#${index + 1}`),
+          date: Number.isFinite(parsedStart)
+            ? new Date(parsedStart).toLocaleDateString("en-US", { timeZone: "UTC" })
+            : "",
+          dayLabel: String(row.dayLabel || "").trim() || undefined,
+          time: String(row.time || "-"),
+          field: String(row.location || "Field TBD"),
+          ageDiv: String(row.ageDiv || "").trim() || undefined,
+          homeTeam: String(row.homeTeam || "TBD"),
+          awayTeam: String(row.awayTeam || "TBD"),
+          homeScore: String(row.homeScore || "").trim() || undefined,
+          awayScore: String(row.awayScore || "").trim() || undefined
+        });
+      });
+    });
+    out.sort((left, right) =>
+      parseTeamDetailsScheduleSortMs(left, 0) - parseTeamDetailsScheduleSortMs(right, 0)
+      || left.gameNo.localeCompare(right.gameNo)
+    );
+    return out;
+  }
+
+  function fallbackRosterRowsForTeam(team: TeamRef) {
+    const rows = new Map<string, TeamDetailsRosterRow>();
+    games.forEach((game) => {
+      if (!teamNameMatchesTarget(game.homeTeam, team) && !teamNameMatchesTarget(game.awayTeam, team)) {
+        return;
+      }
+      game.players.forEach((player) => {
+        const name = String(player.name || "").trim();
+        if (!name) return;
+        const key = String(player.id || "").trim() || `name:${normalizeSmartSearch(name)}`;
+        if (rows.has(key)) return;
+        rows.set(key, {
+          no: "",
+          name,
+          position: String(player.position || "").trim(),
+          school: String(player.school || "").trim(),
+          hometown: "",
+          commitment: ""
+        });
+      });
+    });
+    return Array.from(rows.values());
+  }
+
+  function fallbackRosterRowsFromPlayerIndex(team: TeamRef, rows: TournamentPlayerIndexRow[]) {
+    const out = new Map<string, TeamDetailsRosterRow>();
+    const teamId = String(team.id || "").trim().toLowerCase();
+    rows.forEach((row) => {
+      const rowName = String(row.name || "").trim();
+      if (!rowName) return;
+      const rowTeamId = String(row.teamId || "").trim().toLowerCase();
+      const rowTeamName = String(row.teamName || "").trim();
+      const matchesById = Boolean(teamId && rowTeamId && teamId === rowTeamId);
+      const matchesByName = teamNameMatchesTarget(rowTeamName || team.name || "", team);
+      if (!matchesById && !matchesByName) return;
+      const key = String(row.playerId || "").trim() || `name:${normalizeSmartSearch(rowName)}`;
+      if (out.has(key)) return;
+      out.set(key, {
+        no: "",
+        name: rowName,
+        position: "",
+        school: "",
+        hometown: String(row.hometown || "").trim(),
+        commitment: "",
+        team: rowTeamName || team.name
+      });
+    });
+    return Array.from(out.values()).sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async function openTeamDetailsInline(team: TeamRef) {
+    const cleanName = String(team.name || "").trim();
+    if (!cleanName) return;
+    setNotesSelectedTeam({ ...team, name: cleanName });
+    setNotesTeamStatus("");
+
+    const cacheKey = notesTeamCacheKey(team);
+    const cached = notesTeamDetailsCacheRef.current.get(cacheKey);
+    if (cached) {
+      setNotesTeamScheduleRows(cached.schedule);
+      setNotesTeamRosterRows(cached.roster);
+      setNotesTeamLoading(false);
+      return;
+    }
+
+    setNotesTeamLoading(true);
+    setNotesTeamScheduleRows([]);
+    setNotesTeamRosterRows([]);
+    const loadSeq = notesTeamLoadSeqRef.current + 1;
+    notesTeamLoadSeqRef.current = loadSeq;
+    try {
+      const res = await fetch("/api/harvest/team", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inventorySlug: selectedInventorySlug,
+          teamId: smartSearchFallbackTeamId(cleanName, team.id),
+          teamUrl: team.href || "",
+          teamName: cleanName,
+          tournamentName: selectedTournament?.name || tournamentViewTitle || "",
+          eventId: currentEventNumber(),
+          tournamentId: selectedTournamentId
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (loadSeq !== notesTeamLoadSeqRef.current) return;
+
+      const liveSchedule = normalizeTeamDetailsScheduleRows(data?.schedule);
+      const fallbackSchedule = liveSchedule.length ? liveSchedule : fallbackScheduleRowsForTeam(team);
+      const liveRoster = normalizeTeamDetailsRosterRows(data?.roster);
+      const fallbackRosterFromGames = fallbackRosterRowsForTeam(team);
+      let fallbackRoster = liveRoster.length ? liveRoster : fallbackRosterFromGames;
+      if (!fallbackRoster.length) {
+        const tournamentIndexRows = await loadTournamentPlayerIndex().catch(() => [] as TournamentPlayerIndexRow[]);
+        if (loadSeq !== notesTeamLoadSeqRef.current) return;
+        const rosterFromIndex = fallbackRosterRowsFromPlayerIndex(team, tournamentIndexRows);
+        if (rosterFromIndex.length) {
+          fallbackRoster = rosterFromIndex;
+        }
+      }
+      const snapshot: TeamDetailsSnapshot = {
+        schedule: fallbackSchedule,
+        roster: fallbackRoster
+      };
+      notesTeamDetailsCacheRef.current.set(cacheKey, snapshot);
+      setNotesTeamScheduleRows(snapshot.schedule);
+      setNotesTeamRosterRows(snapshot.roster);
+
+      if (!res.ok) {
+        const message = String(data?.error || "").trim();
+        setNotesTeamStatus(message || "Team details are still syncing. Showing best available schedule.");
+      } else if (!snapshot.schedule.length && !snapshot.roster.length) {
+        setNotesTeamStatus("No schedule or roster found for this team yet.");
+      } else if (!snapshot.roster.length) {
+        setNotesTeamStatus("Schedule loaded. Team roster is not available yet.");
+      } else {
+        setNotesTeamStatus("");
+      }
+    } catch {
+      if (loadSeq !== notesTeamLoadSeqRef.current) return;
+      const fallbackSchedule = fallbackScheduleRowsForTeam(team);
+      setNotesTeamScheduleRows(fallbackSchedule);
+      setNotesTeamRosterRows([]);
+      setNotesTeamStatus("Unable to load live team details right now. Showing imported schedule only.");
+    } finally {
+      if (loadSeq === notesTeamLoadSeqRef.current) {
+        setNotesTeamLoading(false);
+      }
+    }
   }
 
   function resolveTeamForRosterOpen(teamName: string, teamId?: string, teamHref?: string) {
@@ -6347,11 +6696,43 @@ export default function BirdDogPage() {
     });
   }, [games, players, notes]);
   const filteredTeams = useMemo(() => {
-    const query = teamsSearchQuery.trim().toLowerCase();
-    const teams = selectedTournament?.teams || [];
-    if (!query) return teams;
-    return teams.filter((team) => team.name.toLowerCase().includes(query));
-  }, [selectedTournament?.teams, teamsSearchQuery]);
+    const normalized = normalizeSmartSearch(teamListSearchQuery);
+    if (!normalized) return tournamentTeamsForNotes;
+    const tokens = normalized.split(" ").filter(Boolean);
+    return tournamentTeamsForNotes.filter((team) => {
+      const name = normalizeSmartSearch(team.name || "");
+      if (!name) return false;
+      return tokens.every((token) => name.includes(token));
+    });
+  }, [teamListSearchQuery, tournamentTeamsForNotes]);
+  const selectedNotesTeamScheduleGroups = useMemo(() => {
+    if (!notesTeamScheduleRows.length) {
+      return [] as Array<{ dayLabel: string; daySort: number; rows: TeamDetailsScheduleRow[] }>;
+    }
+    const rowsWithSort = notesTeamScheduleRows.map((row, index) => {
+      const sortAt = parseTeamDetailsScheduleSortMs(row, index);
+      const dayLabel = String(row.dayLabel || "").trim()
+        || String(row.date || "").trim().toUpperCase()
+        || "DATE TBD";
+      return { row, sortAt, dayLabel };
+    });
+    rowsWithSort.sort((left, right) => left.sortAt - right.sortAt || left.row.gameNo.localeCompare(right.row.gameNo));
+    const grouped = new Map<string, { dayLabel: string; daySort: number; rows: TeamDetailsScheduleRow[] }>();
+    rowsWithSort.forEach(({ row, sortAt, dayLabel }) => {
+      const key = normalizeSmartSearch(dayLabel) || dayLabel;
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.rows.push(row);
+      } else {
+        grouped.set(key, {
+          dayLabel,
+          daySort: sortAt,
+          rows: [row]
+        });
+      }
+    });
+    return Array.from(grouped.values()).sort((left, right) => left.daySort - right.daySort);
+  }, [notesTeamScheduleRows]);
   const companyTournamentInventory = useMemo(
     () => sortInventoryForDisplay(displayInventory.filter((item) => item.company === company)),
     [company, displayInventory]
@@ -6792,114 +7173,155 @@ export default function BirdDogPage() {
       <section className="panel" id="teams-roster-section">
         <div style={{ width: "100%" }}>
           <div className="panel" style={{ marginBottom: 10 }}>
-            <h3 style={{ marginTop: 0 }}>Tournament Schedule (All Divisions)</h3>
+            <h3 style={{ marginTop: 0 }}>Tournament Teams</h3>
             <p className="muted" style={{ marginTop: 6, marginBottom: 8 }}>
-              Click a team name to open that team roster, select players with checkboxes, and add them to the final cart.
+              Click any team to load that team&apos;s full schedule and roster on this page.
             </p>
             <div style={{ marginBottom: 10 }}>
-              <label htmlFor="tournament-schedule-search" className="muted" style={{ display: "block", marginBottom: 6 }}>
-                Search Teams Or Players
+              <label htmlFor="tournament-team-search" className="muted" style={{ display: "block", marginBottom: 6 }}>
+                Search Teams
               </label>
               <input
-                id="tournament-schedule-search"
+                id="tournament-team-search"
                 type="text"
-                value={teamsSearchQuery}
-                onChange={(event) => setTeamsSearchQuery(event.target.value)}
-                placeholder="Search team name or player name"
+                value={teamListSearchQuery}
+                onChange={(event) => setTeamListSearchQuery(event.target.value)}
+                placeholder="Search team name"
                 autoComplete="off"
               />
             </div>
-            {teamsSearchQuery.trim() && filteredTournamentScheduleGroups.length > 0 ? (
-              <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
-                {(scheduleSearchLoading || scheduleSearchPendingInput)
-                  ? "Searching players and teams..."
-                  : filteredTournamentScheduleRowsCount
-                    ? `Showing ${filteredTournamentScheduleRowsCount} game${filteredTournamentScheduleRowsCount === 1 ? "" : "s"}`
-                    : ""}
-              </p>
-            ) : null}
-            {filteredTournamentScheduleGroups.length ? (
-              filteredTournamentScheduleGroups.map((group) => (
-                <div key={`${group.dayLabel}-${group.daySort}`} style={{ marginTop: 8 }}>
-                  <h4 style={{ marginBottom: 6 }}>{group.dayLabel}</h4>
-                  <div className="table-wrap">
-                    <table className="roster-table">
-                      <thead>
-                        <tr>
-                          <th>Time</th>
-                          <th>Game</th>
-                          <th>Location</th>
-                          <th>Age/Div</th>
-                          <th>Team</th>
-                          <th>Score</th>
-                          <th>Team</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {group.rows.map((row) => {
-                          const homeTeam = resolveTeamForRosterOpen(row.homeTeam, row.homeTeamId, row.homeTeamHref);
-                          const awayTeam = resolveTeamForRosterOpen(row.awayTeam, row.awayTeamId, row.awayTeamHref);
-                          return (
-                            <tr key={row.key}>
-                              <td>{row.time}</td>
-                              <td>{row.gameNo}</td>
-                              <td>{row.location}</td>
-                              <td>{row.ageDiv}</td>
-                              <td>
-                                {homeTeam ? (
-                                  <button
-                                    type="button"
-                                    className="secondary"
-                                    onClick={() => viewTeamScheduleAndRoster(homeTeam, "notes", "roster", {
-                                      gameId: row.gameId,
-                                      startAt: row.startAt,
-                                      timeLabel: row.time,
-                                      opponent: row.awayTeam,
-                                      field: row.location
-                                    })}
-                                    style={{ border: "none", background: "transparent", padding: 0, textDecoration: "underline" }}
-                                  >
-                                    {row.homeTeam}
-                                  </button>
-                                ) : row.homeTeam}
-                              </td>
-                              <td>{row.homeScore} - {row.awayScore}</td>
-                              <td>
-                                {awayTeam ? (
-                                  <button
-                                    type="button"
-                                    className="secondary"
-                                    onClick={() => viewTeamScheduleAndRoster(awayTeam, "notes", "roster", {
-                                      gameId: row.gameId,
-                                      startAt: row.startAt,
-                                      timeLabel: row.time,
-                                      opponent: row.homeTeam,
-                                      field: row.location
-                                    })}
-                                    style={{ border: "none", background: "transparent", padding: 0, textDecoration: "underline" }}
-                                  >
-                                    {row.awayTeam}
-                                  </button>
-                                ) : row.awayTeam}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              ))
+            <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
+              {filteredTeams.length} team{filteredTeams.length === 1 ? "" : "s"} shown
+            </p>
+            {filteredTeams.length ? (
+              <div className="row wrap" style={{ gap: 8 }}>
+                {filteredTeams.map((team) => {
+                  const selected = notesSelectedTeam
+                    && notesTeamCacheKey(notesSelectedTeam) === notesTeamCacheKey(team);
+                  return (
+                    <button
+                      key={notesTeamCacheKey(team)}
+                      type="button"
+                      className={selected ? "" : "secondary"}
+                      onClick={() => void openTeamDetailsInline(team)}
+                      style={{ textAlign: "left", minWidth: 220, flex: "1 1 260px" }}
+                    >
+                      <span>{team.name}</span>
+                      {team.from ? (
+                        <span className="small muted" style={{ display: "block", marginTop: 3 }}>
+                          {team.from}
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
             ) : (
               <p className="muted" style={{ marginTop: 6 }}>
-                {(teamsSearchQuery.trim() && (scheduleSearchLoading || scheduleSearchPendingInput))
-                  ? "Searching players and teams..."
-                  : tournamentScheduleGroups.length
-                  ? "No teams or players matched your search."
+                {tournamentTeamsForNotes.length
+                  ? "No teams matched your search."
                   : scheduleNotUploadedMessage(company)}
               </p>
             )}
           </div>
+
+          {notesSelectedTeam ? (
+            <div className="panel" style={{ marginBottom: 10 }}>
+              <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                <div>
+                  <h3 style={{ marginTop: 0, marginBottom: 0 }}>{notesSelectedTeam.name}</h3>
+                  {notesSelectedTeam.from ? <p className="muted" style={{ marginTop: 4, marginBottom: 0 }}>{notesSelectedTeam.from}</p> : null}
+                </div>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => viewTeamScheduleAndRoster(notesSelectedTeam, "notes", "roster")}
+                >
+                  Open Full Team Roster Tools
+                </button>
+              </div>
+
+              {notesTeamLoading ? <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>Loading team schedule and roster...</p> : null}
+              {notesTeamStatus ? <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>{notesTeamStatus}</p> : null}
+
+              <h4 style={{ marginTop: 12, marginBottom: 6 }}>Team Schedule</h4>
+              <div className="table-wrap">
+                <table className="roster-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Game</th>
+                      <th>Location</th>
+                      <th>Age/Div</th>
+                      <th>Team</th>
+                      <th>Score</th>
+                      <th>Team</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedNotesTeamScheduleGroups.length ? selectedNotesTeamScheduleGroups.map((group) => (
+                      <Fragment key={`${group.dayLabel}-${group.daySort}`}>
+                        <tr>
+                          <td colSpan={7} style={{ fontWeight: 700 }}>{group.dayLabel}</td>
+                        </tr>
+                        {group.rows.map((row, index) => (
+                          <tr key={`${group.dayLabel}-${row.gameNo}-${row.time}-${row.homeTeam}-${row.awayTeam}-${index}`}>
+                            <td>{row.time || "-"}</td>
+                            <td>{row.gameNo || "-"}</td>
+                            <td>{row.field || "-"}</td>
+                            <td>{row.ageDiv || "-"}</td>
+                            <td>{row.homeTeam || "-"}</td>
+                            <td>{`${row.homeScore || "00"} - ${row.awayScore || "00"}`}</td>
+                            <td>{row.awayTeam || "-"}</td>
+                          </tr>
+                        ))}
+                      </Fragment>
+                    )) : (
+                      <tr>
+                        <td className="empty-cell" colSpan={7}>No schedule rows found for this team yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <h4 style={{ marginTop: 12, marginBottom: 6 }}>Team Roster</h4>
+              <div className="table-wrap">
+                <table className="roster-table">
+                  <thead>
+                    <tr>
+                      <th>No</th>
+                      <th>Player</th>
+                      <th>Position</th>
+                      <th>School</th>
+                      <th>Hometown</th>
+                      <th>Commitment</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {notesTeamRosterRows.length ? notesTeamRosterRows.map((row, index) => (
+                      <tr key={`${row.no || "-"}-${row.name}-${index}`}>
+                        <td>{row.no || "-"}</td>
+                        <td>{row.name || "-"}</td>
+                        <td>{row.position || "-"}</td>
+                        <td>{row.school || "-"}</td>
+                        <td>{row.hometown || "-"}</td>
+                        <td>{row.commitment || "-"}</td>
+                      </tr>
+                    )) : (
+                      <tr>
+                        <td className="empty-cell" colSpan={6}>No roster rows found for this team yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <p className="muted" style={{ marginTop: 6 }}>
+              Click a team above to view only that team&apos;s schedule and roster.
+            </p>
+          )}
         </div>
       </section>
       ) : null}
