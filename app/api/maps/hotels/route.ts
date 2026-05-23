@@ -7,6 +7,52 @@ type HotelSuggestion = {
   placeId: string;
 };
 
+function compactWhitespace(value: string) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function buildDestinationCandidates(rawDestination: string) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const push = (value: string) => {
+    const cleaned = compactWhitespace(value);
+    if (cleaned.length < 2) return;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(cleaned);
+  };
+
+  const raw = compactWhitespace(rawDestination);
+  if (!raw) return out;
+  push(raw);
+
+  // Convert "Field 3 @ East Cobb Complex, Marietta, GA" -> "East Cobb Complex, Marietta, GA"
+  if (raw.includes("@")) {
+    push(raw.split("@").slice(1).join("@"));
+  }
+
+  // Remove common venue prefixes that hurt hotel search recall.
+  push(raw.replace(/^(field|court|diamond|venue|site)\s*[^@,]*@\s*/i, ""));
+
+  const parts = raw.split(",").map((part) => compactWhitespace(part)).filter(Boolean);
+  if (parts.length >= 2) {
+    const [first, ...rest] = parts;
+    if (/@/.test(first) || /\b(field|court|diamond|venue|site|park|complex)\b/i.test(first)) {
+      push(rest.join(", "));
+    }
+    push(parts.slice(-2).join(", "));
+  }
+  if (parts.length >= 3) {
+    push(parts.slice(-3).join(", "));
+  }
+
+  const cityState = raw.match(/([A-Za-z .'-]+,\s*[A-Z]{2})(?:\b|$)/);
+  if (cityState) push(cityState[1]);
+
+  return out.slice(0, 6);
+}
+
 function mapsApiKey() {
   return process.env.GOOGLE_MAPS_API_KEY || process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
 }
@@ -83,14 +129,23 @@ export async function GET(req: NextRequest) {
   if (!destination || destination.length < 2) {
     return NextResponse.json({ hotels: [] as HotelSuggestion[] });
   }
+  const destinationCandidates = buildDestinationCandidates(destination);
+  if (!destinationCandidates.length) {
+    return NextResponse.json({ hotels: [] as HotelSuggestion[] });
+  }
 
   const key = mapsApiKey();
   if (!key) {
     try {
-      const hotels = mergeHotels([
-        await fetchNominatimHotels(`hotel in ${destination}`),
-        await fetchNominatimHotels(`lodging near ${destination}`)
-      ]);
+      const nominatimQueries = destinationCandidates
+        .flatMap((candidate) => [`hotel in ${candidate}`, `lodging near ${candidate}`])
+        .slice(0, 8);
+      const settled = await Promise.allSettled(nominatimQueries.map((query) => fetchNominatimHotels(query)));
+      const hotels = mergeHotels(
+        settled
+          .filter((item): item is PromiseFulfilledResult<HotelSuggestion[]> => item.status === "fulfilled")
+          .map((item) => item.value)
+      );
       return NextResponse.json({ hotels, warning: "Using OpenStreetMap fallback results" }, { status: 200 });
     } catch (error) {
       return NextResponse.json({ hotels: [] as HotelSuggestion[], error: String(error) }, { status: 200 });
@@ -98,20 +153,30 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const settled = await Promise.allSettled([
-      fetchHotelQuery(`hotels in ${destination}`, key),
-      fetchHotelQuery(`lodging near ${destination}`, key),
-      fetchHotelQuery(`${destination} hotel`, key)
-    ]);
+    const googleQueries = destinationCandidates
+      .flatMap((candidate) => [
+        `hotels in ${candidate}`,
+        `lodging near ${candidate}`,
+        `${candidate} hotel`
+      ])
+      .slice(0, 12);
+    const settled = await Promise.allSettled(googleQueries.map((query) => fetchHotelQuery(query, key)));
     const groups = settled
       .filter((item): item is PromiseFulfilledResult<HotelSuggestion[]> => item.status === "fulfilled")
       .map((item) => item.value);
     let hotels = mergeHotels(groups);
     if (!hotels.length) {
-      hotels = mergeHotels([
-        await fetchNominatimHotels(`hotel in ${destination}`),
-        await fetchNominatimHotels(`lodging near ${destination}`)
-      ]);
+      const nominatimQueries = destinationCandidates
+        .flatMap((candidate) => [`hotel in ${candidate}`, `lodging near ${candidate}`])
+        .slice(0, 8);
+      const nominatimSettled = await Promise.allSettled(
+        nominatimQueries.map((query) => fetchNominatimHotels(query))
+      );
+      hotels = mergeHotels(
+        nominatimSettled
+          .filter((item): item is PromiseFulfilledResult<HotelSuggestion[]> => item.status === "fulfilled")
+          .map((item) => item.value)
+      );
     }
     return NextResponse.json({ hotels });
   } catch (error) {

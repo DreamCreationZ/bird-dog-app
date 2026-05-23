@@ -8147,7 +8147,7 @@ export default function BirdDogPage() {
                         </div>
                       ) : (
                         <p className="muted" style={{ margin: 0 }}>
-                          Nearby stays will appear once arrival city/destination is available.
+                          No nearby stays yet. Enter arrival city/state in question 2 if needed and try again.
                         </p>
                       )}
                     </div>
