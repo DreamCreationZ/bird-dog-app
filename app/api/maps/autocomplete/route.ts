@@ -135,7 +135,45 @@ export async function GET(req: NextRequest) {
 
   const key = mapsApiKey();
   if (!key) {
-    return NextResponse.json({ suggestions: [] as Suggestion[], error: "Missing Google Maps API key" }, { status: 200 });
+    try {
+      const stateHint = String(req.nextUrl.searchParams.get("state") || "").trim().toUpperCase();
+      const stateQuery = /^[A-Z]{2}$/.test(stateHint) && !new RegExp(`\\b${stateHint}\\b`, "i").test(q)
+        ? `${q}, ${stateHint}`
+        : "";
+      let suggestions: Suggestion[] = [];
+      if (kind === "arrival") {
+        const airportQuery = appendTokenIfMissing(q, "airport");
+        const fallbackGroups = await settleSuggestionGroups([
+          fetchNominatimSuggestions(q, 12),
+          fetchNominatimSuggestions(airportQuery, 12),
+          ...(stateQuery ? [fetchNominatimSuggestions(stateQuery, 10)] : [])
+        ]);
+        const fallbackAirport = fallbackGroups
+          .flat()
+          .filter((item) => /\b(airport|airfield|intl|international)\b/i.test(item.label));
+        const fallbackOther = fallbackGroups
+          .flat()
+          .filter((item) => !/\b(airport|airfield|intl|international)\b/i.test(item.label));
+        suggestions = mergeSuggestions([fallbackAirport, fallbackOther]);
+      } else if (kind === "hotel") {
+        const hotelQuery = appendTokenIfMissing(q, "hotel");
+        const fallbackGroups = await settleSuggestionGroups([
+          fetchNominatimSuggestions(hotelQuery, 12),
+          fetchNominatimSuggestions(appendTokenIfMissing(q, "lodging"), 12),
+          ...(stateQuery ? [fetchNominatimSuggestions(`${hotelQuery} ${stateHint}`, 10)] : [])
+        ]);
+        suggestions = mergeSuggestions(fallbackGroups);
+      } else {
+        const fallbackGroups = await settleSuggestionGroups([
+          fetchNominatimSuggestions(q, 12),
+          ...(stateQuery ? [fetchNominatimSuggestions(stateQuery, 10)] : [])
+        ]);
+        suggestions = mergeSuggestions(fallbackGroups);
+      }
+      return NextResponse.json({ suggestions, warning: "Using OpenStreetMap fallback suggestions" }, { status: 200 });
+    } catch (error) {
+      return NextResponse.json({ suggestions: [] as Suggestion[], error: String(error) }, { status: 200 });
+    }
   }
 
   try {

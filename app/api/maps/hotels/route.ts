@@ -86,7 +86,15 @@ export async function GET(req: NextRequest) {
 
   const key = mapsApiKey();
   if (!key) {
-    return NextResponse.json({ hotels: [] as HotelSuggestion[], error: "Missing Google Maps API key" }, { status: 200 });
+    try {
+      const hotels = mergeHotels([
+        await fetchNominatimHotels(`hotel in ${destination}`),
+        await fetchNominatimHotels(`lodging near ${destination}`)
+      ]);
+      return NextResponse.json({ hotels, warning: "Using OpenStreetMap fallback results" }, { status: 200 });
+    } catch (error) {
+      return NextResponse.json({ hotels: [] as HotelSuggestion[], error: String(error) }, { status: 200 });
+    }
   }
 
   try {

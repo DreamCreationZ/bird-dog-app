@@ -1644,6 +1644,74 @@ function inventorySortStartMs(item: InventoryTournament) {
   return parseDisplayDateStartMs(String(item.displayDate || ""), fallbackYear) ?? Number.MAX_SAFE_INTEGER;
 }
 
+function tournamentAgeGroups(item: InventoryTournament) {
+  const text = `${item.name || ""} ${item.displayTeams || ""} ${item.harvestHint || ""}`;
+  const matches = Array.from(text.matchAll(/\b(\d{1,2})\s*u\b/gi))
+    .map((m) => Number(m[1]))
+    .filter((value) => Number.isFinite(value) && value >= 5 && value <= 30);
+  return Array.from(new Set(matches)).sort((a, b) => a - b);
+}
+
+function isTournamentAtLeast15U(item: InventoryTournament) {
+  const ages = tournamentAgeGroups(item);
+  if (!ages.length) return true;
+  return ages.some((age) => age >= 15);
+}
+
+function inventoryMatchesAgeFilter(item: InventoryTournament, filter: string) {
+  const normalized = String(filter || "").trim().toUpperCase();
+  if (!normalized || normalized === "15U+") {
+    return isTournamentAtLeast15U(item);
+  }
+  const wantedAge = Number(normalized.replace(/[^0-9]/g, ""));
+  if (!Number.isFinite(wantedAge)) return isTournamentAtLeast15U(item);
+  const ages = tournamentAgeGroups(item);
+  if (!ages.length) return false;
+  return ages.includes(wantedAge);
+}
+
+function notesRosterRowSelectionKey(row: TeamDetailsRosterRow) {
+  const base = [
+    normalizeSmartSearch(row.no || ""),
+    normalizeSmartSearch(row.name || ""),
+    normalizeSmartSearch(row.hometown || ""),
+    normalizeSmartSearch(row.school || "")
+  ].join("|");
+  return base || normalizeSmartSearch(`${row.name}-${row.no}`) || "player";
+}
+
+function mergeTeamDetailsRosterRows(groups: TeamDetailsRosterRow[][]) {
+  const merged = new Map<string, TeamDetailsRosterRow>();
+  groups.forEach((rows) => {
+    rows.forEach((row) => {
+      const key = [
+        normalizeSmartSearch(row.no || ""),
+        normalizeSmartSearch(row.name || ""),
+        normalizeSmartSearch(row.hometown || ""),
+        normalizeSmartSearch(row.school || "")
+      ].join("|");
+      if (!key) return;
+      const existing = merged.get(key);
+      if (!existing) {
+        merged.set(key, row);
+        return;
+      }
+      merged.set(key, {
+        ...existing,
+        ...row,
+        no: row.no || existing.no,
+        name: row.name || existing.name,
+        position: row.position || existing.position,
+        school: row.school || existing.school,
+        hometown: row.hometown || existing.hometown,
+        commitment: row.commitment || existing.commitment,
+        team: row.team || existing.team
+      });
+    });
+  });
+  return Array.from(merged.values());
+}
+
 function sortInventoryForDisplay(rows: InventoryTournament[]) {
   return [...rows].sort((a, b) => {
     const aStart = inventorySortStartMs(a);
@@ -1870,12 +1938,16 @@ export default function BirdDogPage() {
   const stateArrivalSuggestionSeqRef = useRef<Record<string, number>>({});
   const stateHotelSuggestionSeqRef = useRef<Record<string, number>>({});
   const [tournamentSearchQuery, setTournamentSearchQuery] = useState("");
+  const [tournamentAgeFilter, setTournamentAgeFilter] = useState("15U+");
+  const [tournamentAgeFilterOpen, setTournamentAgeFilterOpen] = useState(false);
   const [teamsSearchQuery, setTeamsSearchQuery] = useState("");
   const [teamsSearchStableQuery, setTeamsSearchStableQuery] = useState("");
   const [teamListSearchQuery, setTeamListSearchQuery] = useState("");
+  const [tournamentTeamSearchMode, setTournamentTeamSearchMode] = useState<"team" | "player">("team");
   const [notesSelectedTeam, setNotesSelectedTeam] = useState<TeamRef | null>(null);
   const [notesTeamScheduleRows, setNotesTeamScheduleRows] = useState<TeamDetailsScheduleRow[]>([]);
   const [notesTeamRosterRows, setNotesTeamRosterRows] = useState<TeamDetailsRosterRow[]>([]);
+  const [notesSelectedRosterRowKeys, setNotesSelectedRosterRowKeys] = useState<string[]>([]);
   const [notesTeamLoading, setNotesTeamLoading] = useState(false);
   const [notesTeamStatus, setNotesTeamStatus] = useState("");
   const [playerSearchQuery, setPlayerSearchQuery] = useState("");
@@ -1905,6 +1977,7 @@ export default function BirdDogPage() {
   const [focusGeneratedScheduleRequested, setFocusGeneratedScheduleRequested] = useState(false);
   const [latestBookingSummary, setLatestBookingSummary] = useState<BookingSummarySnapshot | null>(null);
   const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false);
+  const [draggingDesiredPlayerKey, setDraggingDesiredPlayerKey] = useState<string | null>(null);
   const [profileForm, setProfileForm] = useState<ProfileFormState>({
     firstName: "Scout",
     lastName: "User",
@@ -2805,12 +2878,14 @@ export default function BirdDogPage() {
     setTeamsSearchQuery("");
     setTeamsSearchStableQuery("");
     setTeamListSearchQuery("");
+    setTournamentTeamSearchMode("team");
     setScheduleSearchPlayerTeamIds([]);
     setScheduleSearchPlayerTeamNames([]);
     setScheduleSearchLoading(false);
     setNotesSelectedTeam(null);
     setNotesTeamScheduleRows([]);
     setNotesTeamRosterRows([]);
+    setNotesSelectedRosterRowKeys([]);
     setNotesTeamStatus("");
     setNotesTeamLoading(false);
     notesTeamLoadSeqRef.current += 1;
@@ -2830,6 +2905,12 @@ export default function BirdDogPage() {
   }, [teamsSearchQuery]);
 
   useEffect(() => {
+    if (tournamentTeamSearchMode !== "player") {
+      setScheduleSearchPlayerTeamIds([]);
+      setScheduleSearchPlayerTeamNames([]);
+      setScheduleSearchLoading(false);
+      return;
+    }
     const normalizedQuery = normalizeSmartSearch(teamsSearchStableQuery);
     if (!normalizedQuery) {
       setScheduleSearchPlayerTeamIds([]);
@@ -2948,7 +3029,8 @@ export default function BirdDogPage() {
     scheduleSearchFallbackTeamsScopeKey,
     selectedInventorySlug,
     selectedTournamentId,
-    teamsSearchStableQuery
+    teamsSearchStableQuery,
+    tournamentTeamSearchMode
   ]);
 
   useEffect(() => {
@@ -4522,6 +4604,7 @@ export default function BirdDogPage() {
     if (!cleanName) return;
     setNotesSelectedTeam({ ...team, name: cleanName });
     setNotesTeamStatus("");
+    setNotesSelectedRosterRowKeys([]);
 
     const cacheKey = notesTeamCacheKey(team);
     const cached = notesTeamDetailsCacheRef.current.get(cacheKey);
@@ -4554,19 +4637,15 @@ export default function BirdDogPage() {
       const data = await res.json().catch(() => ({}));
       if (loadSeq !== notesTeamLoadSeqRef.current) return;
 
+      const importedSchedule = fallbackScheduleRowsForTeam(team);
       const liveSchedule = normalizeTeamDetailsScheduleRows(data?.schedule);
-      const fallbackSchedule = liveSchedule.length ? liveSchedule : fallbackScheduleRowsForTeam(team);
+      const fallbackSchedule = importedSchedule.length ? importedSchedule : liveSchedule;
       const liveRoster = normalizeTeamDetailsRosterRows(data?.roster);
       const fallbackRosterFromGames = fallbackRosterRowsForTeam(team);
-      let fallbackRoster = liveRoster.length ? liveRoster : fallbackRosterFromGames;
-      if (!fallbackRoster.length) {
-        const tournamentIndexRows = await loadTournamentPlayerIndex().catch(() => [] as TournamentPlayerIndexRow[]);
-        if (loadSeq !== notesTeamLoadSeqRef.current) return;
-        const rosterFromIndex = fallbackRosterRowsFromPlayerIndex(team, tournamentIndexRows);
-        if (rosterFromIndex.length) {
-          fallbackRoster = rosterFromIndex;
-        }
-      }
+      const tournamentIndexRows = await loadTournamentPlayerIndex().catch(() => [] as TournamentPlayerIndexRow[]);
+      if (loadSeq !== notesTeamLoadSeqRef.current) return;
+      const rosterFromIndex = fallbackRosterRowsFromPlayerIndex(team, tournamentIndexRows);
+      const fallbackRoster = mergeTeamDetailsRosterRows([liveRoster, fallbackRosterFromGames, rosterFromIndex]);
       const snapshot: TeamDetailsSnapshot = {
         schedule: fallbackSchedule,
         roster: fallbackRoster
@@ -4943,10 +5022,20 @@ export default function BirdDogPage() {
       return geocodeCacheRef.current.get(normalized) || null;
     }
     const rawAddress = String(address || "").trim();
+    const eventCity = String(selectedInventory?.displayCity || selectedTournament?.city || eventLocationHint || "").trim();
+    const strippedSlot = rawAddress
+      .replace(/^[a-z]?\d+\s*@\s*/i, "")
+      .replace(/^field\s*[a-z0-9-]*\s*@?\s*/i, "")
+      .replace(/^diamond\s*[a-z0-9-]*\s*@?\s*/i, "")
+      .trim();
     const candidates = Array.from(new Set([
       rawAddress,
+      strippedSlot,
       rawAddress.replace(/\bfield\s*[a-z0-9-]*\b/ig, "").replace(/\s+/g, " ").trim(),
       rawAddress.split(",").slice(1).join(",").trim()
+      ,
+      eventCity ? `${rawAddress}, ${eventCity}` : "",
+      eventCity ? `${strippedSlot}, ${eventCity}` : ""
     ].filter(Boolean)));
     for (const query of candidates) {
       try {
@@ -5383,7 +5472,10 @@ export default function BirdDogPage() {
         }
 
         if (travelEstimate.minutes > MAX_FEASIBLE_TRAVEL_MINUTES) continue;
-        const departMs = arrivalGateMs;
+        const latestReasonableDepartMs = candidate.startMs
+          - PRE_GAME_BUFFER_MINUTES * 60 * 1000
+          - travelEstimate.minutes * 60 * 1000;
+        const departMs = Math.max(arrivalGateMs, latestReasonableDepartMs);
         const arriveMs = departMs + travelEstimate.minutes * 60 * 1000;
         const watchStartMs = Math.max(arriveMs, candidate.startMs - PRE_GAME_BUFFER_MINUTES * 60 * 1000);
         const remainingMinutes = Math.floor((candidate.endMs - watchStartMs) / (60 * 1000));
@@ -5766,7 +5858,18 @@ export default function BirdDogPage() {
       .filter((row) => Number.isFinite(row.atMs))
       .sort((a, b) => a.atMs - b.atMs)[0];
     const firstPlayerStart = destinationForPlayer(selectedPlayers[0]) || "";
-    const resolvedSource = String(earliestArrival?.arrivalLocation || airportStartLabel || firstPlayerStart || "Event arrival hub").trim();
+    const primaryState = earliestArrival?.stateCode || requiredStates[0] || "";
+    const bookedHotelSource = primaryState
+      ? String(hotelPayloadByState[primaryState]?.hotelName || "").trim()
+      : "";
+    const resolvedSource = String(
+      bookedHotelSource
+      || scheduleForm.flightSource
+      || airportStartLabel
+      || earliestArrival?.arrivalLocation
+      || firstPlayerStart
+      || "Event arrival hub"
+    ).trim();
     const plannedArrivalInput = String(earliestArrival?.arrivalTime || scheduleForm.flightArrivalTime || "").trim();
     const arrivalValidation = validateArrivalFeasibility(selectedPlayers, arrivalPayloadByState, plannedArrivalInput);
     if (arrivalValidation) {
@@ -6293,6 +6396,119 @@ export default function BirdDogPage() {
     setPlanWorkflowNote("Player order updated. Recommendation will prioritize this order.");
   }
 
+  function moveDesiredPlayerToIndex(selectionKey: string, targetIndex: number) {
+    setDesiredPlayersAndPersist((prev) => {
+      const sourceIndex = prev.findIndex((item) => desiredPlayerSelectionKey(item) === selectionKey);
+      if (sourceIndex < 0) return prev;
+      const boundedTarget = Math.max(0, Math.min(prev.length - 1, targetIndex));
+      if (boundedTarget === sourceIndex) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(sourceIndex, 1);
+      next.splice(boundedTarget, 0, moved);
+      return next;
+    });
+    autoPlannerRef.current.key = "";
+    clearSmartScheduleInsights();
+    setAndPersistPlanWorkflowStatus("draft");
+    setPlanWorkflowNote("Player order updated by drag and drop.");
+  }
+
+  function onDesiredPlayerDragStart(selectionKey: string) {
+    setDraggingDesiredPlayerKey(selectionKey);
+  }
+
+  function onDesiredPlayerDrop(targetSelectionKey: string) {
+    const draggingKey = String(draggingDesiredPlayerKey || "").trim();
+    setDraggingDesiredPlayerKey(null);
+    if (!draggingKey || draggingKey === targetSelectionKey) return;
+    const targetIndex = desiredPlayers.findIndex((item) => desiredPlayerSelectionKey(item) === targetSelectionKey);
+    if (targetIndex < 0) return;
+    moveDesiredPlayerToIndex(draggingKey, targetIndex);
+  }
+
+  function toggleNotesRosterSelection(selectionKey: string) {
+    setNotesSelectedRosterRowKeys((prev) =>
+      prev.includes(selectionKey)
+        ? prev.filter((item) => item !== selectionKey)
+        : [...prev, selectionKey]
+    );
+  }
+
+  function clearNotesTeamSelection() {
+    setNotesSelectedTeam(null);
+    setNotesTeamScheduleRows([]);
+    setNotesTeamRosterRows([]);
+    setNotesSelectedRosterRowKeys([]);
+    setNotesTeamStatus("");
+    setNotesTeamLoading(false);
+  }
+
+  function addSelectedNotesRosterPlayersToCart() {
+    const team = notesSelectedTeam;
+    if (!team) {
+      setNotesTeamStatus("Select a team first.");
+      return;
+    }
+    const selectedSet = new Set(notesSelectedRosterRowKeys);
+    const selectedRows = notesTeamRosterRows.filter((row) =>
+      selectedSet.has(notesRosterRowSelectionKey(row))
+    );
+    if (!selectedRows.length) {
+      setNotesTeamStatus("Select at least one player from this roster.");
+      return;
+    }
+
+    const merged = new Map<string, DesiredPlayer>();
+    const identitySet = new Set<string>();
+    const duplicateNames: string[] = [];
+    teamRosterCartPlayers.forEach((item) => {
+      merged.set(desiredPlayerSelectionKey(item), item);
+      const identity = desiredPlayerIdentityKey(item);
+      if (identity) identitySet.add(identity);
+    });
+    let addedCount = 0;
+    selectedRows.forEach((row) => {
+      const rowKey = notesRosterRowSelectionKey(row);
+      const selectionKey = `team:${team.id}:${rowKey}`;
+      const candidate: DesiredPlayer = {
+        playerId: selectionKey,
+        selectionKey,
+        name: String(row.name || "-").trim(),
+        team: String(row.team || team.name || "Unknown Team").trim(),
+        hometown: String(row.hometown || "").trim(),
+        sourceTeamId: team.id,
+        sourceTeamName: team.name
+      };
+      const identity = desiredPlayerIdentityKey(candidate);
+      if (identity && identitySet.has(identity)) {
+        duplicateNames.push(candidate.name);
+        return;
+      }
+      if (identity) identitySet.add(identity);
+      merged.set(selectionKey, candidate);
+      addedCount += 1;
+    });
+    const next = Array.from(merged.values());
+    setTeamRosterCartAndPersist(next);
+    autoPlannerRef.current.key = "";
+    clearSmartScheduleInsights();
+    setAndPersistPlanWorkflowStatus("draft");
+    if (addedCount > 0 && duplicateNames.length > 0) {
+      setNotesTeamStatus(`Added ${addedCount} player(s). ${duplicateNames.length} already existed and were skipped.`);
+    } else if (duplicateNames.length > 0) {
+      setNotesTeamStatus(`${duplicateNames.length} player(s) already existed in your players list.`);
+    } else {
+      setNotesTeamStatus(`Added ${addedCount} player(s) from ${team.name} to final cart.`);
+    }
+    if (duplicateNames.length > 0 && typeof window !== "undefined") {
+      const preview = Array.from(new Set(duplicateNames)).slice(0, 3).join(", ");
+      const suffix = duplicateNames.length > 3 ? " and more" : "";
+      window.alert(
+        `${duplicateNames.length} player(s) already exist in your players list${preview ? `: ${preview}${suffix}` : ""}.`
+      );
+    }
+  }
+
   function persistTeamRosterCart(next: DesiredPlayer[]) {
     setTeamRosterCartAndPersist(next);
   }
@@ -6698,13 +6914,74 @@ export default function BirdDogPage() {
   const filteredTeams = useMemo(() => {
     const normalized = normalizeSmartSearch(teamListSearchQuery);
     if (!normalized) return tournamentTeamsForNotes;
+    const teamIdMatches = new Set(
+      scheduleSearchPlayerTeamIds
+        .map((value) => String(value || "").trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const teamNameMatches = new Set(
+      scheduleSearchPlayerTeamNames
+        .map((value) => normalizeSmartSearch(value))
+        .filter(Boolean)
+    );
     const tokens = normalized.split(" ").filter(Boolean);
+
+    if (tournamentTeamSearchMode === "player") {
+      return tournamentTeamsForNotes.filter((team) => {
+        const id = String(team.id || "").trim().toLowerCase();
+        const name = normalizeSmartSearch(team.name || "");
+        if (!name) return false;
+        if (id && teamIdMatches.has(id)) return true;
+        if (teamNameMatches.has(name)) return true;
+        return false;
+      });
+    }
+
     return tournamentTeamsForNotes.filter((team) => {
       const name = normalizeSmartSearch(team.name || "");
       if (!name) return false;
       return tokens.every((token) => name.includes(token));
     });
-  }, [teamListSearchQuery, tournamentTeamsForNotes]);
+  }, [
+    scheduleSearchPlayerTeamIds,
+    scheduleSearchPlayerTeamNames,
+    teamListSearchQuery,
+    tournamentTeamSearchMode,
+    tournamentTeamsForNotes
+  ]);
+  const notesPlayerSearchResults = useMemo(() => {
+    if (tournamentTeamSearchMode !== "player") return [] as SmartPlayerResult[];
+    if (!scheduleSearchNormalized) return [] as SmartPlayerResult[];
+    const rows = tournamentPlayerIndexRef.current;
+    if (!rows.length) return [] as SmartPlayerResult[];
+    const seen = new Set<string>();
+    const out: SmartPlayerResult[] = [];
+    rows.forEach((row) => {
+      const blob = normalizeSmartSearch(row.name);
+      if (!blob) return;
+      if (!scheduleSearchTokens.every((token) => blob.includes(token))) return;
+      const key = `${row.teamId}::${row.playerId || normalizeSmartSearch(row.name)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({
+        key,
+        playerId: row.playerId,
+        name: row.name,
+        hometown: row.hometown || "-",
+        teamId: row.teamId,
+        teamName: row.teamName
+      });
+    });
+    return out
+      .sort((left, right) => left.name.localeCompare(right.name) || left.teamName.localeCompare(right.teamName))
+      .slice(0, 60);
+  }, [
+    scheduleSearchNormalized,
+    scheduleSearchPlayerTeamIds,
+    scheduleSearchPlayerTeamNames,
+    scheduleSearchTokens,
+    tournamentTeamSearchMode
+  ]);
   const selectedNotesTeamScheduleGroups = useMemo(() => {
     if (!notesTeamScheduleRows.length) {
       return [] as Array<{ dayLabel: string; daySort: number; rows: TeamDetailsScheduleRow[] }>;
@@ -6737,11 +7014,25 @@ export default function BirdDogPage() {
     () => sortInventoryForDisplay(displayInventory.filter((item) => item.company === company)),
     [company, displayInventory]
   );
+  const tournamentAgeFilterOptions = useMemo(() => {
+    const ages = new Set<number>();
+    companyTournamentInventory.forEach((item) => {
+      tournamentAgeGroups(item).forEach((age) => {
+        if (age >= 15) ages.add(age);
+      });
+    });
+    return ["15U+", ...Array.from(ages.values()).sort((a, b) => a - b).map((age) => `${age}U`)];
+  }, [companyTournamentInventory]);
+  const tournamentAgeFilterLabel = useMemo(
+    () => (tournamentAgeFilter === "15U+" ? "15U & Over" : tournamentAgeFilter),
+    [tournamentAgeFilter]
+  );
   const filteredTournamentInventory = useMemo(() => {
     const query = tournamentSearchQuery.trim().toLowerCase();
-    if (!query) return companyTournamentInventory;
-    return companyTournamentInventory.filter((item) => item.name.toLowerCase().includes(query));
-  }, [companyTournamentInventory, tournamentSearchQuery]);
+    const byAge = companyTournamentInventory.filter((item) => inventoryMatchesAgeFilter(item, tournamentAgeFilter));
+    if (!query) return byAge;
+    return byAge.filter((item) => item.name.toLowerCase().includes(query));
+  }, [companyTournamentInventory, tournamentAgeFilter, tournamentSearchQuery]);
   const desiredPlayerIdSet = useMemo(
     () => new Set(desiredPlayers.map((item) => desiredPlayerSelectionKey(item))),
     [desiredPlayers]
@@ -6864,6 +7155,22 @@ export default function BirdDogPage() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [menuOpen]);
+  useEffect(() => {
+    if (tournamentAgeFilterOptions.includes(tournamentAgeFilter)) return;
+    setTournamentAgeFilter("15U+");
+  }, [tournamentAgeFilter, tournamentAgeFilterOptions]);
+  useEffect(() => {
+    if (!tournamentAgeFilterOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setTournamentAgeFilterOpen(false);
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [tournamentAgeFilterOpen]);
   const canGoBackInApp = !showTournaments;
   function goToTournamentDashboard(options?: { rememberCurrent?: boolean }) {
     navigateTab("tournaments", { rememberCurrent: options?.rememberCurrent, closeMenu: true });
@@ -6880,6 +7187,8 @@ export default function BirdDogPage() {
     setSelectedInventorySlug("");
     setSelectedTournamentId("");
     setTournamentSearchQuery("");
+    setTournamentAgeFilter("15U+");
+    setTournamentAgeFilterOpen(false);
     setOpenError("");
     setJobHint(nextCompany === "PBR" ? "Prep Baseball Tournament" : "PG Spring Showdown");
     if (typeof window !== "undefined") {
@@ -7124,15 +7433,47 @@ export default function BirdDogPage() {
         </div>
         {inventoryRefreshing ? <p className="muted small">Syncing latest data from {sourceLabel(company)}...</p> : null}
         {openError ? <p className="muted">{openError}</p> : null}
-        <label style={{ display: "block", maxWidth: 420, marginTop: 8 }}>
-          Search {companyLabel(company)} Tournament
-          <input
-            value={tournamentSearchQuery}
-            onChange={(e) => setTournamentSearchQuery(e.target.value)}
-            placeholder="Search by tournament name"
-            style={{ fontSize: 14 }}
-          />
-        </label>
+        <div className="row wrap" style={{ gap: 8, alignItems: "flex-end", marginTop: 8 }}>
+          <label style={{ display: "block", maxWidth: 420, flex: "1 1 320px", marginBottom: 0 }}>
+            Search {companyLabel(company)} Tournament
+            <input
+              value={tournamentSearchQuery}
+              onChange={(e) => setTournamentSearchQuery(e.target.value)}
+              placeholder="Search by tournament name"
+              style={{ fontSize: 14 }}
+            />
+          </label>
+          <div style={{ position: "relative" }}>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setTournamentAgeFilterOpen((prev) => !prev)}
+              aria-expanded={tournamentAgeFilterOpen}
+            >
+              Filter: {tournamentAgeFilterLabel}
+            </button>
+            {tournamentAgeFilterOpen ? (
+              <div className="bd-filter-popover">
+                {tournamentAgeFilterOptions.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    className={option === tournamentAgeFilter ? "" : "secondary"}
+                    onClick={() => {
+                      setTournamentAgeFilter(option);
+                      setTournamentAgeFilterOpen(false);
+                    }}
+                  >
+                    {option === "15U+" ? "15U & Over" : option}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <p className="muted small" style={{ marginTop: 8, marginBottom: 0 }}>
+          Showing only 15U and above tournaments.
+        </p>
         <div className="tournament-grid" style={{ marginTop: 12 }}>
           {filteredTournamentInventory.length ? filteredTournamentInventory.map((item) => {
             const locked = isTournamentLocked(item, { forceUnlocked: isAdminUser });
@@ -7179,16 +7520,62 @@ export default function BirdDogPage() {
             </p>
             <div style={{ marginBottom: 10 }}>
               <label htmlFor="tournament-team-search" className="muted" style={{ display: "block", marginBottom: 6 }}>
-                Search Teams
+                Search Teams / Players
               </label>
+              <div className="row wrap" style={{ gap: 8, marginBottom: 8 }}>
+                <button
+                  type="button"
+                  className={tournamentTeamSearchMode === "team" ? "" : "secondary"}
+                  onClick={() => setTournamentTeamSearchMode("team")}
+                >
+                  Team Name
+                </button>
+                <button
+                  type="button"
+                  className={tournamentTeamSearchMode === "player" ? "" : "secondary"}
+                  onClick={() => setTournamentTeamSearchMode("player")}
+                >
+                  Player Name
+                </button>
+              </div>
               <input
                 id="tournament-team-search"
                 type="text"
                 value={teamListSearchQuery}
-                onChange={(event) => setTeamListSearchQuery(event.target.value)}
-                placeholder="Search team name"
+                onChange={(event) => {
+                  setTeamListSearchQuery(event.target.value);
+                  setTeamsSearchQuery(event.target.value);
+                }}
+                placeholder={tournamentTeamSearchMode === "player" ? "Search player name" : "Search team name"}
                 autoComplete="off"
               />
+              {tournamentTeamSearchMode === "player" && teamListSearchQuery.trim().length >= 2 ? (
+                <p className="muted small" style={{ marginTop: 6, marginBottom: 0 }}>
+                  {scheduleSearchLoading ? "Searching players..." : `${notesPlayerSearchResults.length} player match${notesPlayerSearchResults.length === 1 ? "" : "es"} found`}
+                </p>
+              ) : null}
+              {tournamentTeamSearchMode === "player" && notesPlayerSearchResults.length ? (
+                <div className="table-wrap" style={{ marginTop: 8 }}>
+                  <table className="roster-table">
+                    <thead>
+                      <tr>
+                        <th>Player</th>
+                        <th>Team</th>
+                        <th>Hometown</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {notesPlayerSearchResults.slice(0, 15).map((row) => (
+                        <tr key={row.key}>
+                          <td>{row.name}</td>
+                          <td>{row.teamName || "-"}</td>
+                          <td>{row.hometown || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
             </div>
             <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
               {filteredTeams.length} team{filteredTeams.length === 1 ? "" : "s"} shown
@@ -7203,7 +7590,13 @@ export default function BirdDogPage() {
                       key={notesTeamCacheKey(team)}
                       type="button"
                       className={selected ? "" : "secondary"}
-                      onClick={() => void openTeamDetailsInline(team)}
+                      onClick={() => {
+                        if (selected) {
+                          clearNotesTeamSelection();
+                          return;
+                        }
+                        void openTeamDetailsInline(team);
+                      }}
                       style={{ textAlign: "left", minWidth: 220, flex: "1 1 260px" }}
                     >
                       <span>{team.name}</span>
@@ -7232,13 +7625,22 @@ export default function BirdDogPage() {
                   <h3 style={{ marginTop: 0, marginBottom: 0 }}>{notesSelectedTeam.name}</h3>
                   {notesSelectedTeam.from ? <p className="muted" style={{ marginTop: 4, marginBottom: 0 }}>{notesSelectedTeam.from}</p> : null}
                 </div>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => viewTeamScheduleAndRoster(notesSelectedTeam, "notes", "roster")}
-                >
-                  Open Full Team Roster Tools
-                </button>
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => navigateTab("myPlayersSchedule")}
+                  >
+                    Go To My Players & Schedule
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => viewTeamScheduleAndRoster(notesSelectedTeam, "notes", "roster")}
+                  >
+                    Open Full Team Roster Tools
+                  </button>
+                </div>
               </div>
 
               {notesTeamLoading ? <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>Loading team schedule and roster...</p> : null}
@@ -7286,10 +7688,35 @@ export default function BirdDogPage() {
               </div>
 
               <h4 style={{ marginTop: 12, marginBottom: 6 }}>Team Roster</h4>
+              <div className="row wrap" style={{ gap: 8, marginBottom: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => addSelectedNotesRosterPlayersToCart()}
+                  disabled={!notesSelectedRosterRowKeys.length}
+                >
+                  Add Selected Players to Final Cart
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setNotesSelectedRosterRowKeys([])}
+                  disabled={!notesSelectedRosterRowKeys.length}
+                >
+                  Clear Selection
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => navigateTab("myPlayersSchedule")}
+                >
+                  Go To My Players & Schedule
+                </button>
+              </div>
               <div className="table-wrap">
                 <table className="roster-table">
                   <thead>
                     <tr>
+                      <th>Select</th>
                       <th>No</th>
                       <th>Player</th>
                       <th>Position</th>
@@ -7299,8 +7726,19 @@ export default function BirdDogPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {notesTeamRosterRows.length ? notesTeamRosterRows.map((row, index) => (
+                    {notesTeamRosterRows.length ? notesTeamRosterRows.map((row, index) => {
+                      const selectionKey = notesRosterRowSelectionKey(row);
+                      const checked = notesSelectedRosterRowKeys.includes(selectionKey);
+                      return (
                       <tr key={`${row.no || "-"}-${row.name}-${index}`}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleNotesRosterSelection(selectionKey)}
+                            aria-label={`Select ${row.name}`}
+                          />
+                        </td>
                         <td>{row.no || "-"}</td>
                         <td>{row.name || "-"}</td>
                         <td>{row.position || "-"}</td>
@@ -7308,9 +7746,10 @@ export default function BirdDogPage() {
                         <td>{row.hometown || "-"}</td>
                         <td>{row.commitment || "-"}</td>
                       </tr>
-                    )) : (
+                      );
+                    }) : (
                       <tr>
-                        <td className="empty-cell" colSpan={6}>No roster rows found for this team yet.</td>
+                        <td className="empty-cell" colSpan={7}>No roster rows found for this team yet.</td>
                       </tr>
                     )}
                   </tbody>
@@ -7355,6 +7794,9 @@ export default function BirdDogPage() {
           </p>
           <p className="muted" style={{ marginTop: 0 }}>
             Selected players: {desiredPlayers.length}
+          </p>
+          <p className="muted small" style={{ marginTop: 0 }}>
+            Drag and drop player rows to reorder scouting priority.
           </p>
           <div className="panel" style={{ marginTop: 8, marginBottom: 8 }}>
             <h4 style={{ marginTop: 0, marginBottom: 6 }}>Coach Travel Inputs</h4>
@@ -7653,28 +8095,21 @@ export default function BirdDogPage() {
               </thead>
               <tbody>
                 {desiredPlayers.length ? desiredPlayers.map((player, index) => (
-                  <tr key={desiredPlayerSelectionKey(player)}>
+                  <tr
+                    key={desiredPlayerSelectionKey(player)}
+                    className={draggingDesiredPlayerKey === desiredPlayerSelectionKey(player) ? "dragging-row" : ""}
+                    draggable
+                    onDragStart={() => onDesiredPlayerDragStart(desiredPlayerSelectionKey(player))}
+                    onDragEnd={() => setDraggingDesiredPlayerKey(null)}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={() => onDesiredPlayerDrop(desiredPlayerSelectionKey(player))}
+                  >
                     <td data-label="Order">{index + 1}</td>
                     <td data-label="Player">{player.name}</td>
                     <td data-label="Team">{player.team}</td>
                     <td data-label="Playing Time">{playerTeamTimingBySelectionKey.get(desiredPlayerSelectionKey(player)) || "Time TBD"}</td>
                     <td className="action-cell" data-label="Action">
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => moveDesiredPlayer(desiredPlayerSelectionKey(player), -1)}
-                        disabled={index === 0}
-                      >
-                        Up
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => moveDesiredPlayer(desiredPlayerSelectionKey(player), 1)}
-                        disabled={index === desiredPlayers.length - 1}
-                      >
-                        Down
-                      </button>
+                      <span className="small muted" style={{ display: "block", marginBottom: 6 }}>Drag to reorder</span>
                       <button
                         type="button"
                         className="secondary"

@@ -627,6 +627,26 @@
   color: var(--bd-card-muted);
 }
 
+.bd-root .bd-filter-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 170px;
+  border: 1px solid rgba(163, 188, 226, 0.36);
+  border-radius: 10px;
+  background: rgba(7, 16, 30, 0.97);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.bd-root .bd-filter-popover button {
+  width: 100%;
+  text-align: left;
+}
+
 .bd-root .muted {
   color: rgba(202, 218, 243, 0.84);
 }
@@ -664,6 +684,11 @@
 .bd-root .roster-table td {
   color: #edf4ff;
   background: rgba(8, 17, 31, 0.72);
+}
+
+.bd-root .roster-table tr.dragging-row td {
+  background: rgba(14, 29, 52, 0.95);
+  border-color: rgba(215, 163, 22, 0.45);
 }
 
 .bd-root .roster-table td.action-cell {
