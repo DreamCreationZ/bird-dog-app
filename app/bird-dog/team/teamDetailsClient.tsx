@@ -583,6 +583,29 @@ function extractState(value: string) {
   return match ? match[1] : "";
 }
 
+function extractCityToken(value: string) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const segments = raw
+    .split(",")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (!segments.length) return "";
+  const skipState = (segment: string) => /^[A-Z]{2}$/.test(segment.toUpperCase());
+  const looksLikeStreet = (segment: string) =>
+    /\d/.test(segment)
+    || /\b(st|street|ave|avenue|blvd|boulevard|rd|road|ln|lane|dr|drive|hwy|highway|parkway|pkwy|suite|ste|unit|apt)\b/i.test(segment);
+  for (let i = 0; i < segments.length; i += 1) {
+    const segment = segments[i];
+    if (!segment) continue;
+    if (/^united states$/i.test(segment)) continue;
+    if (skipState(segment)) continue;
+    if (looksLikeStreet(segment)) continue;
+    return segment.toLowerCase();
+  }
+  return segments[0].toLowerCase();
+}
+
 function scheduleRowKey(row: TeamScheduleRow) {
   const normalize = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
   return [
@@ -685,11 +708,16 @@ function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: num
 
 function estimateTravelNoGeo(from: string, to: string) {
   if (from.toLowerCase() === to.toLowerCase()) return { mode: "Walk / Local Cab", minutes: 20 };
+  const fromCity = extractCityToken(from);
+  const toCity = extractCityToken(to);
   const fromState = extractState(from);
   const toState = extractState(to);
+  if (fromCity && toCity && fromCity === toCity && fromState && toState && fromState === toState) {
+    return { mode: "Local Transfer", minutes: 25 };
+  }
   if (fromState && toState && fromState !== toState) return { mode: "Flight + Cab", minutes: 300 };
-  if (fromState && toState && fromState === toState) return { mode: "Car / Train", minutes: 120 };
-  return { mode: "Car / Cab", minutes: 90 };
+  if (fromState && toState && fromState === toState) return { mode: "Car / Train", minutes: 45 };
+  return { mode: "Car / Cab", minutes: 60 };
 }
 
 function prepareBookingLegsForProvider(

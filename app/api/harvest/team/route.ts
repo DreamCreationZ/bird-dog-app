@@ -103,6 +103,54 @@ function hasDetailedRosterColumns(
   );
 }
 
+function looksLikeVenueLabel(value: string) {
+  const normalized = cleanText(value).toLowerCase();
+  if (!normalized) return false;
+  if (/^field\s*[a-z0-9-]*$/i.test(normalized)) return true;
+  if (/^site\s*[a-z0-9-]*$/i.test(normalized)) return true;
+  return /little league|sports complex|sportsplex|complex|park|stadium|academy|facility|high school|middle school|athletic|ballpark|diamond|fieldhouse|@/.test(normalized);
+}
+
+function isPlaceholderField(value: string) {
+  const normalized = cleanText(value).toLowerCase();
+  return !normalized || normalized === "-" || normalized === "tbd" || normalized === "field tbd";
+}
+
+function scheduleRowsLookSuspect(rows: TeamScheduleRow[], targetTeamName: string) {
+  if (!rows.length) return false;
+  let venueAsTeamRows = 0;
+  let targetMissingRows = 0;
+  let missingFieldWithVenueRows = 0;
+
+  rows.forEach((row) => {
+    const homeTeam = cleanText(row.homeTeam || "");
+    const awayTeam = cleanText(row.awayTeam || "");
+    const field = cleanText(row.field || "");
+    const homeLooksVenue = looksLikeVenueLabel(homeTeam);
+    const awayLooksVenue = looksLikeVenueLabel(awayTeam);
+
+    if (homeLooksVenue || awayLooksVenue) {
+      venueAsTeamRows += 1;
+      if (isPlaceholderField(field)) {
+        missingFieldWithVenueRows += 1;
+      }
+    }
+
+    if (
+      targetTeamName
+      && !teamMatches(homeTeam, targetTeamName)
+      && !teamMatches(awayTeam, targetTeamName)
+    ) {
+      targetMissingRows += 1;
+    }
+  });
+
+  if (venueAsTeamRows > 0) return true;
+  if (missingFieldWithVenueRows > 0) return true;
+  if (rows.length >= 2 && targetMissingRows === rows.length) return true;
+  return false;
+}
+
 function rosterMergeKey(row: { no?: string; name?: string }) {
   const no = String(row.no || "").trim();
   const name = normalize(String(row.name || ""));
@@ -1004,6 +1052,7 @@ export async function POST(req: NextRequest) {
         const importedRoster = imported.roster;
         const importedReady = schedule.length && importedRoster.length;
         const importedDetailed = hasDetailedRosterColumns(importedRoster);
+        const importedScheduleSuspect = scheduleRowsLookSuspect(schedule, targetTeamName);
         const isPbrTournament = seedMeta?.company === "PBR"
           || inventorySlug.startsWith("pbr-live-")
           || /^pbr-team-/i.test(teamId)
@@ -1019,7 +1068,7 @@ export async function POST(req: NextRequest) {
           });
         }
 
-        if (isPbrTournament && !searchOnly && (!importedReady || !importedDetailed)) {
+        if (isPbrTournament && !searchOnly && (!importedReady || !importedDetailed || importedScheduleSuspect)) {
           const eventHint = await withTimeout(resolvePbrEventHint({
             inventorySlug,
             tournament,
@@ -1061,8 +1110,10 @@ export async function POST(req: NextRequest) {
                 ok: true,
                 source: "pbr_live_team_schedule",
                 // Keep imported schedule as source-of-truth when available;
-                // use live schedule only as a fallback.
-                schedule: schedule.length ? schedule : livePbr.schedule,
+                // use live schedule when imported rows look corrupted.
+                schedule: (importedScheduleSuspect && livePbr.schedule.length)
+                  ? livePbr.schedule
+                  : (schedule.length ? schedule : livePbr.schedule),
                 roster: Array.from(mergedRosterMap.values()),
                 teamUrl: livePbr.teamUrl || eventHint
               });
@@ -1070,15 +1121,28 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        const shouldEnrichFromLive = !isPbrTournament && (!importedReady || !importedDetailed);
+        const shouldEnrichFromLive = !isPbrTournament && !searchOnly;
         if (shouldEnrichFromLive) {
           const fallbackTeamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName: targetTeamName || teamName, eventId });
           if (fallbackTeamUrl) {
-            const live = await withTimeout(scrapePgTeamLive(fallbackTeamUrl, {
+            let live = await withTimeout(scrapePgTeamLive(fallbackTeamUrl, {
               teamName: targetTeamName || teamName,
               eventId,
               fastMode: true
-            }), 2800) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[] };
+            }), importedScheduleSuspect ? 5200 : 3200) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[] };
+            if (
+              (!live.schedule.length && !live.roster.length)
+              || (importedScheduleSuspect && !live.schedule.length)
+            ) {
+              const liveRetry = await withTimeout(scrapePgTeamLive(fallbackTeamUrl, {
+                teamName: targetTeamName || teamName,
+                eventId,
+                fastMode: false
+              }), importedScheduleSuspect ? 12000 : 7000);
+              if (liveRetry && (liveRetry.schedule.length || liveRetry.roster.length)) {
+                live = liveRetry;
+              }
+            }
             if (live.schedule.length || live.roster.length) {
               const mergedRosterMap = new Map<string, {
                 no: string;
@@ -1115,8 +1179,10 @@ export async function POST(req: NextRequest) {
               return NextResponse.json({
                 ok: true,
                 source: importedReady ? "imported_plus_pg_live" : "pg_live_fallback",
-                // Imported tournament schedule is usually cleaner; use live only if imported is empty.
-                schedule: schedule.length ? schedule : live.schedule,
+                // Prefer live schedule when imported rows look structurally wrong.
+                schedule: (importedScheduleSuspect && live.schedule.length)
+                  ? live.schedule
+                  : (schedule.length ? schedule : live.schedule),
                 roster: Array.from(mergedRosterMap.values()),
                 teamUrl: fallbackTeamUrl
               });

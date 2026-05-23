@@ -1035,6 +1035,13 @@ function looksLikeVenueLabel(value: string) {
     || /\b[a-z]?\d+\b/.test(normalized);
 }
 
+function looksLikeStreetSegment(value: string) {
+  const normalized = normalizeLocationText(value);
+  if (!normalized) return false;
+  if (/\d/.test(normalized)) return true;
+  return /\b(st|street|ave|avenue|blvd|boulevard|rd|road|ln|lane|dr|drive|hwy|highway|parkway|pkwy|suite|ste|unit|apt)\b/.test(normalized);
+}
+
 function extractCityToken(value: string) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -1055,6 +1062,7 @@ function extractCityToken(value: string) {
       if (segment === "united states" || segment === "usa") continue;
       if (US_STATE_CODES.has(segment.toUpperCase())) continue;
       if (Object.prototype.hasOwnProperty.call(US_STATE_NAME_TO_CODE, segment)) continue;
+      if (looksLikeStreetSegment(segment)) continue;
       return segment;
     }
   }
@@ -1065,6 +1073,19 @@ function extractCityToken(value: string) {
       if (segment === "united states" || segment === "usa") continue;
       if (US_STATE_CODES.has(segment.toUpperCase())) continue;
       if (Object.prototype.hasOwnProperty.call(US_STATE_NAME_TO_CODE, segment)) continue;
+      if (looksLikeStreetSegment(segment)) continue;
+      return segment;
+    }
+  }
+
+  if (looksLikeStreetSegment(firstSegmentRaw)) {
+    for (let i = 1; i < segments.length; i += 1) {
+      const segment = segments[i];
+      if (!segment) continue;
+      if (segment === "united states" || segment === "usa") continue;
+      if (US_STATE_CODES.has(segment.toUpperCase())) continue;
+      if (Object.prototype.hasOwnProperty.call(US_STATE_NAME_TO_CODE, segment)) continue;
+      if (looksLikeStreetSegment(segment)) continue;
       return segment;
     }
   }
@@ -1610,8 +1631,8 @@ function travelModeByText(from: string, to: string): TravelEstimate {
   if (fromState && toState && fromState === toState) {
     return {
       mode: "Drive / Cab",
-      minutes: 65,
-      advisory: `Same-state route (${fromState}). Ground transfer is usually fastest for field-to-field coverage.`
+      minutes: 40,
+      advisory: `Same-state fallback route (${fromState}). Live map ETA will be used when available.`
     };
   }
   const indiaUs = (looksLikeIndiaLocation(from) && looksLikeUsLocation(to))
@@ -5099,19 +5120,37 @@ export default function BirdDogPage() {
     }
     const rawAddress = String(address || "").trim();
     const eventCity = String(selectedInventory?.displayCity || selectedTournament?.city || eventLocationHint || "").trim();
+    const afterAt = rawAddress.includes("@")
+      ? rawAddress.split("@").slice(-1)[0]?.trim() || ""
+      : "";
+    const trimmedPrefix = rawAddress
+      .replace(/^[a-z]?\d+\s*@\s*/i, "")
+      .replace(/^(?:field|diamond|court|site)\s*[a-z0-9-]*\s*@?\s*/i, "")
+      .trim();
     const strippedSlot = rawAddress
       .replace(/^[a-z]?\d+\s*@\s*/i, "")
       .replace(/^field\s*[a-z0-9-]*\s*@?\s*/i, "")
       .replace(/^diamond\s*[a-z0-9-]*\s*@?\s*/i, "")
       .trim();
+    const noGateLabels = rawAddress
+      .replace(/\b(?:field|diamond|court|site)\s*[a-z0-9-]*\b/ig, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const trailingCityState = rawAddress.split(",").slice(-2).join(",").trim();
     const candidates = Array.from(new Set([
       rawAddress,
+      afterAt,
+      trimmedPrefix,
       strippedSlot,
+      noGateLabels,
       rawAddress.replace(/\bfield\s*[a-z0-9-]*\b/ig, "").replace(/\s+/g, " ").trim(),
-      rawAddress.split(",").slice(1).join(",").trim()
-      ,
+      rawAddress.split(",").slice(1).join(",").trim(),
+      trailingCityState,
       eventCity ? `${rawAddress}, ${eventCity}` : "",
-      eventCity ? `${strippedSlot}, ${eventCity}` : ""
+      eventCity ? `${afterAt || strippedSlot}, ${eventCity}` : "",
+      eventCity ? `${trimmedPrefix || strippedSlot}, ${eventCity}` : "",
+      eventCity ? `${noGateLabels || strippedSlot}, ${eventCity}` : "",
+      eventCity ? `${afterAt || strippedSlot}, ${eventCity}, United States` : ""
     ].filter(Boolean)));
     for (const query of candidates) {
       try {
@@ -5472,6 +5511,7 @@ export default function BirdDogPage() {
     const MIN_VIEW_MINUTES = 20;
     const PRE_GAME_BUFFER_MINUTES = 10;
     const TARGET_PRE_GAME_WAIT_MINUTES = 30;
+    const MAX_PRE_GAME_WAIT_MINUTES = 120;
 
     while (unseenPlayers.size > 0 && usedGameKeys.size < geocoded.length) {
       let best: {
@@ -5554,14 +5594,24 @@ export default function BirdDogPage() {
         const targetDepartMs = candidate.startMs
           - (TARGET_PRE_GAME_WAIT_MINUTES + travelEstimate.minutes) * 60 * 1000;
         const preferredDepartMs = Math.min(latestReasonableDepartMs, targetDepartMs);
-        const departMs = Math.max(arrivalGateMs, preferredDepartMs);
-        const arriveMs = departMs + travelEstimate.minutes * 60 * 1000;
+        let departMs = Math.max(arrivalGateMs, preferredDepartMs);
+        let arriveMs = departMs + travelEstimate.minutes * 60 * 1000;
+        let waitMinutes = Math.max(0, Math.floor((candidate.startMs - arriveMs) / (60 * 1000)));
+        if (waitMinutes > MAX_PRE_GAME_WAIT_MINUTES) {
+          const cappedArriveMs = candidate.startMs - MAX_PRE_GAME_WAIT_MINUTES * 60 * 1000;
+          const cappedDepartMs = cappedArriveMs - travelEstimate.minutes * 60 * 1000;
+          if (cappedDepartMs >= arrivalGateMs) {
+            departMs = cappedDepartMs;
+            arriveMs = cappedArriveMs;
+            waitMinutes = MAX_PRE_GAME_WAIT_MINUTES;
+          }
+        }
         const watchStartMs = Math.max(arriveMs, candidate.startMs - PRE_GAME_BUFFER_MINUTES * 60 * 1000);
         const remainingMinutes = Math.floor((candidate.endMs - watchStartMs) / (60 * 1000));
         if (remainingMinutes < MIN_VIEW_MINUTES) continue;
 
         const lateByMinutes = Math.max(0, Math.floor((watchStartMs - candidate.startMs) / (60 * 1000)));
-        const waitMinutes = Math.max(0, Math.floor((candidate.startMs - arriveMs) / (60 * 1000)));
+        waitMinutes = Math.max(0, Math.floor((candidate.startMs - arriveMs) / (60 * 1000)));
         const minutesToEndAtArrival = Math.max(0, Math.floor((candidate.endMs - arriveMs) / (60 * 1000)));
         const urgency = Math.max(0, 240 - minutesToEndAtArrival);
         const startsSoon = Math.max(0, 120 - Math.max(0, Math.floor((candidate.startMs - arriveMs) / (60 * 1000))));
