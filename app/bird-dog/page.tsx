@@ -1667,10 +1667,23 @@ function inventorySortStartMs(item: InventoryTournament) {
 
 function tournamentAgeGroups(item: InventoryTournament) {
   const text = `${item.name || ""} ${item.displayTeams || ""} ${item.harvestHint || ""}`;
-  const matches = Array.from(text.matchAll(/\b(\d{1,2})\s*u\b/gi))
-    .map((m) => Number(m[1]))
-    .filter((value) => Number.isFinite(value) && value >= 5 && value <= 30);
-  return Array.from(new Set(matches)).sort((a, b) => a - b);
+  const values: number[] = [];
+  const pushAge = (raw: string) => {
+    const value = Number(raw);
+    if (Number.isFinite(value) && value >= 5 && value <= 30) values.push(value);
+  };
+
+  Array.from(text.matchAll(/\b(\d{1,2})\s*u\b/gi)).forEach((m) => pushAge(m[1]));
+  Array.from(text.matchAll(/\b(\d{1,2})\s*\/\s*(\d{1,2})\s*u\b/gi)).forEach((m) => {
+    pushAge(m[1]);
+    pushAge(m[2]);
+  });
+  Array.from(text.matchAll(/\b(\d{1,2})\s*u?\s*[&/,-]\s*(\d{1,2})\s*u\b/gi)).forEach((m) => {
+    pushAge(m[1]);
+    pushAge(m[2]);
+  });
+
+  return Array.from(new Set(values)).sort((a, b) => a - b);
 }
 
 function isTournamentAtLeast15U(item: InventoryTournament) {
