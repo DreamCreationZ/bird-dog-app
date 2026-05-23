@@ -2333,32 +2333,13 @@ export default function BirdDogPage() {
       const gameId = String(game.id || "").trim();
       if (gameId) gameById.set(gameId, game);
     });
+    const formatMatchLine = (input: { startMs: number; timeLabel: string; opponent: string; field: string }) =>
+      `${formatTournamentGameDisplay(input.startMs, input.timeLabel)} · vs ${input.opponent} · ${input.field}`;
     desiredPlayers.forEach((player) => {
       const key = desiredPlayerSelectionKey(player);
       const sourceGameId = String(player.sourceGameId || "").trim();
       const sourceGame = sourceGameId ? gameById.get(sourceGameId) : undefined;
       const sourceStartMs = Date.parse(String(player.sourceGameStartAt || ""));
-      if (sourceGame || Number.isFinite(sourceStartMs) || String(player.sourceGameTimeLabel || "").trim()) {
-        const gameStartMs = Date.parse(String(sourceGame?.startTime || ""));
-        const startMs = Number.isFinite(gameStartMs) ? gameStartMs : sourceStartMs;
-        const side = sourceGame ? playerMatchSideForGame(player, sourceGame) : null;
-        const opponentFromGame = sourceGame
-          ? String((side === "home" ? sourceGame.awayTeam : side === "away" ? sourceGame.homeTeam : "") || "").trim()
-          : "";
-        const opponent = String(player.sourceGameOpponent || opponentFromGame || "TBD");
-        const field = String(player.sourceGameField || sourceGame?.field || "Field TBD");
-        const timeLabel = String(
-          player.sourceGameTimeLabel
-          || (sourceGame ? gameTimeLabelFromGame(sourceGame, startMs) : "")
-          || ""
-        ).trim();
-        map.set(
-          key,
-          `${formatTournamentGameDisplay(startMs, timeLabel)} · vs ${opponent} · ${field}`
-        );
-        return;
-      }
-
       const matches = games
         .map((game) => {
           const startMs = Date.parse(String(game.startTime || ""));
@@ -2367,23 +2348,77 @@ export default function BirdDogPage() {
           if (!side) return null;
           const opponent = side === "home" ? game.awayTeam : game.homeTeam;
           return {
+            gameId: String(game.id || "").trim(),
             startMs,
             timeLabel: gameTimeLabelFromGame(game, startMs),
             opponent: String(opponent || "TBD"),
             field: String(game.field || "Field TBD")
           };
         })
-        .filter((item): item is { startMs: number; timeLabel: string; opponent: string; field: string } => Boolean(item))
+        .filter((item): item is { gameId: string; startMs: number; timeLabel: string; opponent: string; field: string } => Boolean(item))
         .sort((a, b) => a.startMs - b.startMs);
+
+      const sourceMatch = (sourceGame || Number.isFinite(sourceStartMs) || String(player.sourceGameTimeLabel || "").trim())
+        ? (() => {
+          const gameStartMs = Date.parse(String(sourceGame?.startTime || ""));
+          const startMs = Number.isFinite(gameStartMs) ? gameStartMs : sourceStartMs;
+          const side = sourceGame ? playerMatchSideForGame(player, sourceGame) : null;
+          const opponentFromGame = sourceGame
+            ? String((side === "home" ? sourceGame.awayTeam : side === "away" ? sourceGame.homeTeam : "") || "").trim()
+            : "";
+          const opponent = String(player.sourceGameOpponent || opponentFromGame || "TBD");
+          const field = String(player.sourceGameField || sourceGame?.field || "Field TBD");
+          const timeLabel = String(
+            player.sourceGameTimeLabel
+            || (sourceGame ? gameTimeLabelFromGame(sourceGame, startMs) : "")
+            || ""
+          ).trim();
+          return {
+            gameId: sourceGameId,
+            startMs,
+            timeLabel,
+            opponent,
+            field
+          };
+        })()
+        : null;
+
+      if (sourceMatch) {
+        const hasSourceAlready = matches.some((item) =>
+          (sourceMatch.gameId && item.gameId && item.gameId === sourceMatch.gameId)
+          || (
+            item.startMs === sourceMatch.startMs
+            && normalizeSmartSearch(item.opponent) === normalizeSmartSearch(sourceMatch.opponent)
+            && normalizeSmartSearch(item.field) === normalizeSmartSearch(sourceMatch.field)
+          )
+        );
+        if (!hasSourceAlready) {
+          matches.unshift(sourceMatch);
+        }
+      }
+
       if (!matches.length) {
         map.set(key, "Time TBD");
         return;
       }
-      const next = matches.find((item) => item.startMs >= nowMs) || matches[0];
-      map.set(
-        key,
-        `${formatTournamentGameDisplay(next.startMs, next.timeLabel)} · vs ${next.opponent} · ${next.field}`
-      );
+
+      const primary = sourceMatch
+        ? (matches.find((item) =>
+          (sourceMatch.gameId && item.gameId && item.gameId === sourceMatch.gameId)
+          || (
+            item.startMs === sourceMatch.startMs
+            && normalizeSmartSearch(item.opponent) === normalizeSmartSearch(sourceMatch.opponent)
+            && normalizeSmartSearch(item.field) === normalizeSmartSearch(sourceMatch.field)
+          )
+        ) || sourceMatch)
+        : (matches.find((item) => item.startMs >= nowMs) || matches[0]);
+
+      const alternateDates = matches
+        .filter((item) => item !== primary)
+        .slice(0, 4)
+        .map((item) => formatTournamentGameDisplay(item.startMs, item.timeLabel));
+      const altLabel = alternateDates.length ? ` · Alt: ${alternateDates.join(" | ")}` : "";
+      map.set(key, `${formatMatchLine(primary)}${altLabel}`);
     });
     return map;
   }, [desiredPlayers, games]);
@@ -4566,6 +4601,20 @@ export default function BirdDogPage() {
     return smartSearchTeamCacheKey(team) || `name:${normalizeSmartSearch(team.name || "")}`;
   }
 
+  function teamNameCoreTokens(value: string) {
+    const ignore = new Set(["team", "baseball", "softball", "club", "academy", "the"]);
+    return normalizeSmartSearch(value)
+      .split(" ")
+      .map((token) => token.trim())
+      .filter((token) => {
+        if (!token) return false;
+        if (/^\d+$/.test(token)) return false;
+        if (/^\d+u$/.test(token)) return false;
+        if (ignore.has(token)) return false;
+        return true;
+      });
+  }
+
   function teamNameMatchesTarget(candidate: string, team: TeamRef) {
     const normalized = normalizeSmartSearch(candidate);
     if (!normalized || isRosterPlaceholderTeamName(normalized)) return false;
@@ -4576,16 +4625,21 @@ export default function BirdDogPage() {
     const compact = normalized.replace(/\s+/g, "");
     const wantedCompact = wanted.replace(/\s+/g, "");
     if (compact && wantedCompact && compact === wantedCompact) return true;
-    if (wanted.length >= 6 && (normalized.includes(wanted) || wanted.includes(normalized))) return true;
 
-    const wantedTokens = teamNameTokens(wanted);
-    const candidateTokens = teamNameTokens(normalized);
+    const candidateTokens = teamNameCoreTokens(normalized);
+    const wantedTokens = teamNameCoreTokens(wanted);
     if (!candidateTokens.length || !wantedTokens.length) return false;
+
     const candidateSet = new Set(candidateTokens);
-    const overlap = wantedTokens.filter((token) => candidateSet.has(token)).length;
-    if (!overlap) return false;
-    const ratio = overlap / Math.max(wantedTokens.length, candidateTokens.length);
-    return ratio >= 0.66 && overlap >= Math.min(2, wantedTokens.length);
+    const wantedSet = new Set(wantedTokens);
+    const wantedSubset = wantedTokens.every((token) => candidateSet.has(token));
+    const candidateSubset = candidateTokens.every((token) => wantedSet.has(token));
+    if (!wantedSubset && !candidateSubset) return false;
+
+    const smallestTokenCount = Math.min(candidateTokens.length, wantedTokens.length);
+    if (smallestTokenCount >= 2) return true;
+    const loneToken = candidateTokens[0] || wantedTokens[0] || "";
+    return loneToken.length >= 5;
   }
 
   function scheduleRowBelongsToTeam(row: TournamentScheduleRowView, team: TeamRef) {
@@ -5044,9 +5098,19 @@ export default function BirdDogPage() {
     });
   }
 
+  function clearArrivalValidationWarnings() {
+    const isArrivalFeasibilityMessage = (value: string) =>
+      /schedule cannot be created\./i.test(value)
+      && /arriving/i.test(value)
+      && /missed players/i.test(value);
+    setPlayerSearchStatus((prev) => (isArrivalFeasibilityMessage(prev) ? "" : prev));
+    setPlanWorkflowNote((prev) => (isArrivalFeasibilityMessage(prev) ? "" : prev));
+  }
+
   function updateStateArrivalInput(stateCode: string, patch: Partial<StateArrivalInput>) {
     const normalized = String(stateCode || "").trim().toUpperCase();
     if (!normalized) return;
+    clearArrivalValidationWarnings();
     setStateArrivalInputs((prev) => ({
       ...prev,
       [normalized]: {
@@ -5889,7 +5953,12 @@ export default function BirdDogPage() {
     const fallbackArrivalMs = parsePlannerDateTimeInputMs(String(fallbackArrivalInput || ""));
 
     let evaluablePlayers = 0;
-    const missedRows: Array<{ playerName: string; arrivalMs: number; gameStartMs: number }> = [];
+    const missedRows: Array<{
+      playerName: string;
+      arrivalMs: number;
+      firstGameStartMs: number;
+      lastGameStartMs: number;
+    }> = [];
     targetPlayers.forEach((player) => {
       const matches = games
         .map((game) => {
@@ -5906,30 +5975,41 @@ export default function BirdDogPage() {
         .sort((a, b) => a.startMs - b.startMs);
 
       if (!matches.length) return;
+
+      const windows = matches
+        .map((match) => {
+          const arrivalMs = (match.stateCode && arrivalByStateMs.has(match.stateCode))
+            ? Number(arrivalByStateMs.get(match.stateCode))
+            : fallbackArrivalMs;
+          if (!Number.isFinite(arrivalMs)) return null;
+          return {
+            startMs: match.startMs,
+            arrivalMs
+          };
+        })
+        .filter((item): item is { startMs: number; arrivalMs: number } => Boolean(item));
+      if (!windows.length) return;
       evaluablePlayers += 1;
 
-      const primaryMatch = matches[0];
-      const arrivalMs = (primaryMatch.stateCode && arrivalByStateMs.has(primaryMatch.stateCode))
-        ? Number(arrivalByStateMs.get(primaryMatch.stateCode))
-        : fallbackArrivalMs;
-      if (!Number.isFinite(arrivalMs)) return;
-      if (arrivalMs > primaryMatch.startMs) {
-        missedRows.push({
-          playerName: player.name,
-          arrivalMs,
-          gameStartMs: primaryMatch.startMs
-        });
-      }
+      const hasFeasibleWindow = windows.some((window) => window.arrivalMs <= window.startMs);
+      if (hasFeasibleWindow) return;
+
+      missedRows.push({
+        playerName: player.name,
+        arrivalMs: Math.max(...windows.map((window) => window.arrivalMs)),
+        firstGameStartMs: Math.min(...windows.map((window) => window.startMs)),
+        lastGameStartMs: Math.max(...windows.map((window) => window.startMs))
+      });
     });
 
     if (!evaluablePlayers || missedRows.length !== evaluablePlayers) return null;
 
-    const earliestGameStartMs = Math.min(...missedRows.map((row) => row.gameStartMs));
+    const latestRelevantGameStartMs = Math.max(...missedRows.map((row) => row.lastGameStartMs));
     const latestArrivalMs = Math.max(...missedRows.map((row) => row.arrivalMs));
     const previewPlayers = missedRows.map((row) => row.playerName).slice(0, 3).join(", ");
     const suffix = missedRows.length > 3 ? " and more" : "";
     return {
-      message: `Schedule cannot be created. You are arriving at ${formatTournamentGameDateTime(latestArrivalMs)}, after selected players' first game window (${formatTournamentGameDateTime(earliestGameStartMs)}). Missed players: ${previewPlayers}${suffix}.`
+      message: `Schedule cannot be created. You are arriving at ${formatTournamentGameDateTime(latestArrivalMs)}, after selected players' available game windows (latest start ${formatTournamentGameDateTime(latestRelevantGameStartMs)}). Missed players: ${previewPlayers}${suffix}.`
     };
   }
 

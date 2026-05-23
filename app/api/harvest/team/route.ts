@@ -47,36 +47,42 @@ function teamTokens(value: string) {
   return normalizeTeamPhrase(value).split(" ").filter(Boolean);
 }
 
+function teamCoreTokens(value: string) {
+  const ignore = new Set(["team", "baseball", "softball", "club", "academy", "the"]);
+  return teamTokens(value).filter((token) => {
+    if (!token) return false;
+    if (/^\d+$/.test(token)) return false;
+    if (/^\d+u$/.test(token)) return false;
+    if (ignore.has(token)) return false;
+    return true;
+  });
+}
+
 function teamMatches(candidate: string, target: string) {
-  const a = normalize(candidate);
-  const b = normalize(target);
-  if (!a || !b) return false;
-  if (a === b) return true;
+  const normalizedCandidate = normalizeTeamPhrase(candidate);
+  const normalizedTarget = normalizeTeamPhrase(target);
+  if (!normalizedCandidate || !normalizedTarget) return false;
+  if (normalizedCandidate === normalizedTarget) return true;
 
-  const aTokens = teamTokens(candidate);
-  const bTokens = teamTokens(target);
-  if (!aTokens.length || !bTokens.length) return false;
+  const compactCandidate = normalize(candidate);
+  const compactTarget = normalize(target);
+  if (!compactCandidate || !compactTarget) return false;
+  if (compactCandidate === compactTarget) return true;
 
-  // Handle single-token aliases (e.g. "Forceout") without allowing weak fuzzy matches.
-  if (aTokens.length === 1 || bTokens.length === 1) {
-    const single = (aTokens.length === 1 ? aTokens[0] : bTokens[0]) || "";
-    const multi = aTokens.length === 1 ? bTokens : aTokens;
-    if (!single || single.length < 5 || !multi.length) return false;
-    if (multi.includes(single)) return true;
-    const compactMulti = multi.join("");
-    if (compactMulti.includes(single) && single.length >= 8) return true;
-    return false;
-  }
+  const candidateTokens = teamCoreTokens(candidate);
+  const targetTokens = teamCoreTokens(target);
+  if (!candidateTokens.length || !targetTokens.length) return false;
 
-  if (a.includes(b) || b.includes(a)) {
-    return Math.min(a.length, b.length) >= 8;
-  }
+  const candidateSet = new Set(candidateTokens);
+  const targetSet = new Set(targetTokens);
+  const targetSubset = targetTokens.every((token) => candidateSet.has(token));
+  const candidateSubset = candidateTokens.every((token) => targetSet.has(token));
+  if (!targetSubset && !candidateSubset) return false;
 
-  const bSet = new Set(bTokens);
-  const overlap = aTokens.filter((token) => bSet.has(token)).length;
-  const ratio = overlap / Math.max(aTokens.length, bTokens.length);
-  if (ratio >= 0.85) return true;
-  return ratio >= 0.7 && aTokens[0] === bTokens[0];
+  const smallestTokenCount = Math.min(candidateTokens.length, targetTokens.length);
+  if (smallestTokenCount >= 2) return true;
+  const loneToken = candidateTokens[0] || targetTokens[0] || "";
+  return loneToken.length >= 5;
 }
 
 function hasDetailedRosterColumns(
