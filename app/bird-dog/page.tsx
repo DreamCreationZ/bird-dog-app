@@ -535,7 +535,7 @@ function toInputDateTime(iso: string | null) {
   if (!iso) return "";
   const date = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function parsePlannerDateTimeInputMs(value: string) {
@@ -548,7 +548,7 @@ function parsePlannerDateTimeInputMs(value: string) {
     const day = Number(match[3]);
     const hour = Number(match[4]);
     const minute = Number(match[5]);
-    return Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+    return new Date(year, month - 1, day, hour, minute, 0, 0).getTime();
   }
   const parsed = Date.parse(raw);
   return Number.isFinite(parsed) ? parsed : NaN;

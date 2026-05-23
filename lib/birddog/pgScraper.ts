@@ -829,11 +829,18 @@ function parseTeamRosterFromHtml(html: string): PgTeamRosterRow[] {
     let indexedCells = cells;
 
     // Some PG roster rows omit the jersey-number <td> when "No" is blank.
-    // In that case, columns shift left and the name lands under the "No" index.
+    // In that case, columns shift left and the player name lands in the "No" column.
     if (noIdx === 0 && nameIdx === 1) {
       const maybeNo = (indexedCells[0] || "").trim();
       const maybeNameAtExpectedIndex = cleanText(indexedCellsRaw[1] || "");
-      if (maybeNo && !/^\d+$/.test(maybeNo) && !maybeNameAtExpectedIndex) {
+      const firstLooksLikeName = /[A-Za-z]/.test(maybeNo) && /\s/.test(maybeNo);
+      const secondLooksLikeName = /[A-Za-z]/.test(maybeNameAtExpectedIndex) && /\s/.test(maybeNameAtExpectedIndex);
+      const secondLooksLikePosition = /^(?:[A-Z]{1,3}|[A-Z]{1,3}\/[A-Z]{1,3}|LHP|RHP|OF|IF|P|C|1B|2B|3B|SS|UT|DH)$/i.test(maybeNameAtExpectedIndex);
+      if (
+        maybeNo
+        && !/^\d+$/.test(maybeNo)
+        && (firstLooksLikeName && (!secondLooksLikeName || secondLooksLikePosition))
+      ) {
         indexedCellsRaw = ["", ...indexedCellsRaw];
         indexedCells = ["", ...indexedCells];
       }
