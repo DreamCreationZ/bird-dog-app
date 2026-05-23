@@ -4608,11 +4608,20 @@ export default function BirdDogPage() {
       .map((token) => token.trim())
       .filter((token) => {
         if (!token) return false;
-        if (/^\d+$/.test(token)) return false;
-        if (/^\d+u$/.test(token)) return false;
         if (ignore.has(token)) return false;
         return true;
       });
+  }
+
+  function isAgeTeamToken(token: string) {
+    const clean = String(token || "").trim().toLowerCase();
+    if (!clean) return false;
+    if (/^\d{1,2}u$/.test(clean)) return true;
+    if (/^\d{1,2}$/.test(clean)) {
+      const age = Number(clean);
+      return Number.isFinite(age) && age >= 8 && age <= 22;
+    }
+    return false;
   }
 
   function teamNameMatchesTarget(candidate: string, team: TeamRef) {
@@ -4632,14 +4641,16 @@ export default function BirdDogPage() {
 
     const candidateSet = new Set(candidateTokens);
     const wantedSet = new Set(wantedTokens);
-    const wantedSubset = wantedTokens.every((token) => candidateSet.has(token));
-    const candidateSubset = candidateTokens.every((token) => wantedSet.has(token));
-    if (!wantedSubset && !candidateSubset) return false;
-
-    const smallestTokenCount = Math.min(candidateTokens.length, wantedTokens.length);
-    if (smallestTokenCount >= 2) return true;
-    const loneToken = candidateTokens[0] || wantedTokens[0] || "";
-    return loneToken.length >= 5;
+    const missingFromCandidate = wantedTokens.filter((token) => !candidateSet.has(token));
+    const missingFromWanted = candidateTokens.filter((token) => !wantedSet.has(token));
+    if (!missingFromCandidate.length && !missingFromWanted.length) return true;
+    const wantedOnlyAgeTokens = missingFromCandidate.length > 0
+      && missingFromCandidate.every((token) => isAgeTeamToken(token))
+      && missingFromWanted.length === 0;
+    const candidateOnlyAgeTokens = missingFromWanted.length > 0
+      && missingFromWanted.every((token) => isAgeTeamToken(token))
+      && missingFromCandidate.length === 0;
+    return wantedOnlyAgeTokens || candidateOnlyAgeTokens;
   }
 
   function scheduleRowBelongsToTeam(row: TournamentScheduleRowView, team: TeamRef) {

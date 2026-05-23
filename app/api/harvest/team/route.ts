@@ -51,11 +51,20 @@ function teamCoreTokens(value: string) {
   const ignore = new Set(["team", "baseball", "softball", "club", "academy", "the"]);
   return teamTokens(value).filter((token) => {
     if (!token) return false;
-    if (/^\d+$/.test(token)) return false;
-    if (/^\d+u$/.test(token)) return false;
     if (ignore.has(token)) return false;
     return true;
   });
+}
+
+function isAgeTeamToken(token: string) {
+  const clean = String(token || "").trim().toLowerCase();
+  if (!clean) return false;
+  if (/^\d{1,2}u$/.test(clean)) return true;
+  if (/^\d{1,2}$/.test(clean)) {
+    const age = Number(clean);
+    return Number.isFinite(age) && age >= 8 && age <= 22;
+  }
+  return false;
 }
 
 function teamMatches(candidate: string, target: string) {
@@ -75,14 +84,16 @@ function teamMatches(candidate: string, target: string) {
 
   const candidateSet = new Set(candidateTokens);
   const targetSet = new Set(targetTokens);
-  const targetSubset = targetTokens.every((token) => candidateSet.has(token));
-  const candidateSubset = candidateTokens.every((token) => targetSet.has(token));
-  if (!targetSubset && !candidateSubset) return false;
-
-  const smallestTokenCount = Math.min(candidateTokens.length, targetTokens.length);
-  if (smallestTokenCount >= 2) return true;
-  const loneToken = candidateTokens[0] || targetTokens[0] || "";
-  return loneToken.length >= 5;
+  const missingFromCandidate = targetTokens.filter((token) => !candidateSet.has(token));
+  const missingFromTarget = candidateTokens.filter((token) => !targetSet.has(token));
+  if (!missingFromCandidate.length && !missingFromTarget.length) return true;
+  const targetOnlyAgeTokens = missingFromCandidate.length > 0
+    && missingFromCandidate.every((token) => isAgeTeamToken(token))
+    && missingFromTarget.length === 0;
+  const candidateOnlyAgeTokens = missingFromTarget.length > 0
+    && missingFromTarget.every((token) => isAgeTeamToken(token))
+    && missingFromCandidate.length === 0;
+  return targetOnlyAgeTokens || candidateOnlyAgeTokens;
 }
 
 function hasDetailedRosterColumns(
