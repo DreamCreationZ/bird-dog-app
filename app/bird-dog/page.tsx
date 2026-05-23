@@ -1028,6 +1028,13 @@ function normalizeLocationText(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function looksLikeVenueLabel(value: string) {
+  const normalized = normalizeLocationText(value);
+  if (!normalized) return false;
+  return /\b(field|complex|park|stadium|little league|sports|academy|school|campus|diamond|baseball|softball|court|rink|arena)\b/.test(normalized)
+    || /\b[a-z]?\d+\b/.test(normalized);
+}
+
 function extractCityToken(value: string) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -1040,9 +1047,18 @@ function extractCityToken(value: string) {
   if (segments.length === 1) return segments[0];
 
   const hasStateInRaw = Boolean(extractUsStateCode(raw));
-  const firstLooksLikeVenue = /\b(field|complex|park|stadium|little league|sports|academy|school|campus|diamond|baseball|softball)\b/.test(firstSegmentRaw)
-    || /\b[a-z]?\d+\b/.test(firstSegmentRaw);
-  if (hasStateInRaw && firstLooksLikeVenue) {
+  const firstLooksLikeVenue = looksLikeVenueLabel(firstSegmentRaw);
+  if (firstLooksLikeVenue) {
+    for (let i = 1; i < segments.length; i += 1) {
+      const segment = segments[i];
+      if (!segment) continue;
+      if (segment === "united states" || segment === "usa") continue;
+      if (US_STATE_CODES.has(segment.toUpperCase())) continue;
+      if (Object.prototype.hasOwnProperty.call(US_STATE_NAME_TO_CODE, segment)) continue;
+      return segment;
+    }
+  }
+  if (hasStateInRaw) {
     for (let i = 1; i < segments.length; i += 1) {
       const segment = segments[i];
       if (!segment) continue;
@@ -1666,15 +1682,26 @@ function inventorySortStartMs(item: InventoryTournament) {
 }
 
 function tournamentAgeGroups(item: InventoryTournament) {
-  const text = `${item.name || ""} ${item.displayTeams || ""} ${item.harvestHint || ""}`;
+  const rawName = String(item.name || "");
+  const text = `${rawName} ${item.harvestHint || ""}`;
   const values: number[] = [];
   const pushAge = (raw: string) => {
     const value = Number(raw);
-    if (Number.isFinite(value) && value >= 5 && value <= 30) values.push(value);
+    if (Number.isFinite(value) && value >= 8 && value <= 22) values.push(value);
   };
+
+  const leading = rawName.match(/^\s*(\d{1,2})(?:\s*\/\s*(\d{1,2}))?(?:\s*u)?\b/i);
+  if (leading) {
+    pushAge(leading[1]);
+    if (leading[2]) pushAge(leading[2]);
+  }
 
   Array.from(text.matchAll(/\b(\d{1,2})\s*u\b/gi)).forEach((m) => pushAge(m[1]));
   Array.from(text.matchAll(/\b(\d{1,2})\s*\/\s*(\d{1,2})\s*u\b/gi)).forEach((m) => {
+    pushAge(m[1]);
+    pushAge(m[2]);
+  });
+  Array.from(text.matchAll(/\b(\d{1,2})\s*\/\s*(\d{1,2})(?:\s*u)?\b/gi)).forEach((m) => {
     pushAge(m[1]);
     pushAge(m[2]);
   });
@@ -1682,6 +1709,9 @@ function tournamentAgeGroups(item: InventoryTournament) {
     pushAge(m[1]);
     pushAge(m[2]);
   });
+  Array.from(
+    text.matchAll(/\b(8|9|1[0-9]|2[0-2])\b(?=\s*(?:u\b|open\b|classic\b|showdown\b|battle\b|world\b|series\b|games\b|invite\b|invitational\b|championships?\b|amateur\b|underclass\b|freshman\b|sophomore\b))/gi)
+  ).forEach((m) => pushAge(m[1]));
 
   return Array.from(new Set(values)).sort((a, b) => a - b);
 }
@@ -2373,13 +2403,20 @@ export default function BirdDogPage() {
   );
   const primaryRequiredStateCode = requiredStateCodes[0] || "";
   const hotelSuggestionDestination = useMemo(() => {
+    const fromEvent = String(selectedInventory?.displayCity || selectedTournament?.city || eventLocationHint || "").trim();
+    const withEventFallback = (value: string) => {
+      const clean = String(value || "").trim();
+      if (clean.length < 2) return "";
+      if (!fromEvent || clean.toLowerCase().includes(fromEvent.toLowerCase())) return clean;
+      return looksLikeVenueLabel(clean) ? `${clean}, ${fromEvent}` : clean;
+    };
+
     const fromFlight = String(scheduleForm.flightDestination || "").trim();
-    if (fromFlight.length >= 2) return fromFlight;
+    if (fromFlight.length >= 2) return withEventFallback(fromFlight);
     if (primaryRequiredStateCode) {
       const fromArrival = String(stateArrivalInputs[primaryRequiredStateCode]?.arrivalLocation || "").trim();
-      if (fromArrival.length >= 2) return fromArrival;
+      if (fromArrival.length >= 2) return withEventFallback(fromArrival);
     }
-    const fromEvent = String(selectedInventory?.displayCity || selectedTournament?.city || eventLocationHint || "").trim();
     if (fromEvent.length >= 2) return fromEvent;
     return "";
   }, [
@@ -5429,6 +5466,7 @@ export default function BirdDogPage() {
     let smartReorderHint = "";
     const MIN_VIEW_MINUTES = 20;
     const PRE_GAME_BUFFER_MINUTES = 10;
+    const TARGET_PRE_GAME_WAIT_MINUTES = 30;
 
     while (unseenPlayers.size > 0 && usedGameKeys.size < geocoded.length) {
       let best: {
@@ -5507,9 +5545,11 @@ export default function BirdDogPage() {
 
         if (travelEstimate.minutes > MAX_FEASIBLE_TRAVEL_MINUTES) continue;
         const latestReasonableDepartMs = candidate.startMs
-          - PRE_GAME_BUFFER_MINUTES * 60 * 1000
-          - travelEstimate.minutes * 60 * 1000;
-        const departMs = Math.max(arrivalGateMs, latestReasonableDepartMs);
+          - (PRE_GAME_BUFFER_MINUTES + travelEstimate.minutes) * 60 * 1000;
+        const targetDepartMs = candidate.startMs
+          - (TARGET_PRE_GAME_WAIT_MINUTES + travelEstimate.minutes) * 60 * 1000;
+        const preferredDepartMs = Math.min(latestReasonableDepartMs, targetDepartMs);
+        const departMs = Math.max(arrivalGateMs, preferredDepartMs);
         const arriveMs = departMs + travelEstimate.minutes * 60 * 1000;
         const watchStartMs = Math.max(arriveMs, candidate.startMs - PRE_GAME_BUFFER_MINUTES * 60 * 1000);
         const remainingMinutes = Math.floor((candidate.endMs - watchStartMs) / (60 * 1000));
