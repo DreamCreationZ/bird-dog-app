@@ -1031,8 +1031,29 @@ function normalizeLocationText(value: string) {
 function extractCityToken(value: string) {
   const raw = String(value || "").trim();
   if (!raw) return "";
-  const firstSegment = raw.split(",")[0] || "";
-  return normalizeLocationText(firstSegment);
+  const firstSegmentRaw = normalizeLocationText(raw.split(",")[0] || "");
+  const segments = raw
+    .split(",")
+    .map((segment) => normalizeLocationText(segment))
+    .filter(Boolean);
+  if (!segments.length) return "";
+  if (segments.length === 1) return segments[0];
+
+  const hasStateInRaw = Boolean(extractUsStateCode(raw));
+  const firstLooksLikeVenue = /\b(field|complex|park|stadium|little league|sports|academy|school|campus|diamond|baseball|softball)\b/.test(firstSegmentRaw)
+    || /\b[a-z]?\d+\b/.test(firstSegmentRaw);
+  if (hasStateInRaw && firstLooksLikeVenue) {
+    for (let i = 1; i < segments.length; i += 1) {
+      const segment = segments[i];
+      if (!segment) continue;
+      if (segment === "united states" || segment === "usa") continue;
+      if (US_STATE_CODES.has(segment.toUpperCase())) continue;
+      if (Object.prototype.hasOwnProperty.call(US_STATE_NAME_TO_CODE, segment)) continue;
+      return segment;
+    }
+  }
+
+  return firstSegmentRaw || segments[0];
 }
 
 const US_STATE_CODES = new Set([
@@ -1573,7 +1594,7 @@ function travelModeByText(from: string, to: string): TravelEstimate {
   if (fromState && toState && fromState === toState) {
     return {
       mode: "Drive / Cab",
-      minutes: 120,
+      minutes: 65,
       advisory: `Same-state route (${fromState}). Ground transfer is usually fastest for field-to-field coverage.`
     };
   }
@@ -1655,7 +1676,7 @@ function tournamentAgeGroups(item: InventoryTournament) {
 function isTournamentAtLeast15U(item: InventoryTournament) {
   const ages = tournamentAgeGroups(item);
   if (!ages.length) return true;
-  return ages.some((age) => age >= 15);
+  return ages.every((age) => age >= 15);
 }
 
 function inventoryMatchesAgeFilter(item: InventoryTournament, filter: string) {
@@ -4639,7 +4660,7 @@ export default function BirdDogPage() {
 
       const importedSchedule = fallbackScheduleRowsForTeam(team);
       const liveSchedule = normalizeTeamDetailsScheduleRows(data?.schedule);
-      const fallbackSchedule = importedSchedule.length ? importedSchedule : liveSchedule;
+      const fallbackSchedule = liveSchedule.length ? liveSchedule : importedSchedule;
       const liveRoster = normalizeTeamDetailsRosterRows(data?.roster);
       const fallbackRosterFromGames = fallbackRosterRowsForTeam(team);
       const tournamentIndexRows = await loadTournamentPlayerIndex().catch(() => [] as TournamentPlayerIndexRow[]);

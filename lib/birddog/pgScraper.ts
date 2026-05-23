@@ -825,12 +825,26 @@ function parseTeamRosterFromHtml(html: string): PgTeamRosterRow[] {
     const cellsRaw = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => m[1]);
     if (!cellsRaw.length) continue;
     const cells = cellsRaw.map((cell) => cleanCellWithBreaks(cell));
-    const rawNo = cells[noIdx >= 0 ? noIdx : 0] || "";
+    let indexedCellsRaw = cellsRaw;
+    let indexedCells = cells;
+
+    // Some PG roster rows omit the jersey-number <td> when "No" is blank.
+    // In that case, columns shift left and the name lands under the "No" index.
+    if (noIdx === 0 && nameIdx === 1) {
+      const maybeNo = (indexedCells[0] || "").trim();
+      const maybeNameAtExpectedIndex = cleanText(indexedCellsRaw[1] || "");
+      if (maybeNo && !/^\d+$/.test(maybeNo) && !maybeNameAtExpectedIndex) {
+        indexedCellsRaw = ["", ...indexedCellsRaw];
+        indexedCells = ["", ...indexedCells];
+      }
+    }
+
+    const rawNo = indexedCells[noIdx >= 0 ? noIdx : 0] || "";
     const normalizedNo = rawNo.trim();
     if (normalizedNo && !/^\d+$/.test(normalizedNo)) continue;
-    const rawNameCell = cellsRaw[nameIdx >= 0 ? nameIdx : 1] || "";
+    const rawNameCell = indexedCellsRaw[nameIdx >= 0 ? nameIdx : 1] || "";
     const nameParts = splitCellLines(rawNameCell);
-    const fallbackNameCell = cells[nameIdx >= 0 ? nameIdx : 1] || "";
+    const fallbackNameCell = indexedCells[nameIdx >= 0 ? nameIdx : 1] || "";
     const parsedInline = parseInlinePosition(nameParts[0] || fallbackNameCell);
     const name = parsedInline.name || "";
     const inlinePosition = parsedInline.position || "";
@@ -839,7 +853,7 @@ function parseTeamRosterFromHtml(html: string): PgTeamRosterRow[] {
       || !/[A-Za-z]/.test(name)
       || /sign in|create account|forgot password|pitch by pitch|tournament|game recap|diamondkast|final|perfect game/i.test(name.toLowerCase())
     ) continue;
-    const school = (cells[schoolIdx >= 0 ? schoolIdx : 6] || "").trim();
+    const school = (indexedCells[schoolIdx >= 0 ? schoolIdx : 6] || "").trim();
     const key = `${name.toLowerCase()}|${school.toLowerCase()}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -847,14 +861,14 @@ function parseTeamRosterFromHtml(html: string): PgTeamRosterRow[] {
       no: normalizedNo,
       name,
       position: nameParts[1] || inlinePosition || "",
-      height: (htIdx >= 0 ? cells[htIdx] : "") || "",
-      weight: (wtIdx >= 0 ? cells[wtIdx] : "") || "",
-      batsThrows: (btIdx >= 0 ? cells[btIdx] : "") || "",
-      grad: (gradIdx >= 0 ? cells[gradIdx] : "") || "",
+      height: (htIdx >= 0 ? indexedCells[htIdx] : "") || "",
+      weight: (wtIdx >= 0 ? indexedCells[wtIdx] : "") || "",
+      batsThrows: (btIdx >= 0 ? indexedCells[btIdx] : "") || "",
+      grad: (gradIdx >= 0 ? indexedCells[gradIdx] : "") || "",
       school,
-      hometown: (hometownIdx >= 0 ? cells[hometownIdx] : "") || "",
-      rank: (rankIdx >= 0 ? cells[rankIdx] : "") || "",
-      commitment: (commitmentIdx >= 0 ? cells[commitmentIdx] : "") || ""
+      hometown: (hometownIdx >= 0 ? indexedCells[hometownIdx] : "") || "",
+      rank: (rankIdx >= 0 ? indexedCells[rankIdx] : "") || "",
+      commitment: (commitmentIdx >= 0 ? indexedCells[commitmentIdx] : "") || ""
     });
   }
 
