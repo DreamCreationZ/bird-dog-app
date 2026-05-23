@@ -5789,16 +5789,36 @@ export default function BirdDogPage() {
   async function suggestHotelForDestination(destination: string): Promise<HotelSuggestion | null> {
     const cleanDestination = destination.trim();
     if (!cleanDestination) return null;
-    try {
-      const res = await fetch(`/api/maps/hotels?destination=${encodeURIComponent(cleanDestination)}`, { cache: "no-store" });
-      const data = await res.json().catch(() => ({}));
-      const hotels = Array.isArray(data?.hotels) ? data.hotels as HotelSuggestion[] : [];
-      if (hotels.length) {
-        setHotelSuggestions(hotels);
-        return hotels[0] || null;
+    const eventFallback = String(selectedInventory?.displayCity || selectedTournament?.city || eventLocationHint || "").trim();
+    const attempts = new Set<string>();
+    const pushAttempt = (value: string) => {
+      const clean = String(value || "").trim();
+      if (clean.length < 2) return;
+      attempts.add(clean);
+    };
+
+    pushAttempt(cleanDestination);
+    if (looksLikeVenueLabel(cleanDestination) && eventFallback && !cleanDestination.toLowerCase().includes(eventFallback.toLowerCase())) {
+      pushAttempt(`${cleanDestination}, ${eventFallback}`);
+    }
+    pushAttempt(eventFallback);
+    if (eventFallback) {
+      const cityOnly = String(eventFallback.split(",")[0] || "").trim();
+      pushAttempt(cityOnly);
+    }
+
+    for (const candidate of attempts) {
+      try {
+        const res = await fetch(`/api/maps/hotels?destination=${encodeURIComponent(candidate)}`, { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        const hotels = Array.isArray(data?.hotels) ? data.hotels as HotelSuggestion[] : [];
+        if (hotels.length) {
+          setHotelSuggestions(hotels);
+          return hotels[0] || null;
+        }
+      } catch {
+        // Try next fallback candidate.
       }
-    } catch {
-      // Ignore and use fallback label.
     }
     return null;
   }
@@ -6009,7 +6029,9 @@ export default function BirdDogPage() {
       return;
     }
     clearSmartScheduleInsights();
-    const instantFlightDestination = scheduleForm.flightDestination || firstPlayerStart;
+    const instantFlightDestination = scheduleForm.flightDestination
+      || String(selectedInventory?.displayCity || selectedTournament?.city || eventLocationHint || "").trim()
+      || firstPlayerStart;
     const instantForm = {
       ...scheduleForm,
       flightSource: resolvedSource,
@@ -6038,7 +6060,12 @@ export default function BirdDogPage() {
         return;
       }
 
-      const destination = (scheduleForm.flightDestination || optimized.firstDestination || "").trim();
+      const destination = (
+        scheduleForm.flightDestination
+        || String(selectedInventory?.displayCity || selectedTournament?.city || eventLocationHint || "").trim()
+        || optimized.firstDestination
+        || ""
+      ).trim();
       const isFeasible = !optimized.blockedReason;
       const primaryState = earliestArrival?.stateCode || requiredStates[0] || "";
       const bookedHotelName = primaryState ? String(hotelPayloadByState[primaryState]?.hotelName || "").trim() : "";
