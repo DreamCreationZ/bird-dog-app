@@ -1746,14 +1746,19 @@ function notesRosterRowSelectionKey(row: TeamDetailsRosterRow) {
 
 function mergeTeamDetailsRosterRows(groups: TeamDetailsRosterRow[][]) {
   const merged = new Map<string, TeamDetailsRosterRow>();
+  const pickValue = (nextValue?: string, currentValue?: string) => {
+    const cleanNext = String(nextValue || "").trim();
+    if (cleanNext && cleanNext !== "-") return cleanNext;
+    const cleanCurrent = String(currentValue || "").trim();
+    return cleanCurrent;
+  };
+
   groups.forEach((rows) => {
     rows.forEach((row) => {
-      const key = [
-        normalizeSmartSearch(row.no || ""),
-        normalizeSmartSearch(row.name || ""),
-        normalizeSmartSearch(row.hometown || ""),
-        normalizeSmartSearch(row.school || "")
-      ].join("|");
+      const normalizedName = normalizeSmartSearch(row.name || "");
+      if (!normalizedName) return;
+      const normalizedNo = normalizeSmartSearch(row.no || "");
+      const key = normalizedNo ? `${normalizedNo}|${normalizedName}` : normalizedName;
       if (!key) return;
       const existing = merged.get(key);
       if (!existing) {
@@ -1763,13 +1768,13 @@ function mergeTeamDetailsRosterRows(groups: TeamDetailsRosterRow[][]) {
       merged.set(key, {
         ...existing,
         ...row,
-        no: row.no || existing.no,
-        name: row.name || existing.name,
-        position: row.position || existing.position,
-        school: row.school || existing.school,
-        hometown: row.hometown || existing.hometown,
-        commitment: row.commitment || existing.commitment,
-        team: row.team || existing.team
+        no: pickValue(row.no, existing.no),
+        name: pickValue(row.name, existing.name),
+        position: pickValue(row.position, existing.position),
+        school: pickValue(row.school, existing.school),
+        hometown: pickValue(row.hometown, existing.hometown),
+        commitment: pickValue(row.commitment, existing.commitment),
+        team: pickValue(row.team, existing.team)
       });
     });
   });
