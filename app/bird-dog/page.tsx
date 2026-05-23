@@ -1031,8 +1031,9 @@ function normalizeLocationText(value: string) {
 function looksLikeVenueLabel(value: string) {
   const normalized = normalizeLocationText(value);
   if (!normalized) return false;
-  return /\b(field|complex|park|stadium|little league|sports|academy|school|campus|diamond|baseball|softball|court|rink|arena)\b/.test(normalized)
-    || /\b[a-z]?\d+\b/.test(normalized);
+  return /\b(field|homefield|complex|park|stadium|little league|sports|academy|school|campus|diamond|baseball|softball|court|rink|arena)\b/.test(normalized)
+    || /\b[a-z]{1,4}\d+\b/.test(normalized)
+    || /\b\w*field\b/.test(normalized);
 }
 
 function looksLikeStreetSegment(value: string) {
