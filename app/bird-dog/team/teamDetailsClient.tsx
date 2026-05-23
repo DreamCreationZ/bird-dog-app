@@ -2975,7 +2975,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
               Clear Team Selection
             </button>
             <button type="button" onClick={addSelectedPlayersToCart} disabled={!selectedPlayers.length}>
-              Add Selected To Final Cart
+              View Selected Players List
             </button>
             <button
               type="button"

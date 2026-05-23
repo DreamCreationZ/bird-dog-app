@@ -7942,7 +7942,7 @@ export default function BirdDogPage() {
                   onClick={() => addSelectedNotesRosterPlayersToCart()}
                   disabled={!notesSelectedRosterRowKeys.length}
                 >
-                  Add Selected Players to Final Cart
+                  View Selected Players List
                 </button>
                 <button
                   type="button"
