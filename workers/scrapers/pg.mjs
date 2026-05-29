@@ -159,31 +159,6 @@ function parseParticipatingTeams(html) {
   return teams;
 }
 
-function gamesFromTeams(teams, date) {
-  const out = [];
-  const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))
-    ? String(date)
-    : new Date().toISOString().slice(0, 10);
-  const fallbackIso = `${safeDate}T09:00:00.000Z`;
-
-  for (let i = 0; i < teams.length; i += 2) {
-    const home = teams[i];
-    const away = teams[i + 1];
-    if (!home || !away) continue;
-    const hour = 9 + (out.length % 8);
-    out.push({
-      id: `pg-team-game-${out.length + 1}`,
-      field: `Field ${out.length + 1}`,
-      fieldLocation: { x: out.length + 1, y: out.length + 1 },
-      startTime: safeIso(`${safeDate}T${String(hour).padStart(2, "0")}:00:00Z`, fallbackIso),
-      homeTeam: home.name,
-      awayTeam: away.name,
-      players: []
-    });
-  }
-  return out;
-}
-
 function parsePlayers(html) {
   const playerLinks = [...html.matchAll(/<a[^>]*href=["'][^"']*(PlayerProfile|playerprofile)[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi)];
   if (!playerLinks.length) return [];
@@ -273,7 +248,8 @@ export async function scrapePgTournament(hint) {
   const parsedGames = hasPgScheduleMarkup(html) ? parseGames(html) : [];
   const teams = parseParticipatingTeams(html);
   const pagePlayers = parsePlayers(html);
-  const teamPlayers = await enrichPlayersFromTeamPages(teams);
+  const teamPageRostersEnabled = process.env.BIRD_DOG_ENABLE_PG_TEAM_PAGE_ROSTERS === "true";
+  const teamPlayers = teamPageRostersEnabled ? await enrichPlayersFromTeamPages(teams).catch(() => []) : [];
   const players = teamPlayers.length ? teamPlayers : pagePlayers;
   let games = parsedGames.length ? parsedGames : [];
 
@@ -287,13 +263,10 @@ export async function scrapePgTournament(hint) {
           games = parseGames(scheduleFetch.html);
         }
       } catch {
-        // fall back to team-paired pseudo games below
+        // Keep games empty when schedule page fetch fails.
       }
     }
   }
-
-  const teamGames = teams.length ? gamesFromTeams(teams, date) : [];
-  games = games.length ? games : teamGames;
 
   return {
     tournament: {

@@ -487,27 +487,6 @@ function parseParticipatingTeams(html, games) {
     }));
 }
 
-function gamesFromTeams(teams, date) {
-  const out = [];
-  const fallbackIso = `${date}T09:00:00.000Z`;
-  for (let i = 0; i < teams.length; i += 2) {
-    const home = teams[i];
-    const away = teams[i + 1];
-    if (!home || !away) continue;
-    const hour = 9 + (out.length % 8);
-    out.push({
-      id: `pbr-team-game-${out.length + 1}`,
-      field: `Field ${out.length + 1}`,
-      fieldLocation: { x: out.length + 1, y: out.length + 2 },
-      startTime: safeIso(`${date}T${String(hour).padStart(2, "0")}:00:00Z`, fallbackIso),
-      homeTeam: home.name,
-      awayTeam: away.name,
-      players: []
-    });
-  }
-  return out;
-}
-
 function attachPlayersToGames(games, players) {
   if (!games.length) return [];
   if (!players.length) return games;
@@ -559,7 +538,7 @@ export async function scrapePbrTournament(hint) {
     teamsHtml = html;
   }
   const teams = parseParticipatingTeams(teamsHtml, parsedGames);
-  const games = parsedGames.length ? parsedGames : gamesFromTeams(teams, date);
+  const games = parsedGames.length ? parsedGames : [];
 
   return {
     tournament: {

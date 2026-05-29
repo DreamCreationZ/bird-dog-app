@@ -180,10 +180,62 @@ function normalizeTeam(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
+function normalizeTeamPhrase(value: string) {
+  return cleanText(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function teamTokens(value: string) {
+  return normalizeTeamPhrase(value).split(" ").filter(Boolean);
+}
+
+function teamCoreTokens(value: string) {
+  const ignore = new Set(["team", "baseball", "softball", "club", "academy", "the"]);
+  return teamTokens(value).filter((token) => {
+    if (!token) return false;
+    if (ignore.has(token)) return false;
+    return true;
+  });
+}
+
+function isAgeTeamToken(token: string) {
+  const clean = String(token || "").trim().toLowerCase();
+  if (!clean) return false;
+  if (/^\d{1,2}u$/.test(clean)) return true;
+  if (/^\d{1,2}$/.test(clean)) {
+    const age = Number(clean);
+    return Number.isFinite(age) && age >= 8 && age <= 22;
+  }
+  return false;
+}
+
 function teamNameMatches(a: string, b: string) {
+  const normalizedA = normalizeTeamPhrase(a);
+  const normalizedB = normalizeTeamPhrase(b);
+  if (!normalizedA || !normalizedB) return false;
+  if (normalizedA === normalizedB) return true;
+
   const na = normalizeTeam(a);
   const nb = normalizeTeam(b);
-  return na === nb || na.includes(nb) || nb.includes(na);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+
+  const tokensA = teamCoreTokens(a);
+  const tokensB = teamCoreTokens(b);
+  if (!tokensA.length || !tokensB.length) return false;
+
+  const setA = new Set(tokensA);
+  const setB = new Set(tokensB);
+  const missingFromA = tokensB.filter((token) => !setA.has(token));
+  const missingFromB = tokensA.filter((token) => !setB.has(token));
+  if (!missingFromA.length && !missingFromB.length) return true;
+
+  const bOnlyAgeTokens = missingFromA.length > 0
+    && missingFromA.every((token) => isAgeTeamToken(token))
+    && missingFromB.length === 0;
+  const aOnlyAgeTokens = missingFromB.length > 0
+    && missingFromB.every((token) => isAgeTeamToken(token))
+    && missingFromA.length === 0;
+  return bOnlyAgeTokens || aOnlyAgeTokens;
 }
 
 function looksLikeVenueLabel(value: string) {
@@ -878,6 +930,39 @@ function parseTeamRosterFromHtml(html: string): PgTeamRosterRow[] {
       commitment: (commitmentIdx >= 0 ? indexedCells[commitmentIdx] : "") || ""
     });
   }
+
+  // Some PG roster tables occasionally render one or two player rows in a slightly
+  // different shape (for example: blank jersey cell + linked player name only).
+  // Backfill any missing names from player-profile anchors inside the roster scope.
+  const linkedNames = [...source.matchAll(
+    /<a[^>]*href=["'][^"']*(?:PlayerProfile|playerprofile|\/players\/)[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi
+  )]
+    .map((match) => cleanText(match[1] || ""))
+    .filter((name) => {
+      if (!name || name.length < 4) return false;
+      if (!/^[A-Za-z'., -]+$/.test(name)) return false;
+      if (/visit team page|schedule|roster|diamondkast|final|perfect game|sign in|create account/i.test(name)) return false;
+      return true;
+    });
+
+  linkedNames.forEach((name) => {
+    const key = `${name.toLowerCase()}|`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      no: "",
+      name,
+      position: "",
+      height: "",
+      weight: "",
+      batsThrows: "",
+      grad: "",
+      school: "",
+      hometown: "",
+      rank: "",
+      commitment: ""
+    });
+  });
 
   return out;
 }

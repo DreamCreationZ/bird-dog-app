@@ -535,7 +535,8 @@ function toInputDateTime(iso: string | null) {
   if (!iso) return "";
   const date = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  // Keep planner input clock aligned with schedule display clock (UTC).
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
 }
 
 function parsePlannerDateTimeInputMs(value: string) {
@@ -548,7 +549,9 @@ function parsePlannerDateTimeInputMs(value: string) {
     const day = Number(match[3]);
     const hour = Number(match[4]);
     const minute = Number(match[5]);
-    return new Date(year, month - 1, day, hour, minute, 0, 0).getTime();
+    // Interpret datetime-local fields as UTC wall-clock so feasibility checks
+    // stay consistent with tournament game times rendered in UTC.
+    return Date.UTC(year, month - 1, day, hour, minute, 0, 0);
   }
   const parsed = Date.parse(raw);
   return Number.isFinite(parsed) ? parsed : NaN;
@@ -5335,6 +5338,8 @@ export default function BirdDogPage() {
     const left = normalizeSmartSearch(a);
     const right = normalizeSmartSearch(b);
     if (!left || !right) return false;
+    if (left === right) return true;
+
     const variantTokens = new Set([
       "red", "blue", "black", "white", "gold", "silver", "green", "orange", "navy", "maroon",
       "elite", "prime", "prospects", "platinum", "royal", "gray", "grey",
@@ -5345,24 +5350,38 @@ export default function BirdDogPage() {
       .map((token) => token.trim().toLowerCase())
       .filter((token) => {
         if (!token) return false;
-        if (/^\d+$/.test(token)) return false;
-        if (/^\d+u$/.test(token)) return false;
         return true;
       });
-    const leftVariants = new Set(tokenize(left).filter((token) => variantTokens.has(token)));
-    const rightVariants = new Set(tokenize(right).filter((token) => variantTokens.has(token)));
-    if (leftVariants.size > 0 && rightVariants.size > 0) {
-      const hasVariantOverlap = Array.from(leftVariants).some((token) => rightVariants.has(token));
-      if (!hasVariantOverlap) return false;
-    }
-    if (left === right || left.includes(right) || right.includes(left)) return true;
-    const leftTokens = teamNameTokens(left);
-    const rightTokens = teamNameTokens(right);
+    const compactLeft = left.replace(/\s+/g, "");
+    const compactRight = right.replace(/\s+/g, "");
+    if (compactLeft && compactRight && compactLeft === compactRight) return true;
+
+    const leftTokens = tokenize(left);
+    const rightTokens = tokenize(right);
     if (!leftTokens.length || !rightTokens.length) return false;
+
     const rightSet = new Set(rightTokens);
+    const leftSet = new Set(leftTokens);
     const overlap = leftTokens.filter((token) => rightSet.has(token)).length;
-    const ratio = overlap / Math.max(1, Math.min(leftTokens.length, rightTokens.length));
-    return overlap >= 2 || ratio >= 0.6;
+    if (!overlap) return false;
+
+    const leftOnly = leftTokens.filter((token) => !rightSet.has(token));
+    const rightOnly = rightTokens.filter((token) => !leftSet.has(token));
+    const ignorableDelta = (token: string) => isAgeTeamToken(token) || variantTokens.has(token);
+    const leftSignificantOnly = leftOnly.filter((token) => !ignorableDelta(token));
+    const rightSignificantOnly = rightOnly.filter((token) => !ignorableDelta(token));
+
+    // Prevent sibling squads with different suffixes from being treated as the same team
+    // (for example: "CBU 2028 United Merrell" vs "CBU 2028 United Severidt").
+    if (leftSignificantOnly.length > 0 && rightSignificantOnly.length > 0) return false;
+
+    if (!leftOnly.length && !rightOnly.length) return true;
+    if (left.includes(right) || right.includes(left)) {
+      return leftSignificantOnly.length === 0 || rightSignificantOnly.length === 0;
+    }
+
+    const ratio = overlap / Math.max(leftTokens.length, rightTokens.length);
+    return ratio >= 0.9 && (leftSignificantOnly.length === 0 || rightSignificantOnly.length === 0);
   }
 
   function normalizeTeamIdValue(value: unknown) {
@@ -5395,12 +5414,13 @@ export default function BirdDogPage() {
     if (strictTeam && strictTeam === home) return "home";
     if (strictTeam && strictTeam === away) return "away";
 
-    if (teamsLookEquivalent(player.team, game.homeTeam) || teamsLookEquivalent(player.sourceTeamName || "", game.homeTeam)) {
-      return "home";
-    }
-    if (teamsLookEquivalent(player.team, game.awayTeam) || teamsLookEquivalent(player.sourceTeamName || "", game.awayTeam)) {
-      return "away";
-    }
+    const homeMatch = teamsLookEquivalent(player.team, game.homeTeam)
+      || teamsLookEquivalent(player.sourceTeamName || "", game.homeTeam);
+    const awayMatch = teamsLookEquivalent(player.team, game.awayTeam)
+      || teamsLookEquivalent(player.sourceTeamName || "", game.awayTeam);
+    if (homeMatch && !awayMatch) return "home";
+    if (awayMatch && !homeMatch) return "away";
+    if (homeMatch && awayMatch) return null;
     return null;
   }
 
