@@ -542,7 +542,7 @@ async function resolvePbrTournamentHint(input: {
         "User-Agent": userAgent,
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
       }
-    }).catch(() => null), 2000);
+    }).catch(() => null), 5000);
     if (probe && probe.ok) {
       writeCachedPbrEventHint(cacheKeys, eventBase);
       return eventBase;
@@ -551,7 +551,7 @@ async function resolvePbrTournamentHint(input: {
 
   const catalog = await withTimeout(
     fetchPbrTournamentCatalog().then((result) => result.items).catch(() => []),
-    2200
+    5000
   );
   if (!Array.isArray(catalog) || !catalog.length) return "";
 
@@ -650,8 +650,6 @@ async function buildPbrLiveTournament(input: {
   const teamsFromHtml = teamsHtml ? parsePbrTeamsFromTeamsHtml(teamsHtml) : [];
   const teams = teamsFromHtml.length ? teamsFromHtml : parsePbrTeamsFromPayload(payloads);
   const games = parsePbrGamesFromPayload(payloads);
-
-  if (!teams.length && !games.length) return null;
 
   const name = cleanText(
     scheduleHtml.match(/<meta itemprop="name" content="([^"]+)"/i)?.[1]

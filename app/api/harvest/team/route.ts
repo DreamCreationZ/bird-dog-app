@@ -101,7 +101,7 @@ function looksLikeVenueLabel(value: string) {
   if (!normalized) return false;
   if (/^field\s*[a-z0-9-]*$/i.test(normalized)) return true;
   if (/^site\s*[a-z0-9-]*$/i.test(normalized)) return true;
-  return /little league|sports complex|sportsplex|complex|park|stadium|academy|facility|high school|middle school|athletic|ballpark|diamond|fieldhouse|@/.test(normalized);
+  return /little league|sports complex|sportsplex|complex|park|stadium|facility|high school|middle school|athletic|ballpark|diamond|fieldhouse|@/.test(normalized);
 }
 
 function isPlaceholderField(value: string) {
@@ -1098,7 +1098,7 @@ async function resolvePbrEventHint(input: {
         "User-Agent": userAgent,
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
       }
-    }).catch(() => null), 2200);
+    }).catch(() => null), 5000);
     if (probe && probe.ok) {
       writeCachedPbrEventHint(cacheKeys, eventBase);
       return eventBase;
@@ -1107,7 +1107,7 @@ async function resolvePbrEventHint(input: {
 
   const catalog = await withTimeout(
     fetchPbrTournamentCatalog().then((result) => result.items).catch(() => []),
-    2200
+    5000
   );
   if (Array.isArray(catalog) && catalog.length) {
     const bySlug = catalog.find((item) => item.slug === input.inventorySlug);
