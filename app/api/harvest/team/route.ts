@@ -68,25 +68,19 @@ function sanitizeRosterRows(rows: TeamRosterRow[], targetTeamName = "") {
       && school
       && teamMatches(school, targetTeamName)
     );
-    const hometownLooksReal = Boolean(
-      hometown
-      && hometown !== "-"
-      && normalize(hometown) !== "unknown"
+    const noLooksReal = /^\d{1,3}$/.test(no);
+    const hometownLooksReal = Boolean(!isPlaceholderValue(hometown) && /[a-z]/i.test(hometown));
+    const schoolLooksReal = Boolean(
+      school
+      && !isPlaceholderValue(school)
+      && /[a-z]/i.test(school)
+      && !schoolMatchesTargetTeam
     );
-    const commitmentLooksReal = Boolean(
-      commitment
-      && commitment !== "-"
-      && normalize(commitment) !== "unknown"
-    );
+    const commitmentLooksReal = Boolean(!isPlaceholderValue(commitment) && /[a-z]/i.test(commitment));
     const hasRosterSignal = Boolean(
-      (no && no !== "-")
+      noLooksReal
       || hometownLooksReal
-      || (
-        school
-        && school !== "-"
-        && normalize(school) !== "unknown"
-        && !schoolMatchesTargetTeam
-      )
+      || schoolLooksReal
       || commitmentLooksReal
     );
     if (!hasRosterSignal) return;
@@ -108,6 +102,22 @@ function sanitizeRosterRows(rows: TeamRosterRow[], targetTeamName = "") {
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function normalizePlaceholderToken(value: string) {
+  return cleanText(value || "").toLowerCase().replace(/[–—]/g, "-").replace(/\s+/g, " ").trim();
+}
+
+function isPlaceholderValue(value: string) {
+  const normalized = normalizePlaceholderToken(value);
+  if (!normalized) return true;
+  if (normalized === "-" || normalized === "--" || normalized === "---") return true;
+  return normalized === "n/a"
+    || normalized === "na"
+    || normalized === "none"
+    || normalized === "unknown"
+    || normalized === "tbd"
+    || normalized === "null";
 }
 
 function normalizeTeamPhrase(value: string) {

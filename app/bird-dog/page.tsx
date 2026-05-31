@@ -514,6 +514,22 @@ function looksLikeRosterPlayerName(value: string) {
   return true;
 }
 
+function normalizePlaceholderCell(value: string) {
+  return String(value || "").trim().toLowerCase().replace(/[–—]/g, "-").replace(/\s+/g, " ");
+}
+
+function isPlaceholderCellValue(value: string) {
+  const normalized = normalizePlaceholderCell(value);
+  if (!normalized) return true;
+  if (normalized === "-" || normalized === "--" || normalized === "---") return true;
+  return normalized === "n/a"
+    || normalized === "na"
+    || normalized === "none"
+    || normalized === "unknown"
+    || normalized === "tbd"
+    || normalized === "null";
+}
+
 function hasTeamDetailsRosterSignal(row: TeamDetailsRosterRow, targetTeamName = "") {
   const no = String(row.no || "").trim();
   const school = String(row.school || "").trim();
@@ -525,17 +541,20 @@ function hasTeamDetailsRosterSignal(row: TeamDetailsRosterRow, targetTeamName = 
     && school
     && normalizeSmartSearch(school) === normalizedTargetTeam
   );
+  const noLooksReal = /^\d{1,3}$/.test(no);
+  const hometownLooksReal = Boolean(!isPlaceholderCellValue(hometown) && /[a-z]/i.test(hometown));
   const schoolLooksReal = Boolean(
     school
-    && school !== "-"
-    && normalizeSmartSearch(school) !== "unknown"
+    && !isPlaceholderCellValue(school)
+    && /[a-z]/i.test(school)
     && !schoolMatchesTargetTeam
   );
+  const commitmentLooksReal = Boolean(!isPlaceholderCellValue(commitment) && /[a-z]/i.test(commitment));
   return Boolean(
-    (no && no !== "-")
-    || (hometown && hometown !== "-")
+    noLooksReal
+    || hometownLooksReal
     || schoolLooksReal
-    || (commitment && commitment !== "-")
+    || commitmentLooksReal
   );
 }
 

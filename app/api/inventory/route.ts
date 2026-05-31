@@ -353,14 +353,13 @@ export async function GET(req: NextRequest) {
       ),
       groupedEventsPromise
     ]);
-    if (!inventory.length) {
-      return NextResponse.json({
-        subscribed: forceUnlocked,
-        fallback: true,
-        warning: "Inventory table was empty. Showing seeded tournaments.",
-        inventory: mapInventoryForResponse(fallbackBaseInventory, forceUnlocked, new Set<string>(), isBlockedUnlockEmail)
-      });
-    }
+    const hasImportedInventory = inventory.length > 0;
+    const baseInventory = hasImportedInventory
+      ? (inventory as InventoryItem[])
+      : fallbackBaseInventory;
+    const inventoryWarmupWarning = hasImportedInventory
+      ? undefined
+      : "Inventory table was empty. Using live + seeded fallback while sync catches up.";
     const liveCatalogCache = getLiveCatalogCache();
     const hasFreshPbrCache =
       Date.now() - liveCatalogCache.fetchedAt < LIVE_CATALOG_CACHE_TTL_MS
@@ -401,7 +400,7 @@ export async function GET(req: NextRequest) {
       liveCatalogCache.pbr = livePbr;
     }
 
-    let mergedInventory = applyLiveInventory(inventory as InventoryItem[], livePg, livePbr);
+    let mergedInventory = applyLiveInventory(baseInventory, livePg, livePbr);
     const lastGoodInventory = getLastGoodInventoryCache();
     const hasFreshLastGood =
       lastGoodInventory.inventory.length > 0
@@ -425,7 +424,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       subscribed: forceUnlocked || unlockedSet.size > 0,
-      warning: warmupWarning || (mergedInventory.length
+      warning: warmupWarning || inventoryWarmupWarning || (mergedInventory.length
         ? undefined
         : "Live tournament sync is still warming up. Please refresh in a few seconds."),
       inventory: mergedInventory.map((item) => {
