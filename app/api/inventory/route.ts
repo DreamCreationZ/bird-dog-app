@@ -167,20 +167,46 @@ function inventoryRowScore(item: InventoryItem) {
   return score;
 }
 
+function inventoryNameSpecificityScore(item: InventoryItem) {
+  const name = String(item.name || "").toLowerCase();
+  let score = 0;
+  if (/\b(8|9|1[0-9]|2[0-2])\s*u\b/.test(name)) score += 5;
+  if (/\((aaa|major|open|aa)\)/i.test(name)) score += 1;
+  return score;
+}
+
 function normalizeSortAndDedupeInventory(items: InventoryItem[]) {
-  const deduped = new Map<string, InventoryItem>();
+  const byName = new Map<string, InventoryItem>();
   for (const item of items) {
     const key = `${item.company}:${normalizeInventoryName(item.name)}`;
-    const existing = deduped.get(key);
+    const existing = byName.get(key);
     if (!existing) {
-      deduped.set(key, item);
+      byName.set(key, item);
       continue;
     }
     if (inventoryRowScore(item) > inventoryRowScore(existing)) {
-      deduped.set(key, item);
+      byName.set(key, item);
     }
   }
-  return Array.from(deduped.values()).sort((a, b) => {
+
+  // React list items are keyed by slug in the dashboard. Ensure only one row
+  // survives per company+slug so stale card content cannot leak across filters.
+  const bySlug = new Map<string, InventoryItem>();
+  for (const item of byName.values()) {
+    const key = `${item.company}:${item.slug}`;
+    const existing = bySlug.get(key);
+    if (!existing) {
+      bySlug.set(key, item);
+      continue;
+    }
+    const existingScore = inventoryRowScore(existing) + inventoryNameSpecificityScore(existing);
+    const nextScore = inventoryRowScore(item) + inventoryNameSpecificityScore(item);
+    if (nextScore >= existingScore) {
+      bySlug.set(key, item);
+    }
+  }
+
+  return Array.from(bySlug.values()).sort((a, b) => {
     const aStart = parseDisplayDateStartMs(String(a.displayDate || ""), inventoryFallbackYear(a)) ?? Number.MAX_SAFE_INTEGER;
     const bStart = parseDisplayDateStartMs(String(b.displayDate || ""), inventoryFallbackYear(b)) ?? Number.MAX_SAFE_INTEGER;
     if (aStart !== bStart) return aStart - bStart;
