@@ -420,6 +420,7 @@ function sanitizeCartPlayer(item: CrossTeamCartPlayer | null | undefined): Cross
   if (!item) return null;
   const playerId = String(item.playerId || "").trim();
   const selectionKey = String(item.selectionKey || "").trim();
+  const stableSelectionKey = selectionKey || playerId;
   const name = String(item.name || "").trim();
   const team = String(item.team || "").trim();
   const hasMeaningfulToken = (value: string) => {
@@ -429,10 +430,10 @@ function sanitizeCartPlayer(item: CrossTeamCartPlayer | null | undefined): Cross
     return true;
   };
   const hasTeamSelectionSignal = () => {
-    if (!selectionKey.toLowerCase().startsWith("team:")) return true;
+    if (!stableSelectionKey.toLowerCase().startsWith("team:")) return true;
     if (hasMeaningfulToken(String(item.hometown || ""))) return true;
     if (hasMeaningfulToken(String(item.sourceGameId || ""))) return true;
-    const selectionPayload = selectionKey.split(":").slice(2).join(":");
+    const selectionPayload = stableSelectionKey.split(":").slice(2).join(":");
     if (!selectionPayload) return false;
     if (selectionPayload.includes("|")) {
       const tokens = selectionPayload.split("|");
@@ -640,12 +641,62 @@ function rosterSearchScore(row: TeamRosterRow, query: string, tokens: string[]) 
   return score;
 }
 
+function hasTeamRosterSignal(row: TeamRosterRow, targetTeamName = "") {
+  const no = String(row.no || "").trim();
+  const school = String(row.school || "").trim();
+  const hometown = String(row.hometown || "").trim();
+  const commitment = String(row.commitment || "").trim();
+  const normalizedTargetTeam = normalizeTeamName(targetTeamName);
+  const schoolMatchesTargetTeam = Boolean(
+    normalizedTargetTeam
+    && school
+    && normalizeTeamName(school) === normalizedTargetTeam
+  );
+  const schoolLooksReal = Boolean(
+    school
+    && school !== "-"
+    && normalizeSearchText(school) !== "unknown"
+    && !schoolMatchesTargetTeam
+  );
+  return Boolean(
+    (no && no !== "-")
+    || (hometown && hometown !== "-")
+    || schoolLooksReal
+    || (commitment && commitment !== "-")
+  );
+}
+
 function ensureRosterTeam(rows: TeamRosterRow[], fallbackTeam: string) {
   const team = String(fallbackTeam || "").trim();
-  return rows.map((row) => ({
-    ...row,
-    team: String(row.team || team || "").trim()
-  }));
+  const deduped = new Map<string, TeamRosterRow>();
+  rows.forEach((row) => {
+    const normalized: TeamRosterRow = {
+      no: String(row.no || "").trim(),
+      name: String(row.name || "").trim(),
+      position: String(row.position || "").trim(),
+      school: String(row.school || "").trim(),
+      team: String(row.team || team || "").trim(),
+      hometown: String(row.hometown || "").trim() || undefined,
+      commitment: String(row.commitment || "").trim() || undefined,
+      height: String(row.height || "").trim() || undefined,
+      weight: String(row.weight || "").trim() || undefined,
+      batsThrows: String(row.batsThrows || "").trim() || undefined,
+      grad: String(row.grad || "").trim() || undefined,
+      rank: String(row.rank || "").trim() || undefined
+    };
+    if (!looksLikeRosterPlayerName(normalized.name || "")) return;
+    if (/roster\s*schedule|advanced search|state rankings|tournament/i.test(normalized.position || "")) return;
+    if (!hasTeamRosterSignal(normalized, team)) return;
+    const dedupeKey = [
+      normalizeSearchText(normalized.no || ""),
+      normalizeSearchText(normalized.name || ""),
+      normalizeSearchText(normalized.school || ""),
+      normalizeSearchText(normalized.hometown || "")
+    ].join("|");
+    if (!dedupeKey || deduped.has(dedupeKey)) return;
+    deduped.set(dedupeKey, normalized);
+  });
+  return Array.from(deduped.values()).sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function parseScheduleDateTime(row: TeamScheduleRow, index: number) {

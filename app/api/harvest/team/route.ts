@@ -68,16 +68,26 @@ function sanitizeRosterRows(rows: TeamRosterRow[], targetTeamName = "") {
       && school
       && teamMatches(school, targetTeamName)
     );
+    const hometownLooksReal = Boolean(
+      hometown
+      && hometown !== "-"
+      && normalize(hometown) !== "unknown"
+    );
+    const commitmentLooksReal = Boolean(
+      commitment
+      && commitment !== "-"
+      && normalize(commitment) !== "unknown"
+    );
     const hasRosterSignal = Boolean(
       (no && no !== "-")
-      || (position && position !== "-")
+      || hometownLooksReal
       || (
         school
         && school !== "-"
         && normalize(school) !== "unknown"
         && !schoolMatchesTargetTeam
       )
-      || (commitment && commitment !== "-")
+      || commitmentLooksReal
     );
     if (!hasRosterSignal) return;
     const key = `${normalize(name)}|${normalize(school)}|${cleanText(row.no || "")}`;

@@ -108,6 +108,7 @@ function normalizeDesiredPlayer(input: unknown): DesiredPlayerSnapshot | null {
   const row = input as Record<string, unknown>;
   const playerId = String(row.playerId || "").trim();
   const selectionKey = String(row.selectionKey || "").trim();
+  const stableSelectionKey = selectionKey || playerId;
   const name = String(row.name || "").trim();
   const team = String(row.team || "").trim();
   const hasMeaningfulToken = (value: string) => {
@@ -117,10 +118,10 @@ function normalizeDesiredPlayer(input: unknown): DesiredPlayerSnapshot | null {
     return true;
   };
   const hasTeamSelectionSignal = () => {
-    if (!selectionKey.toLowerCase().startsWith("team:")) return true;
+    if (!stableSelectionKey.toLowerCase().startsWith("team:")) return true;
     if (hasMeaningfulToken(String(row.hometown || ""))) return true;
     if (hasMeaningfulToken(String(row.sourceGameId || ""))) return true;
-    const selectionPayload = selectionKey.split(":").slice(2).join(":");
+    const selectionPayload = stableSelectionKey.split(":").slice(2).join(":");
     if (!selectionPayload) return false;
     if (selectionPayload.includes("|")) {
       const tokens = selectionPayload.split("|");

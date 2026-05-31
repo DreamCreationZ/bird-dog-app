@@ -516,8 +516,8 @@ function looksLikeRosterPlayerName(value: string) {
 
 function hasTeamDetailsRosterSignal(row: TeamDetailsRosterRow, targetTeamName = "") {
   const no = String(row.no || "").trim();
-  const position = String(row.position || "").trim();
   const school = String(row.school || "").trim();
+  const hometown = String(row.hometown || "").trim();
   const commitment = String(row.commitment || "").trim();
   const normalizedTargetTeam = normalizeSmartSearch(targetTeamName);
   const schoolMatchesTargetTeam = Boolean(
@@ -533,13 +533,13 @@ function hasTeamDetailsRosterSignal(row: TeamDetailsRosterRow, targetTeamName = 
   );
   return Boolean(
     (no && no !== "-")
-    || (position && position !== "-")
+    || (hometown && hometown !== "-")
     || schoolLooksReal
     || (commitment && commitment !== "-")
   );
 }
 
-function normalizeTeamDetailsRosterRows(input: unknown) {
+function normalizeTeamDetailsRosterRows(input: unknown, targetTeamName = "") {
   if (!Array.isArray(input)) return [] as TeamDetailsRosterRow[];
   return input
     .map((row) => {
@@ -558,7 +558,7 @@ function normalizeTeamDetailsRosterRows(input: unknown) {
       if (!looksLikeRosterPlayerName(row.name || "")) return false;
       const position = String(row.position || "").trim();
       if (/roster\s*schedule|advanced search|state rankings|tournament/i.test(position)) return false;
-      if (!hasTeamDetailsRosterSignal(row)) return false;
+      if (!hasTeamDetailsRosterSignal(row, targetTeamName)) return false;
       return true;
     });
 }
@@ -835,6 +835,7 @@ function sanitizeDesiredPlayer(item: DesiredPlayer | null | undefined): DesiredP
   if (!item) return null;
   const playerId = String(item.playerId || "").trim();
   const selectionKey = String(item.selectionKey || "").trim();
+  const stableSelectionKey = selectionKey || playerId;
   const name = String(item.name || "").trim();
   const team = String(item.team || "").trim();
   const hasMeaningfulToken = (value: string) => {
@@ -844,10 +845,10 @@ function sanitizeDesiredPlayer(item: DesiredPlayer | null | undefined): DesiredP
     return true;
   };
   const hasTeamSelectionSignal = () => {
-    if (!selectionKey.toLowerCase().startsWith("team:")) return true;
+    if (!stableSelectionKey.toLowerCase().startsWith("team:")) return true;
     if (hasMeaningfulToken(String(item.hometown || ""))) return true;
     if (hasMeaningfulToken(String(item.sourceGameId || ""))) return true;
-    const selectionPayload = selectionKey.split(":").slice(2).join(":");
+    const selectionPayload = stableSelectionKey.split(":").slice(2).join(":");
     if (!selectionPayload) return false;
     if (selectionPayload.includes("|")) {
       const tokens = selectionPayload.split("|");
@@ -4929,7 +4930,7 @@ export default function BirdDogPage() {
       const importedSchedule = fallbackScheduleRowsForTeam(team);
       const liveSchedule = normalizeTeamDetailsScheduleRows(data?.schedule);
       const fallbackSchedule = liveSchedule.length ? liveSchedule : importedSchedule;
-      const liveRoster = normalizeTeamDetailsRosterRows(data?.roster);
+      const liveRoster = normalizeTeamDetailsRosterRows(data?.roster, cleanName);
       const fallbackRoster = mergeTeamDetailsRosterRows([liveRoster], cleanName);
       const snapshot: TeamDetailsSnapshot = {
         schedule: fallbackSchedule,
