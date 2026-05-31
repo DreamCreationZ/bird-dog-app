@@ -259,6 +259,10 @@ function mergeRosterRows(importedRoster: TeamRosterRow[], liveRoster: TeamRoster
   return Array.from(mergedRosterMap.values());
 }
 
+function sanitizeRosterForResponse(rows: TeamRosterRow[], targetTeamName = "") {
+  return sanitizeRosterRows(Array.isArray(rows) ? rows : [], targetTeamName);
+}
+
 function scheduleRowIncludesTeam(row: TeamScheduleRow, targetTeamName: string) {
   const target = cleanText(targetTeamName || "");
   if (!target) return true;
@@ -872,24 +876,10 @@ function parsePbrRosterRows(html: string) {
     output.push(parsed);
   }
 
+  // Do not fallback to loose anchor scraping here.
+  // On some PBR pages that can capture unrelated player links and create fake rosters.
   if (output.length) return output;
-
-  const anchors = [...html.matchAll(/<a[^>]*href=["'][^"']*(\/player\/|player-profile|\/players\/)[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi)];
-  const fallback: TeamRosterRow[] = [];
-  for (const anchor of anchors) {
-    const name = cleanText(anchor[2] || "");
-    if (!name || name.length < 2) continue;
-    const key = rosterMergeKey({ no: "", name });
-    if (seen.has(key)) continue;
-    seen.add(key);
-    fallback.push({
-      no: "",
-      name,
-      position: "",
-      school: ""
-    });
-  }
-  return fallback;
+  return [];
 }
 
 function parsePbrTeamPageUrl(teamsHtml: string, targetTeamName: string, targetTeamId = "") {
@@ -1587,11 +1577,12 @@ export async function POST(req: NextRequest) {
         }), searchOnly ? 7000 : 12000);
         if (liveFast && (liveFast.schedule.length || liveFast.roster.length)) {
           const normalizedSchedule = mergeScheduleRows([] as TeamScheduleRow[], liveFast.schedule, targetTeamName || teamName);
+          const sanitizedRoster = sanitizeRosterForResponse(liveFast.roster, targetTeamName || teamName);
           return NextResponse.json({
             ok: true,
             source: "pg_live_fallback",
-            ...liveFast,
             schedule: normalizedSchedule,
+            roster: sanitizedRoster,
             teamUrl: fallbackTeamUrl
           });
         }
@@ -1604,11 +1595,12 @@ export async function POST(req: NextRequest) {
           }), 12000);
           if (liveRetry && (liveRetry.schedule.length || liveRetry.roster.length)) {
             const normalizedSchedule = mergeScheduleRows([] as TeamScheduleRow[], liveRetry.schedule, targetTeamName || teamName);
+            const sanitizedRoster = sanitizeRosterForResponse(liveRetry.roster, targetTeamName || teamName);
             return NextResponse.json({
               ok: true,
               source: "pg_live_fallback_retry",
-              ...liveRetry,
               schedule: normalizedSchedule,
+              roster: sanitizedRoster,
               teamUrl: fallbackTeamUrl
             });
           }
@@ -1650,7 +1642,14 @@ export async function POST(req: NextRequest) {
     );
     if (livePrimary && (livePrimary.schedule.length || livePrimary.roster.length)) {
       const normalizedSchedule = mergeScheduleRows([] as TeamScheduleRow[], livePrimary.schedule, teamName);
-      return NextResponse.json({ ok: true, source: "live_primary", ...livePrimary, schedule: normalizedSchedule });
+      const sanitizedRoster = sanitizeRosterForResponse(livePrimary.roster, teamName);
+      return NextResponse.json({
+        ok: true,
+        source: "live_primary",
+        schedule: normalizedSchedule,
+        roster: sanitizedRoster,
+        teamUrl
+      });
     }
 
     if (!searchOnly) {
@@ -1660,7 +1659,14 @@ export async function POST(req: NextRequest) {
       );
       if (liveRetry && (liveRetry.schedule.length || liveRetry.roster.length)) {
         const normalizedSchedule = mergeScheduleRows([] as TeamScheduleRow[], liveRetry.schedule, teamName);
-        return NextResponse.json({ ok: true, source: "live_retry", ...liveRetry, schedule: normalizedSchedule });
+        const sanitizedRoster = sanitizeRosterForResponse(liveRetry.roster, teamName);
+        return NextResponse.json({
+          ok: true,
+          source: "live_retry",
+          schedule: normalizedSchedule,
+          roster: sanitizedRoster,
+          teamUrl
+        });
       }
     }
 

@@ -353,6 +353,27 @@ function normalizeSearchText(value: string) {
     .trim();
 }
 
+function normalizePlaceholderToken(value: string) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[–—]/g, "-")
+    .replace(/\s+/g, " ");
+}
+
+function isPlaceholderValue(value: string) {
+  const normalized = normalizePlaceholderToken(value);
+  if (!normalized) return true;
+  if (normalized === "-" || normalized === "--" || normalized === "---") return true;
+  return normalized === "x"
+    || normalized === "n/a"
+    || normalized === "na"
+    || normalized === "none"
+    || normalized === "unknown"
+    || normalized === "tbd"
+    || normalized === "null";
+}
+
 function looksLikeRosterPlayerName(value: string) {
   const name = String(value || "").trim();
   if (!name || name.length < 4) return false;
@@ -423,12 +444,7 @@ function sanitizeCartPlayer(item: CrossTeamCartPlayer | null | undefined): Cross
   const stableSelectionKey = selectionKey || playerId;
   const name = String(item.name || "").trim();
   const team = String(item.team || "").trim();
-  const hasMeaningfulToken = (value: string) => {
-    const normalized = String(value || "").trim().toLowerCase();
-    if (!normalized) return false;
-    if (normalized === "-" || normalized === "x" || normalized === "na" || normalized === "n/a" || normalized === "unknown") return false;
-    return true;
-  };
+  const hasMeaningfulToken = (value: string) => !isPlaceholderValue(value);
   const hasTeamSelectionSignal = () => {
     if (!stableSelectionKey.toLowerCase().startsWith("team:")) return true;
     if (hasMeaningfulToken(String(item.hometown || ""))) return true;
@@ -654,15 +670,14 @@ function hasTeamRosterSignal(row: TeamRosterRow, targetTeamName = "") {
   );
   const schoolLooksReal = Boolean(
     school
-    && school !== "-"
-    && normalizeSearchText(school) !== "unknown"
+    && !isPlaceholderValue(school)
     && !schoolMatchesTargetTeam
   );
   return Boolean(
-    (no && no !== "-")
-    || (hometown && hometown !== "-")
+    (no && !isPlaceholderValue(no))
+    || (hometown && !isPlaceholderValue(hometown))
     || schoolLooksReal
-    || (commitment && commitment !== "-")
+    || (commitment && !isPlaceholderValue(commitment))
   );
 }
 

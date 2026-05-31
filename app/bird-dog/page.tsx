@@ -857,12 +857,7 @@ function sanitizeDesiredPlayer(item: DesiredPlayer | null | undefined): DesiredP
   const stableSelectionKey = selectionKey || playerId;
   const name = String(item.name || "").trim();
   const team = String(item.team || "").trim();
-  const hasMeaningfulToken = (value: string) => {
-    const normalized = String(value || "").trim().toLowerCase();
-    if (!normalized) return false;
-    if (normalized === "-" || normalized === "x" || normalized === "na" || normalized === "n/a" || normalized === "unknown") return false;
-    return true;
-  };
+  const hasMeaningfulToken = (value: string) => !isPlaceholderCellValue(value);
   const hasTeamSelectionSignal = () => {
     if (!stableSelectionKey.toLowerCase().startsWith("team:")) return true;
     if (hasMeaningfulToken(String(item.hometown || ""))) return true;
