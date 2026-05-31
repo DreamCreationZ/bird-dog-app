@@ -1867,6 +1867,19 @@ function isTournamentAtLeast15U(item: InventoryTournament) {
   return ages.every((age) => age >= 15);
 }
 
+async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, timeoutMs = 30000) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, {
+      ...(init || {}),
+      signal: controller.signal
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
 function inventoryMatchesAgeFilter(item: InventoryTournament, filter: string) {
   const normalized = String(filter || "").trim().toUpperCase();
   if (!normalized || normalized === "ALL") {
@@ -3994,11 +4007,11 @@ export default function BirdDogPage() {
         tournamentId: targetTournamentId || undefined
       };
       const attemptOpen = () =>
-        fetch("/api/harvest/open", {
+        fetchWithTimeout("/api/harvest/open", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
-        });
+        }, 30000);
       let liveOpen = await attemptOpen();
       if (!isCurrentMutation()) return;
       if (liveOpen.status === 401) {
@@ -6654,11 +6667,11 @@ export default function BirdDogPage() {
         tournamentId: targetTournamentId || undefined
       };
       const attemptOpen = () =>
-        fetch("/api/harvest/open", {
+        fetchWithTimeout("/api/harvest/open", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
-        });
+        }, 30000);
       let liveOpen = await attemptOpen();
       if (!isCurrentMutation()) return;
       if (liveOpen.status === 401) {
