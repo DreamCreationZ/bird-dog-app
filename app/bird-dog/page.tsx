@@ -831,6 +831,38 @@ function dedupeDesiredPlayersByIdentity(rows: DesiredPlayer[]) {
   return Array.from(deduped.values());
 }
 
+function sanitizeDesiredPlayer(item: DesiredPlayer | null | undefined): DesiredPlayer | null {
+  if (!item) return null;
+  const playerId = String(item.playerId || "").trim();
+  const selectionKey = String(item.selectionKey || "").trim();
+  const name = String(item.name || "").trim();
+  const team = String(item.team || "").trim();
+  if (!playerId || !name || !team) return null;
+  if (!looksLikeRosterPlayerName(name)) return null;
+  if (isRosterPlaceholderTeamName(team)) return null;
+  return {
+    playerId,
+    selectionKey: selectionKey || undefined,
+    name,
+    team,
+    hometown: String(item.hometown || "").trim() || undefined,
+    sourceTeamId: String(item.sourceTeamId || "").trim() || undefined,
+    sourceTeamName: String(item.sourceTeamName || "").trim() || undefined,
+    sourceGameId: String(item.sourceGameId || "").trim() || undefined,
+    sourceGameStartAt: String(item.sourceGameStartAt || "").trim() || undefined,
+    sourceGameTimeLabel: String(item.sourceGameTimeLabel || "").trim() || undefined,
+    sourceGameOpponent: String(item.sourceGameOpponent || "").trim() || undefined,
+    sourceGameField: String(item.sourceGameField || "").trim() || undefined
+  };
+}
+
+function sanitizeDesiredPlayers(rows: DesiredPlayer[]) {
+  const clean = rows
+    .map((item) => sanitizeDesiredPlayer(item))
+    .filter((item): item is DesiredPlayer => Boolean(item));
+  return dedupeDesiredPlayersByIdentity(clean);
+}
+
 function mergeRosterCartStorage(keys: string[]) {
   const merged = new Map<string, DesiredPlayer>();
   keys.forEach((key) => {
@@ -929,11 +961,11 @@ function readRosterCartStorage(key: string) {
       sourceGameField: item?.sourceGameField ? String(item.sourceGameField) : undefined
     }))
     .filter((item) => item.playerId && item.name && item.team);
-  return dedupeDesiredPlayersByIdentity(rows);
+  return sanitizeDesiredPlayers(rows);
 }
 
 function writeRosterCartStorage(key: string, rows: DesiredPlayer[]) {
-  safeLocalSet(key, JSON.stringify(dedupeDesiredPlayersByIdentity(rows)));
+  safeLocalSet(key, JSON.stringify(sanitizeDesiredPlayers(rows)));
 }
 
 function readLegacyRosterCartStorage() {
@@ -976,12 +1008,12 @@ function readDesiredPlayersStorage(key: string) {
       sourceGameField: item?.sourceGameField ? String(item.sourceGameField) : undefined
     }))
     .filter((item) => item.playerId && item.name && item.team);
-  return dedupeDesiredPlayersByIdentity(rows);
+  return sanitizeDesiredPlayers(rows);
 }
 
 function writeDesiredPlayersStorage(key: string, rows: DesiredPlayer[]) {
   if (!key) return;
-  safeLocalSet(key, JSON.stringify(dedupeDesiredPlayersByIdentity(rows)));
+  safeLocalSet(key, JSON.stringify(sanitizeDesiredPlayers(rows)));
 }
 
 function readLegacyDesiredPlayersStorage(orgId: string, userId: string) {
@@ -2699,7 +2731,7 @@ export default function BirdDogPage() {
       const nextRaw = typeof nextState === "function"
         ? (nextState as (previous: DesiredPlayer[]) => DesiredPlayer[])(prev)
         : nextState;
-      const next = dedupeDesiredPlayersByIdentity(nextRaw);
+      const next = sanitizeDesiredPlayers(nextRaw);
       writeDesiredPlayersStorage(desiredPlayersStorageKey, next);
       return next;
     });
@@ -2716,7 +2748,7 @@ export default function BirdDogPage() {
     if (!teamRosterCartStorageKey) return [] as DesiredPlayer[];
     const canonicalRows = readRosterCartStorage(teamRosterCartStorageKey);
     const aliasRows = mergeRosterCartStorage(teamRosterCartLegacyKeys);
-    const merged = dedupeDesiredPlayersByIdentity([...canonicalRows, ...aliasRows]);
+    const merged = sanitizeDesiredPlayers([...canonicalRows, ...aliasRows]);
     writeRosterCartStorage(teamRosterCartStorageKey, merged);
     pruneLegacyTeamRosterCartAliases();
     return merged;
@@ -2727,7 +2759,7 @@ export default function BirdDogPage() {
       const nextRaw = typeof nextState === "function"
         ? (nextState as (previous: DesiredPlayer[]) => DesiredPlayer[])(prev)
         : nextState;
-      const next = dedupeDesiredPlayersByIdentity(nextRaw);
+      const next = sanitizeDesiredPlayers(nextRaw);
       if (teamRosterCartStorageKey) {
         writeRosterCartStorage(teamRosterCartStorageKey, next);
       }
@@ -4166,7 +4198,7 @@ export default function BirdDogPage() {
       flight_arrival_time: normalizedArrival,
       hotel_name: formState.hotelName?.trim() || null,
       notes: formState.notes?.trim() || null,
-      desired_players: desiredState,
+      desired_players: sanitizeDesiredPlayers(desiredState),
       generated_plan: generatedState,
       updated_at: new Date().toISOString()
     };
@@ -4216,7 +4248,8 @@ export default function BirdDogPage() {
     const persistedDesired = readDesiredPlayersStorage(desiredPlayersStorageKey) || [];
     const cartDesired = readTeamRosterCartCanonical();
     const remoteDesired = Array.isArray(mine.desired_players)
-      ? mine.desired_players
+      ? sanitizeDesiredPlayers(
+        mine.desired_players
         .map((item) => ({
           playerId: String(item?.playerId || ""),
           selectionKey: item?.selectionKey ? String(item.selectionKey) : undefined,
@@ -4231,7 +4264,7 @@ export default function BirdDogPage() {
           sourceGameOpponent: item?.sourceGameOpponent ? String(item.sourceGameOpponent) : undefined,
           sourceGameField: item?.sourceGameField ? String(item.sourceGameField) : undefined
         }))
-        .filter((item) => item.playerId && item.name && item.team)
+      )
       : [];
     const mergedDesired = new Map<string, DesiredPlayer>();
     cartDesired.forEach((item) => mergedDesired.set(desiredPlayerSelectionKey(item), item));
@@ -4430,6 +4463,7 @@ export default function BirdDogPage() {
     formOverride?: typeof scheduleForm
   ) {
     const activeForm = formOverride ?? scheduleForm;
+    const desiredPayload = sanitizeDesiredPlayers(desiredOverride ?? desiredPlayers);
     const normalizedFlightArrival = activeForm.flightArrivalTime
       ? localInputToOffsetIso(activeForm.flightArrivalTime)
       : "";
@@ -4439,7 +4473,7 @@ export default function BirdDogPage() {
       company,
       inventorySlug: selectedInventorySlug,
       tournamentId: selectedTournamentId,
-      desiredPlayers: desiredOverride ?? desiredPlayers,
+      desiredPlayers: desiredPayload,
       generatedPlan: generatedPlan ?? myGeneratedPlan
     };
 
@@ -4451,7 +4485,7 @@ export default function BirdDogPage() {
     if (!res.ok) {
       const local = buildLocalFallbackSchedule(
         activeForm,
-        desiredOverride ?? desiredPlayers,
+        desiredPayload,
         generatedPlan ?? myGeneratedPlan
       );
       if (local) {
@@ -4467,7 +4501,7 @@ export default function BirdDogPage() {
     const scheduleList: CoachSchedule[] = data.schedules || [];
     const local = buildLocalFallbackSchedule(
       activeForm,
-      desiredOverride ?? desiredPlayers,
+      desiredPayload,
       generatedPlan ?? myGeneratedPlan
     );
     if (local) {
@@ -4478,11 +4512,11 @@ export default function BirdDogPage() {
   }
 
   async function addSchedule(desiredOverride?: DesiredPlayer[]) {
-    const activeDesired = desiredOverride ?? desiredPlayers;
+    const activeDesired = sanitizeDesiredPlayers(desiredOverride ?? desiredPlayers);
     const nextPlan = createGeneratedPlan(activeDesired);
     const mergedPlan = [...myGeneratedPlan, ...nextPlan];
     if (desiredOverride) {
-      setDesiredPlayersAndPersist(desiredOverride);
+      setDesiredPlayersAndPersist(activeDesired);
     }
     setMyGeneratedPlan(mergedPlan);
     await saveSchedule(mergedPlan, activeDesired);

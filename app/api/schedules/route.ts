@@ -24,6 +24,21 @@ type ScopeMeta = {
   scopes: Record<string, ScopeSnapshot>;
 };
 
+type DesiredPlayerSnapshot = {
+  playerId: string;
+  selectionKey?: string;
+  name: string;
+  team: string;
+  hometown?: string;
+  sourceTeamId?: string;
+  sourceTeamName?: string;
+  sourceGameId?: string;
+  sourceGameStartAt?: string;
+  sourceGameTimeLabel?: string;
+  sourceGameOpponent?: string;
+  sourceGameField?: string;
+};
+
 const SCOPE_META_OPEN = "[[BD_SCOPE_META_V1]]";
 const SCOPE_META_CLOSE = "[[/BD_SCOPE_META_V1]]";
 
@@ -54,6 +69,83 @@ function normalizeScopePart(value: unknown) {
   return clean.replace(/[^a-z0-9._-]+/g, "-");
 }
 
+function normalizePlayerIdentityPart(value: string) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function looksLikeRosterPlayerName(value: string) {
+  const name = String(value || "").trim();
+  if (!name || name.length < 4) return false;
+  if (!/[A-Za-z]/.test(name)) return false;
+  if (/\d{2,}/.test(name)) return false;
+  if (/[|@]/.test(name)) return false;
+  if (!/^[A-Za-z'.-]+(?:\s+[A-Za-z'.-]+){1,4}$/.test(name)) return false;
+  if (
+    /visit team page|advanced search|hs state rankings|state rankings|tournament|roster schedule|roster tools|diamondkast|perfect game|sign in|create account|players|teams|events|schedule|bracket|results|leaders|top performers|probable pitchers/i.test(name)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isRosterPlaceholderTeamName(value: string) {
+  const normalized = normalizePlayerIdentityPart(value);
+  if (!normalized) return true;
+  if (normalized === "tbd" || normalized === "home field") return true;
+  if (/^seed\s*#?\s*\d+$/i.test(normalized)) return true;
+  if (/^(winner|loser)\s*#?\d+$/i.test(normalized)) return true;
+  if (/^(winner|loser)\s+of\s+(game|match)\s*#?\d+$/i.test(normalized)) return true;
+  if (/^(winner|loser)\s+(game|match)\s*#?\d+$/i.test(normalized)) return true;
+  if (/^(pool|division|overall)\s+[a-z0-9]+\s+place\s+\d+$/i.test(normalized)) return true;
+  return false;
+}
+
+function normalizeDesiredPlayer(input: unknown): DesiredPlayerSnapshot | null {
+  if (!input || typeof input !== "object") return null;
+  const row = input as Record<string, unknown>;
+  const playerId = String(row.playerId || "").trim();
+  const selectionKey = String(row.selectionKey || "").trim();
+  const name = String(row.name || "").trim();
+  const team = String(row.team || "").trim();
+  if (!playerId || !name || !team) return null;
+  if (!looksLikeRosterPlayerName(name)) return null;
+  if (isRosterPlaceholderTeamName(team)) return null;
+  return {
+    playerId,
+    selectionKey: selectionKey || undefined,
+    name,
+    team,
+    hometown: String(row.hometown || "").trim() || undefined,
+    sourceTeamId: String(row.sourceTeamId || "").trim() || undefined,
+    sourceTeamName: String(row.sourceTeamName || "").trim() || undefined,
+    sourceGameId: String(row.sourceGameId || "").trim() || undefined,
+    sourceGameStartAt: String(row.sourceGameStartAt || "").trim() || undefined,
+    sourceGameTimeLabel: String(row.sourceGameTimeLabel || "").trim() || undefined,
+    sourceGameOpponent: String(row.sourceGameOpponent || "").trim() || undefined,
+    sourceGameField: String(row.sourceGameField || "").trim() || undefined
+  };
+}
+
+function sanitizeDesiredPlayers(input: unknown): DesiredPlayerSnapshot[] {
+  const rows = Array.isArray(input) ? input : [];
+  const deduped = new Map<string, DesiredPlayerSnapshot>();
+  rows.forEach((item) => {
+    const normalized = normalizeDesiredPlayer(item);
+    if (!normalized) return;
+    const stable = String(normalized.selectionKey || normalized.playerId || "").trim();
+    const name = normalizePlayerIdentityPart(normalized.name || "");
+    const hometown = normalizePlayerIdentityPart(normalized.hometown || "");
+    const identity = name && hometown ? `${name}::${hometown}` : name;
+    const key = stable ? `id:${stable}` : (identity ? `identity:${identity}` : "");
+    if (!key || deduped.has(key)) return;
+    deduped.set(key, normalized);
+  });
+  return Array.from(deduped.values());
+}
+
 function scopeKeyFromInput(input: ScheduleScopeInput) {
   const company = normalizeScopePart(input.company || "");
   if (company === "-") return "";
@@ -77,7 +169,7 @@ function scopeKeyFromRequest(req: NextRequest, body?: Record<string, unknown>) {
 function normalizeScopeSnapshot(value: unknown): ScopeSnapshot | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
-  const desiredPlayers = Array.isArray(row.desired_players) ? row.desired_players : [];
+  const desiredPlayers = sanitizeDesiredPlayers(row.desired_players);
   const generatedPlan = Array.isArray(row.generated_plan) ? row.generated_plan : [];
   const updatedAtRaw = String(row.updated_at || "").trim();
   return {
@@ -161,7 +253,7 @@ function snapshotFromBody(body: Record<string, unknown>): ScopeSnapshot {
     flight_arrival_time: body?.flightArrivalTime ? String(body.flightArrivalTime).trim() || null : null,
     hotel_name: body?.hotelName ? String(body.hotelName).trim() || null : null,
     notes: body?.notes ? String(body.notes) : null,
-    desired_players: Array.isArray(body?.desiredPlayers) ? body.desiredPlayers : [],
+    desired_players: sanitizeDesiredPlayers(body?.desiredPlayers),
     generated_plan: Array.isArray(body?.generatedPlan) ? body.generatedPlan : [],
     updated_at: new Date().toISOString()
   };
@@ -174,7 +266,7 @@ function snapshotFromScheduleRow(row: Awaited<ReturnType<typeof listCoachSchedul
     flight_arrival_time: row.flight_arrival_time || null,
     hotel_name: row.hotel_name || null,
     notes: row.notes || null,
-    desired_players: Array.isArray(row.desired_players) ? row.desired_players : [],
+    desired_players: sanitizeDesiredPlayers(row.desired_players),
     generated_plan: Array.isArray(row.generated_plan) ? row.generated_plan : [],
     updated_at: row.updated_at || new Date().toISOString()
   };
@@ -204,7 +296,8 @@ function projectScheduleForScope(
     if (!fallbackScope || !parsed.meta.scopes[fallbackScope]) {
       return {
         ...row,
-        notes: parsed.userNote || row.notes || null
+        notes: parsed.userNote || row.notes || null,
+        desired_players: sanitizeDesiredPlayers(row.desired_players)
       };
     }
     const snapshot = parsed.meta.scopes[fallbackScope];

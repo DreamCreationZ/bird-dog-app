@@ -353,6 +353,33 @@ function normalizeSearchText(value: string) {
     .trim();
 }
 
+function looksLikeRosterPlayerName(value: string) {
+  const name = String(value || "").trim();
+  if (!name || name.length < 4) return false;
+  if (!/[A-Za-z]/.test(name)) return false;
+  if (/\d{2,}/.test(name)) return false;
+  if (/[|@]/.test(name)) return false;
+  if (!/^[A-Za-z'.-]+(?:\s+[A-Za-z'.-]+){1,4}$/.test(name)) return false;
+  if (
+    /visit team page|advanced search|hs state rankings|state rankings|tournament|roster schedule|roster tools|diamondkast|perfect game|sign in|create account|players|teams|events|schedule|bracket|results|leaders|top performers|probable pitchers/i.test(name)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isRosterPlaceholderTeamName(value: string) {
+  const normalized = normalizeSearchText(value);
+  if (!normalized) return true;
+  if (normalized === "tbd" || normalized === "home field") return true;
+  if (/^seed\s*#?\s*\d+$/i.test(normalized)) return true;
+  if (/^(winner|loser)\s*#?\d+$/i.test(normalized)) return true;
+  if (/^(winner|loser)\s+of\s+(game|match)\s*#?\d+$/i.test(normalized)) return true;
+  if (/^(winner|loser)\s+(game|match)\s*#?\d+$/i.test(normalized)) return true;
+  if (/^(pool|division|overall)\s+[a-z0-9]+\s+place\s+\d+$/i.test(normalized)) return true;
+  return false;
+}
+
 function rosterSearchHaystack(row: TeamRosterRow) {
   return normalizeSearchText(
     `${row.no} ${row.name} ${row.team || ""} ${row.position} ${row.height || ""} ${row.weight || ""} ${row.batsThrows || ""} ${row.grad || ""} ${row.school || ""} ${row.hometown || ""} ${row.rank || ""} ${row.commitment || ""}`
@@ -387,6 +414,38 @@ function dedupeCartPlayersByIdentity(rows: CrossTeamCartPlayer[]) {
     }
   });
   return Array.from(deduped.values());
+}
+
+function sanitizeCartPlayer(item: CrossTeamCartPlayer | null | undefined): CrossTeamCartPlayer | null {
+  if (!item) return null;
+  const playerId = String(item.playerId || "").trim();
+  const selectionKey = String(item.selectionKey || "").trim();
+  const name = String(item.name || "").trim();
+  const team = String(item.team || "").trim();
+  if (!playerId || !name || !team) return null;
+  if (!looksLikeRosterPlayerName(name)) return null;
+  if (isRosterPlaceholderTeamName(team)) return null;
+  return {
+    playerId,
+    selectionKey: selectionKey || undefined,
+    name,
+    team,
+    hometown: String(item.hometown || "").trim() || undefined,
+    sourceTeamId: String(item.sourceTeamId || "").trim() || undefined,
+    sourceTeamName: String(item.sourceTeamName || "").trim() || undefined,
+    sourceGameId: String(item.sourceGameId || "").trim() || undefined,
+    sourceGameStartAt: String(item.sourceGameStartAt || "").trim() || undefined,
+    sourceGameTimeLabel: String(item.sourceGameTimeLabel || "").trim() || undefined,
+    sourceGameOpponent: String(item.sourceGameOpponent || "").trim() || undefined,
+    sourceGameField: String(item.sourceGameField || "").trim() || undefined
+  };
+}
+
+function sanitizeCartPlayers(rows: CrossTeamCartPlayer[]) {
+  const clean = rows
+    .map((item) => sanitizeCartPlayer(item))
+    .filter((item): item is CrossTeamCartPlayer => Boolean(item));
+  return dedupeCartPlayersByIdentity(clean);
 }
 
 function normalizeStorageScope(value: string) {
@@ -496,7 +555,7 @@ function readRosterCartStorage(key: string): CrossTeamCartPlayer[] {
         sourceGameField: item?.sourceGameField ? String(item.sourceGameField) : undefined
       }))
       .filter((item) => item.playerId && item.name && item.team);
-    return dedupeCartPlayersByIdentity(rows);
+    return sanitizeCartPlayers(rows);
   } catch {
     return [];
   }
@@ -505,7 +564,7 @@ function readRosterCartStorage(key: string): CrossTeamCartPlayer[] {
 function writeRosterCartStorage(key: string, rows: CrossTeamCartPlayer[]) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(key, JSON.stringify(dedupeCartPlayersByIdentity(rows)));
+    window.localStorage.setItem(key, JSON.stringify(sanitizeCartPlayers(rows)));
   } catch {
     // Ignore storage write errors.
   }
@@ -945,7 +1004,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
   useEffect(() => {
     const aliasRows = mergeRosterCartStorage(cartStorageLegacyKeys);
     const canonicalRows = cartStorageKey ? readRosterCartStorage(cartStorageKey) : [];
-    const merged = dedupeCartPlayersByIdentity([...canonicalRows, ...aliasRows]);
+    const merged = sanitizeCartPlayers([...canonicalRows, ...aliasRows]);
     setCrossTeamCartPlayers(merged);
     // Keep only canonical key active so removed players cannot reappear from stale aliases.
     persistCrossTeamCart(merged);
@@ -2013,7 +2072,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
       merged.set(selectionKey, candidate);
       addedCount += 1;
     });
-    const next = dedupeCartPlayersByIdentity(Array.from(merged.values()));
+    const next = sanitizeCartPlayers(Array.from(merged.values()));
     setCrossTeamCartPlayers(next);
     // Persist immediately before navigation so auto-create on dashboard always has fresh cart data.
     persistCrossTeamCart(next);
