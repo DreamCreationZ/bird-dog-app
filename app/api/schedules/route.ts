@@ -110,9 +110,35 @@ function normalizeDesiredPlayer(input: unknown): DesiredPlayerSnapshot | null {
   const selectionKey = String(row.selectionKey || "").trim();
   const name = String(row.name || "").trim();
   const team = String(row.team || "").trim();
+  const hasMeaningfulToken = (value: string) => {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (!normalized) return false;
+    if (normalized === "-" || normalized === "x" || normalized === "na" || normalized === "n/a" || normalized === "unknown") return false;
+    return true;
+  };
+  const hasTeamSelectionSignal = () => {
+    if (!selectionKey.toLowerCase().startsWith("team:")) return true;
+    if (hasMeaningfulToken(String(row.hometown || ""))) return true;
+    if (hasMeaningfulToken(String(row.sourceGameId || ""))) return true;
+    const selectionPayload = selectionKey.split(":").slice(2).join(":");
+    if (!selectionPayload) return false;
+    if (selectionPayload.includes("|")) {
+      const tokens = selectionPayload.split("|");
+      const noToken = String(tokens[0] || "").trim();
+      const hometownToken = String(tokens[2] || "").trim();
+      const schoolToken = String(tokens[3] || "").trim();
+      return hasMeaningfulToken(noToken) || hasMeaningfulToken(hometownToken) || hasMeaningfulToken(schoolToken);
+    }
+    if (selectionPayload.includes("::")) {
+      const noToken = String(selectionPayload.split("::")[0] || "").trim();
+      return hasMeaningfulToken(noToken);
+    }
+    return false;
+  };
   if (!playerId || !name || !team) return null;
   if (!looksLikeRosterPlayerName(name)) return null;
   if (isRosterPlaceholderTeamName(team)) return null;
+  if (!hasTeamSelectionSignal()) return null;
   return {
     playerId,
     selectionKey: selectionKey || undefined,
