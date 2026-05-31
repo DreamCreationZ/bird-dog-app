@@ -1846,7 +1846,22 @@ function tournamentAgeGroups(item: InventoryTournament) {
   return Array.from(new Set(values)).sort((a, b) => a - b);
 }
 
+function hasUnder15AgeSignal(item: InventoryTournament) {
+  const text = [
+    String(item.name || ""),
+    String(item.slug || ""),
+    String(item.harvestHint || "")
+  ].join(" ").toLowerCase();
+  if (!text.trim()) return false;
+
+  if (/\b(?:8|9|10|11|12|13|14)\s*u\b/.test(text)) return true;
+  if (/\b(?:8|9|10|11|12|13|14)\s*\/\s*(?:8|9|10|11|12|13|14)\s*u?\b/.test(text)) return true;
+  if (/(?:^|[^0-9])(?:8u|9u|10u|11u|12u|13u|14u)(?:[^0-9]|$)/.test(text)) return true;
+  return false;
+}
+
 function isTournamentAtLeast15U(item: InventoryTournament) {
+  if (hasUnder15AgeSignal(item)) return false;
   const ages = tournamentAgeGroups(item);
   if (!ages.length) return true;
   return ages.every((age) => age >= 15);
