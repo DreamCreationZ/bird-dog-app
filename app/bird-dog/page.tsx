@@ -1957,7 +1957,29 @@ function mergeTeamDetailsRosterRows(groups: TeamDetailsRosterRow[][], targetTeam
 }
 
 function sortInventoryForDisplay(rows: InventoryTournament[]) {
-  return [...rows].sort((a, b) => {
+  const bySlug = new Map<string, InventoryTournament>();
+  rows.forEach((row) => {
+    const key = `${row.company}:${row.slug}`;
+    const existing = bySlug.get(key);
+    if (!existing) {
+      bySlug.set(key, row);
+      return;
+    }
+    const score = (item: InventoryTournament) => {
+      let value = 0;
+      if (String(item.displayDate || "").trim()) value += 4;
+      if (String(item.displayTeams || "").trim()) value += 3;
+      if (String(item.displayCity || "").trim()) value += 2;
+      if (String(item.harvestHint || "").trim()) value += 1;
+      if (/\b(8|9|1[0-9]|2[0-2])\s*u\b/i.test(String(item.name || ""))) value += 5;
+      return value;
+    };
+    if (score(row) >= score(existing)) {
+      bySlug.set(key, row);
+    }
+  });
+
+  return Array.from(bySlug.values()).sort((a, b) => {
     const aStart = inventorySortStartMs(a);
     const bStart = inventorySortStartMs(b);
     if (aStart !== bStart) return aStart - bStart;
