@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getHarvestedTournament, listOrgUnlocks } from "@/lib/birddog/repository";
+import { getHarvestedTournament, listHarvestedTournaments, listOrgUnlocks } from "@/lib/birddog/repository";
 import { resolvePgTeamUrl, scrapePgTeamLive } from "@/lib/birddog/pgScraper";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
@@ -34,6 +34,67 @@ type TeamRosterRow = {
   rank?: string;
   commitment?: string;
 };
+
+function looksLikeRosterPlayerName(value: string) {
+  const name = cleanText(value || "");
+  if (!name || name.length < 4) return false;
+  if (!/[A-Za-z]/.test(name)) return false;
+  if (/\d{2,}/.test(name)) return false;
+  if (/[|@]/.test(name)) return false;
+  if (!/^[A-Za-z'.-]+(?:\s+[A-Za-z'.-]+){1,4}$/.test(name)) return false;
+  if (
+    /visit team page|advanced search|hs state rankings|state rankings|tournament|roster schedule|roster tools|diamondkast|perfect game|sign in|create account|players|teams|events|schedule|bracket|results|leaders|top performers|probable pitchers/i.test(name)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function sanitizeRosterRows(rows: TeamRosterRow[], targetTeamName = "") {
+  const seen = new Set<string>();
+  const out: TeamRosterRow[] = [];
+  const normalizedTargetTeam = normalize(targetTeamName || "");
+  rows.forEach((row) => {
+    const name = cleanText(row.name || "");
+    if (!looksLikeRosterPlayerName(name)) return;
+    const position = cleanText(row.position || "");
+    if (/roster\s*schedule|advanced search|state rankings|tournament/i.test(position)) return;
+    const school = cleanText(row.school || "");
+    const no = cleanText(row.no || "");
+    const hometown = cleanText(row.hometown || "");
+    const commitment = cleanText(row.commitment || "");
+    const schoolMatchesTargetTeam = Boolean(
+      normalizedTargetTeam
+      && school
+      && teamMatches(school, targetTeamName)
+    );
+    const hasRosterSignal = Boolean(
+      (no && no !== "-")
+      || (position && position !== "-")
+      || (
+        school
+        && school !== "-"
+        && normalize(school) !== "unknown"
+        && !schoolMatchesTargetTeam
+      )
+      || (commitment && commitment !== "-")
+    );
+    if (!hasRosterSignal) return;
+    const key = `${normalize(name)}|${normalize(school)}|${cleanText(row.no || "")}`;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      ...row,
+      no,
+      name,
+      position,
+      school,
+      hometown,
+      commitment
+    });
+  });
+  return out;
+}
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -150,12 +211,14 @@ function rosterMergeKey(row: { no?: string; name?: string }) {
   return `${no}|${name}`;
 }
 
-function mergeRosterRows(importedRoster: TeamRosterRow[], liveRoster: TeamRosterRow[]) {
+function mergeRosterRows(importedRoster: TeamRosterRow[], liveRoster: TeamRosterRow[], targetTeamName = "") {
+  const cleanImported = sanitizeRosterRows(importedRoster, targetTeamName);
+  const cleanLive = sanitizeRosterRows(liveRoster, targetTeamName);
   const mergedRosterMap = new Map<string, TeamRosterRow>(
-    importedRoster.map((row) => [rosterMergeKey(row), row])
+    cleanImported.map((row) => [rosterMergeKey(row), row])
   );
 
-  for (const liveRow of liveRoster) {
+  for (const liveRow of cleanLive) {
     const key = rosterMergeKey(liveRow);
     const existing = mergedRosterMap.get(key);
     mergedRosterMap.set(key, {
@@ -580,7 +643,12 @@ function parseGameNumber(value: unknown, fallback: number) {
 
 function parsePbrScheduleContext(html: string, sourceUrl: string) {
   const eventBase = toPbrEventBase(sourceUrl);
-  const eventId = cleanText(html.match(/window\.EVENT_ID\s*=\s*["']?(\d+)["']?/i)?.[1] || "");
+  const eventId = cleanText(
+    html.match(/window\.EVENT_ID\s*=\s*["']?(\d+)["']?/i)?.[1]
+    || html.match(/data-weather=["'](\d+)["']/i)?.[1]
+    || html.match(/data-event-alert=["'](\d+)["']/i)?.[1]
+    || ""
+  );
   const defaultEventPriceId = cleanText(html.match(/window\.EVENT_PRICE_ID\s*=\s*["']?(\d+)["']?/i)?.[1] || "");
   const scheduleAjaxUrl = cleanText(
     html.match(/window\.SCHEDULE_AJAX_URL\s*=\s*["']([^"']+)["']/i)?.[1]
@@ -1030,6 +1098,68 @@ function withTimeout<T>(task: Promise<T>, timeoutMs: number): Promise<T | null> 
   });
 }
 
+function parseInventorySlugIsoDate(value: string) {
+  const match = String(value || "").match(/-(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return "";
+  return `${match[1]}-${match[2]}-${match[3]}`;
+}
+
+async function resolveImportedTournamentFallback(input: {
+  orgId: string;
+  company: "PG" | "PBR";
+  inventorySlug: string;
+  tournamentName: string;
+}) {
+  const normalizedWantedName = slugifyText(input.tournamentName || "");
+  if (!normalizedWantedName) return null;
+
+  const wantedDate = parseInventorySlugIsoDate(input.inventorySlug);
+  const tournaments = await withTimeout(listHarvestedTournaments(input.orgId, input.company), 3500);
+  if (!Array.isArray(tournaments) || !tournaments.length) return null;
+
+  const normalizedWantedNameNoYear = normalizedWantedName.replace(/-\d{4}$/i, "");
+  const ranked = tournaments
+    .map((candidate) => {
+      const candidateName = slugifyText(candidate.name || "");
+      const candidateNameNoYear = candidateName.replace(/-\d{4}$/i, "");
+      const candidateDate = asIsoDate(candidate.date || "");
+      let score = 0;
+
+      if (candidateName && candidateName === normalizedWantedName) {
+        score += 100;
+      } else if (
+        candidateName
+        && (candidateName.includes(normalizedWantedName) || normalizedWantedName.includes(candidateName))
+      ) {
+        score += 80;
+      } else if (
+        candidateNameNoYear
+        && normalizedWantedNameNoYear
+        && (
+          candidateNameNoYear === normalizedWantedNameNoYear
+          || candidateNameNoYear.includes(normalizedWantedNameNoYear)
+          || normalizedWantedNameNoYear.includes(candidateNameNoYear)
+        )
+      ) {
+        score += 70;
+      }
+
+      if (wantedDate && candidateDate === wantedDate) {
+        score += 40;
+      } else if (wantedDate && candidateDate.slice(0, 7) === wantedDate.slice(0, 7)) {
+        score += 10;
+      }
+
+      return { candidate, score };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  const best = ranked[0];
+  if (!best || best.score < 80) return null;
+  return withTimeout(getHarvestedTournament(input.orgId, best.candidate.id).catch(() => null), 2500);
+}
+
 async function resolvePbrEventHint(input: {
   inventorySlug: string;
   tournament: Tournament | null;
@@ -1169,26 +1299,39 @@ function importedRowsForTeam(tournament: Tournament, targetTeamName: string) {
 
   const schedule = importedScheduleRows(teamGames);
   const rosterMap = new Map<string, TeamRosterRow>();
+  const normalizedTargetTeam = normalize(targetTeamName || "");
   teamGames.forEach((game) => {
     game.players.forEach((player) => {
-      if (!rosterMap.has(player.id)) {
-        rosterMap.set(player.id, {
-          no: "",
-          name: player.name,
-          position: player.position || "",
-          height: "",
-          weight: "",
-          batsThrows: "",
-          grad: "",
-          school: player.school || "",
-          hometown: "",
-          rank: "",
-          commitment: ""
-        });
-      }
+      const playerName = cleanText(player.name || "");
+      if (!looksLikeRosterPlayerName(playerName)) return;
+      const playerSchool = cleanText(player.school || "");
+      // Imported game-player rows are often generic and can contain cross-team junk.
+      // Only trust rows explicitly tied to this team by school/team label.
+      const schoolMatchesTarget = Boolean(
+        playerSchool
+        && normalize(playerSchool) !== "unknown"
+        && normalizedTargetTeam
+        && teamMatches(playerSchool, targetTeamName)
+      );
+      if (!schoolMatchesTarget) return;
+      const rowKey = String(player.id || "").trim() || `${normalize(playerName)}|${normalize(playerSchool)}`;
+      if (!rowKey || rosterMap.has(rowKey)) return;
+      rosterMap.set(rowKey, {
+        no: "",
+        name: playerName,
+        position: cleanText(player.position || ""),
+        height: "",
+        weight: "",
+        batsThrows: "",
+        grad: "",
+        school: playerSchool,
+        hometown: "",
+        rank: "",
+        commitment: ""
+      });
     });
   });
-  const roster = Array.from(rosterMap.values());
+  const roster = sanitizeRosterRows(Array.from(rosterMap.values()), targetTeamName);
   return { schedule, roster };
 }
 
@@ -1254,7 +1397,7 @@ export async function POST(req: NextRequest) {
     const allowLiveScrape = process.env.BIRD_DOG_ALLOW_PG_LIVE_SCRAPE === "true";
 
     if (dataMode !== "live" || !allowLiveScrape) {
-      const tournament = tournamentId
+      let tournament = tournamentId
         ? (hasSupabaseConfig
             ? (await withTimeout(
               getHarvestedTournament(session.orgId, tournamentId).catch(() => null),
@@ -1262,6 +1405,21 @@ export async function POST(req: NextRequest) {
             ))
             : null)
         : null;
+
+      if (!tournament && hasSupabaseConfig) {
+        const fallbackCompany: "PG" | "PBR" = (
+          seedMeta?.company === "PBR" || inventorySlug.startsWith("pbr-live-")
+        ) ? "PBR" : "PG";
+        const fallbackTournament = await resolveImportedTournamentFallback({
+          orgId: session.orgId,
+          company: fallbackCompany,
+          inventorySlug,
+          tournamentName
+        });
+        if (fallbackTournament) {
+          tournament = fallbackTournament;
+        }
+      }
 
       const teamNameFromTournamentId = tournament?.teams?.find((team) => team.id === teamId)?.name || "";
       // Prefer canonical team name from the imported tournament for this teamId.
@@ -1273,7 +1431,9 @@ export async function POST(req: NextRequest) {
         const schedule = imported.schedule;
         const importedScheduleNormalized = mergeScheduleRows(schedule, [] as TeamScheduleRow[], targetTeamName);
         const importedRoster = imported.roster;
-        const importedReady = importedScheduleNormalized.length && importedRoster.length;
+        const importedHasSchedule = importedScheduleNormalized.length > 0;
+        const importedHasRoster = importedRoster.length > 0;
+        const importedReady = importedHasSchedule && importedHasRoster;
         const importedScheduleSuspect = scheduleRowsLookSuspect(schedule, targetTeamName);
         const isPbrTournament = seedMeta?.company === "PBR"
           || inventorySlug.startsWith("pbr-live-")
@@ -1313,7 +1473,7 @@ export async function POST(req: NextRequest) {
                 source: livePbr.schedule.length ? "pbr_live_team_schedule" : "pbr_live_roster_only",
                 // Always prefer latest live schedule when available; fall back to imported schedule only when live is empty.
                 schedule: mergedSchedule.length ? mergedSchedule : importedScheduleNormalized,
-                roster: mergeRosterRows(importedRoster, livePbr.roster),
+                roster: mergeRosterRows(importedRoster, livePbr.roster, targetTeamName || teamName),
                 teamUrl: livePbr.teamUrl || eventHint
               });
             }
@@ -1359,7 +1519,7 @@ export async function POST(req: NextRequest) {
                 source: importedReady ? "pg_live_team_schedule" : "pg_live_fallback",
                 // Always prefer latest live schedule when available; fall back to imported schedule only when live is empty.
                 schedule: mergedSchedule.length ? mergedSchedule : importedScheduleNormalized,
-                roster: mergeRosterRows(importedRoster, live.roster),
+                roster: mergeRosterRows(importedRoster, live.roster, targetTeamName || teamName),
                 teamUrl: fallbackTeamUrl
               });
             }
@@ -1379,6 +1539,18 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({
             ok: true,
             source: "imported_dataset",
+            schedule: importedScheduleNormalized,
+            roster: importedRoster,
+            teamUrl: ""
+          });
+        }
+
+        // Do not hide known games just because the upstream roster is empty.
+        // Coaches still need the team schedule even when roster feed lags.
+        if (importedHasSchedule || importedHasRoster) {
+          return NextResponse.json({
+            ok: true,
+            source: "imported_dataset_partial",
             schedule: importedScheduleNormalized,
             roster: importedRoster,
             teamUrl: ""

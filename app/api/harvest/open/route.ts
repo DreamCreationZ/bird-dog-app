@@ -128,6 +128,14 @@ type PbrEventHintCacheEntry = {
   value: string;
 };
 
+const LIVE_TOURNAMENT_CACHE_TTL_MS = 10 * 60 * 1000;
+
+type LiveTournamentCacheEntry = {
+  cachedAt: number;
+  source: string;
+  tournament: Tournament;
+};
+
 function getPbrEventHintCache() {
   const g = globalThis as unknown as {
     __BIRD_DOG_OPEN_PBR_EVENT_HINT_CACHE__?: Record<string, PbrEventHintCacheEntry>;
@@ -136,6 +144,16 @@ function getPbrEventHintCache() {
     g.__BIRD_DOG_OPEN_PBR_EVENT_HINT_CACHE__ = {};
   }
   return g.__BIRD_DOG_OPEN_PBR_EVENT_HINT_CACHE__;
+}
+
+function getLiveTournamentCache() {
+  const g = globalThis as unknown as {
+    __BIRD_DOG_OPEN_LIVE_TOURNAMENT_CACHE__?: Record<string, LiveTournamentCacheEntry>;
+  };
+  if (!g.__BIRD_DOG_OPEN_LIVE_TOURNAMENT_CACHE__) {
+    g.__BIRD_DOG_OPEN_LIVE_TOURNAMENT_CACHE__ = {};
+  }
+  return g.__BIRD_DOG_OPEN_LIVE_TOURNAMENT_CACHE__;
 }
 
 function pbrEventHintCacheKeys(input: {
@@ -177,6 +195,28 @@ function writeCachedPbrEventHint(keys: string[], value: string) {
   });
 }
 
+function readCachedLiveTournament(key: string) {
+  if (!key) return null;
+  const cache = getLiveTournamentCache();
+  const entry = cache[key];
+  if (!entry) return null;
+  if (Date.now() - entry.cachedAt > LIVE_TOURNAMENT_CACHE_TTL_MS) {
+    delete cache[key];
+    return null;
+  }
+  return entry;
+}
+
+function writeCachedLiveTournament(key: string, source: string, tournament: Tournament | null) {
+  if (!key || !tournament) return;
+  const cache = getLiveTournamentCache();
+  cache[key] = {
+    cachedAt: Date.now(),
+    source,
+    tournament
+  };
+}
+
 function toIsoDate(raw: string) {
   const value = cleanText(raw);
   if (!value) return "";
@@ -203,7 +243,12 @@ type PbrScheduleDivision = {
 
 function parsePbrScheduleContext(html: string, sourceUrl: string) {
   const eventBase = toPbrEventBase(sourceUrl);
-  const eventId = cleanText(html.match(/window\.EVENT_ID\s*=\s*["']?(\d+)["']?/i)?.[1] || "");
+  const eventId = cleanText(
+    html.match(/window\.EVENT_ID\s*=\s*["']?(\d+)["']?/i)?.[1]
+    || html.match(/data-weather=["'](\d+)["']/i)?.[1]
+    || html.match(/data-event-alert=["'](\d+)["']/i)?.[1]
+    || ""
+  );
   const scheduleAjaxUrl = toAbsolutePbrUrl(
     cleanText(
       html.match(/window\.SCHEDULE_AJAX_URL\s*=\s*["']([^"']+)["']/i)?.[1]
@@ -595,7 +640,6 @@ async function buildPbrLiveTournament(input: {
   if (!scheduleRes || !scheduleRes.ok) return null;
   const scheduleHtml = await scheduleRes.text();
   const context = parsePbrScheduleContext(scheduleHtml, scheduleAllUrl);
-  if (!context.eventId) return null;
 
   const payloads: Array<Record<string, unknown> | null> = [];
   const seenDivisionKeys = new Set<string>();
@@ -605,36 +649,38 @@ async function buildPbrLiveTournament(input: {
     seenDivisionKeys.add(key);
     payloads.push(payload);
   };
-  const allPayload = await fetchPbrSchedulePayload({
-    eventId: context.eventId,
-    scheduleAjaxUrl: context.scheduleAjaxUrl,
-    eventBase: context.eventBase,
-    csrfToken: context.csrfToken,
-    eventPriceId: "0",
-    scheduleId: "0"
-  });
-  pushPayload("0|0", allPayload);
-
-  const divisionEntries = Object.entries(context.divisions)
-    .filter(([key, division]) => key !== "0" && safeString(division?.event_price_id || key))
-    .map(([key, division]) => ({
-      eventPriceId: safeString(division?.event_price_id || key),
-      scheduleId: safeString(division?.schedule_id || "")
-    }))
-    .filter((item) => item.eventPriceId && item.scheduleId);
-
-  for (const division of divisionEntries) {
-    const divisionKey = `${division.eventPriceId}|${division.scheduleId}`;
-    if (seenDivisionKeys.has(divisionKey)) continue;
-    const payload = await fetchPbrSchedulePayload({
+  if (context.eventId) {
+    const allPayload = await fetchPbrSchedulePayload({
       eventId: context.eventId,
       scheduleAjaxUrl: context.scheduleAjaxUrl,
       eventBase: context.eventBase,
       csrfToken: context.csrfToken,
-      eventPriceId: division.eventPriceId,
-      scheduleId: division.scheduleId
+      eventPriceId: "0",
+      scheduleId: "0"
     });
-    pushPayload(divisionKey, payload);
+    pushPayload("0|0", allPayload);
+
+    const divisionEntries = Object.entries(context.divisions)
+      .filter(([key, division]) => key !== "0" && safeString(division?.event_price_id || key))
+      .map(([key, division]) => ({
+        eventPriceId: safeString(division?.event_price_id || key),
+        scheduleId: safeString(division?.schedule_id || "")
+      }))
+      .filter((item) => item.eventPriceId && item.scheduleId);
+
+    for (const division of divisionEntries) {
+      const divisionKey = `${division.eventPriceId}|${division.scheduleId}`;
+      if (seenDivisionKeys.has(divisionKey)) continue;
+      const payload = await fetchPbrSchedulePayload({
+        eventId: context.eventId,
+        scheduleAjaxUrl: context.scheduleAjaxUrl,
+        eventBase: context.eventBase,
+        csrfToken: context.csrfToken,
+        eventPriceId: division.eventPriceId,
+        scheduleId: division.scheduleId
+      });
+      pushPayload(divisionKey, payload);
+    }
   }
 
   const teamsRes = await fetch(`${eventBase}/teams`, {
@@ -750,7 +796,8 @@ export async function POST(req: NextRequest) {
   try {
     const dataMode = (process.env.BIRD_DOG_DATA_MODE || "imported").toLowerCase();
     const allowLiveScrape = process.env.BIRD_DOG_ALLOW_PG_LIVE_SCRAPE === "true";
-    const liveScrapeTimeoutMs = 12000;
+    const liveScrapeTimeoutMs = 9000;
+    const liveCacheKey = `${session.orgId}:${company}:${inventorySlug}`;
 
     const pgLiveHint = tournamentHint || inventoryHarvestHint({
       slug: inventorySlug,
@@ -795,6 +842,7 @@ export async function POST(req: NextRequest) {
           : null;
         if (!liveTournament) return null;
         if (!hasSupabaseConfig) {
+          writeCachedLiveTournament(liveCacheKey, `${liveRefreshSourcePrefix}_live_refresh`, liveTournament);
           return liveTournament;
         }
         const dbId = await upsertHarvestedTournament({
@@ -804,7 +852,9 @@ export async function POST(req: NextRequest) {
         }).catch(() => "");
         if (!dbId) return liveTournament;
         const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
-        return hydrated || liveTournament;
+        const next = hydrated || liveTournament;
+        writeCachedLiveTournament(liveCacheKey, `${liveRefreshSourcePrefix}_live_refresh`, next);
+        return next;
       } catch {
         return null;
       }
@@ -821,7 +871,10 @@ export async function POST(req: NextRequest) {
         })
         : null;
       if (!liveTournament) return null;
-      if (!hasSupabaseConfig) return liveTournament;
+      if (!hasSupabaseConfig) {
+        writeCachedLiveTournament(liveCacheKey, "pg_live_preferred", liveTournament);
+        return liveTournament;
+      }
       const dbId = await upsertHarvestedTournament({
         orgId: session.orgId,
         company,
@@ -829,7 +882,9 @@ export async function POST(req: NextRequest) {
       }).catch(() => "");
       if (!dbId) return liveTournament;
       const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
-      return hydrated || liveTournament;
+      const next = hydrated || liveTournament;
+      writeCachedLiveTournament(liveCacheKey, "pg_live_preferred", next);
+      return next;
     };
 
     const liveFirstPbr = async () => {
@@ -847,7 +902,10 @@ export async function POST(req: NextRequest) {
         })
         : null;
       if (!liveTournament) return null;
-      if (!hasSupabaseConfig) return liveTournament;
+      if (!hasSupabaseConfig) {
+        writeCachedLiveTournament(liveCacheKey, "pbr_live_preferred", liveTournament);
+        return liveTournament;
+      }
       const dbId = await upsertHarvestedTournament({
         orgId: session.orgId,
         company,
@@ -855,10 +913,20 @@ export async function POST(req: NextRequest) {
       }).catch(() => "");
       if (!dbId) return liveTournament;
       const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
-      return hydrated || liveTournament;
+      const next = hydrated || liveTournament;
+      writeCachedLiveTournament(liveCacheKey, "pbr_live_preferred", next);
+      return next;
     };
 
     if (dataMode !== "live" || !allowLiveScrape) {
+      const cachedLive = readCachedLiveTournament(liveCacheKey);
+      if (cachedLive) {
+        return NextResponse.json({
+          ok: true,
+          tournament: cachedLive.tournament,
+          source: `${cachedLive.source}_cache`
+        });
+      }
       let livePreferredAttempted = false;
       let livePreferredFailed = false;
       if (company === "PG") {

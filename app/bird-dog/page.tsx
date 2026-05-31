@@ -499,6 +499,46 @@ function normalizeTeamDetailsScheduleRows(input: unknown) {
     .filter((row) => row.homeTeam || row.awayTeam || row.gameNo || row.time || row.field);
 }
 
+function looksLikeRosterPlayerName(value: string) {
+  const name = String(value || "").trim();
+  if (!name || name.length < 4) return false;
+  if (!/[A-Za-z]/.test(name)) return false;
+  if (/\d{2,}/.test(name)) return false;
+  if (/[|@]/.test(name)) return false;
+  if (!/^[A-Za-z'.-]+(?:\s+[A-Za-z'.-]+){1,4}$/.test(name)) return false;
+  if (
+    /visit team page|advanced search|hs state rankings|state rankings|tournament|roster schedule|roster tools|diamondkast|perfect game|sign in|create account|players|teams|events|schedule|bracket|results|leaders|top performers|probable pitchers/i.test(name)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function hasTeamDetailsRosterSignal(row: TeamDetailsRosterRow, targetTeamName = "") {
+  const no = String(row.no || "").trim();
+  const position = String(row.position || "").trim();
+  const school = String(row.school || "").trim();
+  const commitment = String(row.commitment || "").trim();
+  const normalizedTargetTeam = normalizeSmartSearch(targetTeamName);
+  const schoolMatchesTargetTeam = Boolean(
+    normalizedTargetTeam
+    && school
+    && normalizeSmartSearch(school) === normalizedTargetTeam
+  );
+  const schoolLooksReal = Boolean(
+    school
+    && school !== "-"
+    && normalizeSmartSearch(school) !== "unknown"
+    && !schoolMatchesTargetTeam
+  );
+  return Boolean(
+    (no && no !== "-")
+    || (position && position !== "-")
+    || schoolLooksReal
+    || (commitment && commitment !== "-")
+  );
+}
+
 function normalizeTeamDetailsRosterRows(input: unknown) {
   if (!Array.isArray(input)) return [] as TeamDetailsRosterRow[];
   return input
@@ -514,7 +554,13 @@ function normalizeTeamDetailsRosterRows(input: unknown) {
         team: String(item?.team || "").trim() || undefined
       } satisfies TeamDetailsRosterRow;
     })
-    .filter((row) => row.name);
+    .filter((row) => {
+      if (!looksLikeRosterPlayerName(row.name || "")) return false;
+      const position = String(row.position || "").trim();
+      if (/roster\s*schedule|advanced search|state rankings|tournament/i.test(position)) return false;
+      if (!hasTeamDetailsRosterSignal(row)) return false;
+      return true;
+    });
 }
 
 function parseTeamDetailsScheduleSortMs(row: TeamDetailsScheduleRow, index: number) {
@@ -1749,11 +1795,14 @@ function isTournamentAtLeast15U(item: InventoryTournament) {
 
 function inventoryMatchesAgeFilter(item: InventoryTournament, filter: string) {
   const normalized = String(filter || "").trim().toUpperCase();
-  if (!normalized || normalized === "15U+") {
+  if (!normalized || normalized === "ALL") {
+    return true;
+  }
+  if (normalized === "15U+") {
     return isTournamentAtLeast15U(item);
   }
   const wantedAge = Number(normalized.replace(/[^0-9]/g, ""));
-  if (!Number.isFinite(wantedAge)) return isTournamentAtLeast15U(item);
+  if (!Number.isFinite(wantedAge)) return true;
   const ages = tournamentAgeGroups(item);
   if (!ages.length) return false;
   return ages.includes(wantedAge);
@@ -1769,8 +1818,9 @@ function notesRosterRowSelectionKey(row: TeamDetailsRosterRow) {
   return base || normalizeSmartSearch(`${row.name}-${row.no}`) || "player";
 }
 
-function mergeTeamDetailsRosterRows(groups: TeamDetailsRosterRow[][]) {
+function mergeTeamDetailsRosterRows(groups: TeamDetailsRosterRow[][], targetTeamName = "") {
   const merged = new Map<string, TeamDetailsRosterRow>();
+  const canonicalByName = new Map<string, string>();
   const pickValue = (nextValue?: string, currentValue?: string) => {
     const cleanNext = String(nextValue || "").trim();
     if (cleanNext && cleanNext !== "-") return cleanNext;
@@ -1780,17 +1830,23 @@ function mergeTeamDetailsRosterRows(groups: TeamDetailsRosterRow[][]) {
 
   groups.forEach((rows) => {
     rows.forEach((row) => {
+      if (!looksLikeRosterPlayerName(row.name || "")) return;
+      const rawPosition = String(row.position || "").trim();
+      if (/roster\s*schedule|advanced search|state rankings|tournament/i.test(rawPosition)) return;
+      if (!hasTeamDetailsRosterSignal(row, targetTeamName)) return;
       const normalizedName = normalizeSmartSearch(row.name || "");
       if (!normalizedName) return;
       const normalizedNo = normalizeSmartSearch(row.no || "");
-      const key = normalizedNo ? `${normalizedNo}|${normalizedName}` : normalizedName;
-      if (!key) return;
-      const existing = merged.get(key);
+      const proposedKey = normalizedNo ? `${normalizedNo}|${normalizedName}` : normalizedName;
+      if (!proposedKey) return;
+      const canonicalKey = canonicalByName.get(normalizedName) || proposedKey;
+      const existing = merged.get(canonicalKey);
       if (!existing) {
-        merged.set(key, row);
+        merged.set(canonicalKey, row);
+        canonicalByName.set(normalizedName, canonicalKey);
         return;
       }
-      merged.set(key, {
+      const mergedRow: TeamDetailsRosterRow = {
         ...existing,
         ...row,
         no: pickValue(row.no, existing.no),
@@ -1800,7 +1856,14 @@ function mergeTeamDetailsRosterRows(groups: TeamDetailsRosterRow[][]) {
         hometown: pickValue(row.hometown, existing.hometown),
         commitment: pickValue(row.commitment, existing.commitment),
         team: pickValue(row.team, existing.team)
-      });
+      };
+      const mergedNo = normalizeSmartSearch(mergedRow.no || "");
+      const nextKey = mergedNo ? `${mergedNo}|${normalizedName}` : canonicalKey;
+      if (nextKey !== canonicalKey) {
+        merged.delete(canonicalKey);
+      }
+      merged.set(nextKey, mergedRow);
+      canonicalByName.set(normalizedName, nextKey);
     });
   });
   return Array.from(merged.values());
@@ -2032,7 +2095,7 @@ export default function BirdDogPage() {
   const stateArrivalSuggestionSeqRef = useRef<Record<string, number>>({});
   const stateHotelSuggestionSeqRef = useRef<Record<string, number>>({});
   const [tournamentSearchQuery, setTournamentSearchQuery] = useState("");
-  const [tournamentAgeFilter, setTournamentAgeFilter] = useState("15U+");
+  const [tournamentAgeFilter, setTournamentAgeFilter] = useState("ALL");
   const [tournamentAgeFilterOpen, setTournamentAgeFilterOpen] = useState(false);
   const [teamsSearchQuery, setTeamsSearchQuery] = useState("");
   const [teamsSearchStableQuery, setTeamsSearchStableQuery] = useState("");
@@ -4723,7 +4786,7 @@ export default function BirdDogPage() {
       }
       game.players.forEach((player) => {
         const name = String(player.name || "").trim();
-        if (!name) return;
+        if (!looksLikeRosterPlayerName(name)) return;
         const key = String(player.id || "").trim() || `name:${normalizeSmartSearch(name)}`;
         if (rows.has(key)) return;
         rows.set(key, {
@@ -4744,7 +4807,7 @@ export default function BirdDogPage() {
     const teamId = String(team.id || "").trim().toLowerCase();
     rows.forEach((row) => {
       const rowName = String(row.name || "").trim();
-      if (!rowName) return;
+      if (!looksLikeRosterPlayerName(rowName)) return;
       const rowTeamId = String(row.teamId || "").trim().toLowerCase();
       const rowTeamName = String(row.teamName || "").trim();
       const matchesById = Boolean(teamId && rowTeamId && teamId === rowTeamId);
@@ -4807,11 +4870,7 @@ export default function BirdDogPage() {
       const liveSchedule = normalizeTeamDetailsScheduleRows(data?.schedule);
       const fallbackSchedule = liveSchedule.length ? liveSchedule : importedSchedule;
       const liveRoster = normalizeTeamDetailsRosterRows(data?.roster);
-      const fallbackRosterFromGames = fallbackRosterRowsForTeam(team);
-      const tournamentIndexRows = await loadTournamentPlayerIndex().catch(() => [] as TournamentPlayerIndexRow[]);
-      if (loadSeq !== notesTeamLoadSeqRef.current) return;
-      const rosterFromIndex = fallbackRosterRowsFromPlayerIndex(team, tournamentIndexRows);
-      const fallbackRoster = mergeTeamDetailsRosterRows([liveRoster, fallbackRosterFromGames, rosterFromIndex]);
+      const fallbackRoster = mergeTeamDetailsRosterRows([liveRoster], cleanName);
       const snapshot: TeamDetailsSnapshot = {
         schedule: fallbackSchedule,
         roster: fallbackRoster
@@ -7286,13 +7345,17 @@ export default function BirdDogPage() {
     const ages = new Set<number>();
     companyTournamentInventory.forEach((item) => {
       tournamentAgeGroups(item).forEach((age) => {
-        if (age >= 15) ages.add(age);
+        ages.add(age);
       });
     });
-    return ["15U+", ...Array.from(ages.values()).sort((a, b) => a - b).map((age) => `${age}U`)];
+    return ["ALL", "15U+", ...Array.from(ages.values()).sort((a, b) => a - b).map((age) => `${age}U`)];
   }, [companyTournamentInventory]);
   const tournamentAgeFilterLabel = useMemo(
-    () => (tournamentAgeFilter === "15U+" ? "15U & Over" : tournamentAgeFilter),
+    () => (
+      tournamentAgeFilter === "ALL"
+        ? "All Ages"
+        : (tournamentAgeFilter === "15U+" ? "15U & Over" : tournamentAgeFilter)
+    ),
     [tournamentAgeFilter]
   );
   const filteredTournamentInventory = useMemo(() => {
@@ -7425,7 +7488,7 @@ export default function BirdDogPage() {
   }, [menuOpen]);
   useEffect(() => {
     if (tournamentAgeFilterOptions.includes(tournamentAgeFilter)) return;
-    setTournamentAgeFilter("15U+");
+    setTournamentAgeFilter("ALL");
   }, [tournamentAgeFilter, tournamentAgeFilterOptions]);
   useEffect(() => {
     if (!tournamentAgeFilterOpen) return;
@@ -7455,7 +7518,7 @@ export default function BirdDogPage() {
     setSelectedInventorySlug("");
     setSelectedTournamentId("");
     setTournamentSearchQuery("");
-    setTournamentAgeFilter("15U+");
+    setTournamentAgeFilter("ALL");
     setTournamentAgeFilterOpen(false);
     setOpenError("");
     setJobHint(nextCompany === "PBR" ? "Prep Baseball Tournament" : "PG Spring Showdown");
@@ -7732,16 +7795,18 @@ export default function BirdDogPage() {
                       setTournamentAgeFilterOpen(false);
                     }}
                   >
-                    {option === "15U+" ? "15U & Over" : option}
+                    {option === "ALL" ? "All Ages" : (option === "15U+" ? "15U & Over" : option)}
                   </button>
                 ))}
               </div>
             ) : null}
           </div>
         </div>
-        <p className="muted small" style={{ marginTop: 8, marginBottom: 0 }}>
-          Showing only 15U and above tournaments.
-        </p>
+        {tournamentAgeFilter === "15U+" ? (
+          <p className="muted small" style={{ marginTop: 8, marginBottom: 0 }}>
+            Showing only 15U and above tournaments.
+          </p>
+        ) : null}
         <div className="tournament-grid" style={{ marginTop: 12 }}>
           {filteredTournamentInventory.length ? filteredTournamentInventory.map((item) => {
             const locked = isTournamentLocked(item, { forceUnlocked: isAdminUser });

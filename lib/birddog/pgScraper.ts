@@ -253,6 +253,21 @@ function isLikelyScheduleTeamLabel(value: string) {
   return !/visit team page|game recap|probable pitchers|diamondkast|final|standings|roster|results|bracket|schedule|leaders|top performers|login|sign in|register|account/i.test(v);
 }
 
+function looksLikePlayerName(value: string) {
+  const name = cleanText(value || "");
+  if (!name || name.length < 4) return false;
+  if (!/[A-Za-z]/.test(name)) return false;
+  if (/\d{2,}/.test(name)) return false;
+  if (/[|@]/.test(name)) return false;
+  if (!/^[A-Za-z'.-]+(?:\s+[A-Za-z'.-]+){1,4}$/.test(name)) return false;
+  if (
+    /visit team page|advanced search|hs state rankings|state rankings|tournament|roster schedule|roster tools|diamondkast|perfect game|sign in|create account|players|teams|events|schedule|bracket|results|leaders|top performers|probable pitchers/i.test(name)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function findFirstEventUrl(html: string) {
   const links = [...html.matchAll(/href=["']([^"']+)["']/gi)].map((m) => m[1]);
   const eventHref = links.find((href) =>
@@ -512,16 +527,16 @@ async function fetchHtml(target: string) {
 }
 
 function parseRosterFromTeamHtml(html: string, teamName: string, offset = 0) {
-  const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => m[1]);
+  const rosterRows = parseTeamRosterFromHtml(html);
   const players: Tournament["games"][number]["players"] = [];
-  for (const row of rows) {
-    const links = [...row.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/gi)].map((m) => cleanText(m[1]));
-    if (!links.length) continue;
-    const name = links[0];
-    if (!name || name.length < 4 || /visit team page/i.test(name)) continue;
-    const rowText = cleanText(row);
-    const position = (rowText.match(/\b(RHP|LHP|SS|CF|OF|C|1B|2B|3B|INF|MIF|P)\b/i)?.[1] || "").toUpperCase();
-    if (/sign in|create account|forgot password/i.test(name.toLowerCase())) continue;
+  const seen = new Set<string>();
+  for (const row of rosterRows) {
+    const name = cleanText(row.name || "");
+    if (!name) continue;
+    const key = normalizeTeam(name);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const position = cleanText(row.position || "").toUpperCase();
     players.push({
       id: `pg-team-player-${offset + players.length + 1}`,
       name,
@@ -837,7 +852,8 @@ function parseNestedTeamScheduleFromHtml(
 function parseTeamRosterFromHtml(html: string): PgTeamRosterRow[] {
   const teamGridTable = html.match(/id="[^"]*radgridOrgTeamPlayers[^"]*"[\s\S]*?<table[^>]*>([\s\S]*?)<\/table>/i)?.[1];
   const rosterSection = html.match(/TOURNAMENT ROSTER[\s\S]*?<table[\s\S]*?<\/table>/i)?.[0] || "";
-  const source = teamGridTable || rosterSection || html;
+  const source = teamGridTable || rosterSection;
+  if (!source) return [];
   const table = source.match(/<table[^>]*>([\s\S]*?)<\/table>/i)?.[1] || source;
   if (!table) return [];
 
@@ -855,10 +871,9 @@ function parseTeamRosterFromHtml(html: string): PgTeamRosterRow[] {
       break;
     }
   }
-  if (!headers.length) {
-    headers = [...rows[0].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)].map((m) => cleanText(m[1]).toLowerCase());
-    headerIdx = 0;
-  }
+  // If there's no roster-like header row, this table is almost always a
+  // generic event/info widget (not player roster data).
+  if (!headers.length) return [];
 
   const nameIdx = headers.findIndex((h) => h.includes("name"));
   const schoolIdx = headers.findIndex((h) => h.includes("school") || h === "hs");
@@ -907,11 +922,7 @@ function parseTeamRosterFromHtml(html: string): PgTeamRosterRow[] {
     const parsedInline = parseInlinePosition(nameParts[0] || fallbackNameCell);
     const name = parsedInline.name || "";
     const inlinePosition = parsedInline.position || "";
-    if (
-      !name
-      || !/[A-Za-z]/.test(name)
-      || /sign in|create account|forgot password|pitch by pitch|tournament|game recap|diamondkast|final|perfect game/i.test(name.toLowerCase())
-    ) continue;
+    if (!looksLikePlayerName(name)) continue;
     const school = (indexedCells[schoolIdx >= 0 ? schoolIdx : 6] || "").trim();
     const key = `${name.toLowerCase()}|${school.toLowerCase()}`;
     if (seen.has(key)) continue;
@@ -930,39 +941,6 @@ function parseTeamRosterFromHtml(html: string): PgTeamRosterRow[] {
       commitment: (commitmentIdx >= 0 ? indexedCells[commitmentIdx] : "") || ""
     });
   }
-
-  // Some PG roster tables occasionally render one or two player rows in a slightly
-  // different shape (for example: blank jersey cell + linked player name only).
-  // Backfill any missing names from player-profile anchors inside the roster scope.
-  const linkedNames = [...source.matchAll(
-    /<a[^>]*href=["'][^"']*(?:PlayerProfile|playerprofile|\/players\/)[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi
-  )]
-    .map((match) => cleanText(match[1] || ""))
-    .filter((name) => {
-      if (!name || name.length < 4) return false;
-      if (!/^[A-Za-z'., -]+$/.test(name)) return false;
-      if (/visit team page|schedule|roster|diamondkast|final|perfect game|sign in|create account/i.test(name)) return false;
-      return true;
-    });
-
-  linkedNames.forEach((name) => {
-    const key = `${name.toLowerCase()}|`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push({
-      no: "",
-      name,
-      position: "",
-      height: "",
-      weight: "",
-      batsThrows: "",
-      grad: "",
-      school: "",
-      hometown: "",
-      rank: "",
-      commitment: ""
-    });
-  });
 
   return out;
 }
@@ -1263,9 +1241,6 @@ export async function scrapePgTeamLive(
       );
 
       const scheduleRows: PgTeamScheduleRow[] = [];
-      const rosterRows: PgTeamRosterRow[] = [];
-      const rosterSeen = new Set<string>();
-
       for (const row of uniqueRows.slice(0, 40)) {
         try {
           const recap = await fetchHtml(row.recapUrl);
@@ -1291,12 +1266,6 @@ export async function scrapePgTeamLive(
               }
               : parsed
           );
-          for (const player of parseRosterFromRecapHtml(recap.html, options.teamName)) {
-            const key = `${player.name.toLowerCase()}|${player.school.toLowerCase()}`;
-            if (rosterSeen.has(key)) continue;
-            rosterSeen.add(key);
-            rosterRows.push(player);
-          }
         } catch {
           scheduleRows.push({
             gameNo: row.gameNo,
@@ -1318,9 +1287,6 @@ export async function scrapePgTeamLive(
           if (!Number.isNaN(aTs) && !Number.isNaN(bTs)) return aTs - bTs;
           return a.gameNo.localeCompare(b.gameNo, undefined, { numeric: true });
         });
-      }
-      if (rosterRows.length > bestRoster.length) {
-        bestRoster = rosterRows;
       }
     } catch {
       // Keep prior best rows if fallback fails.
