@@ -2282,14 +2282,21 @@ export default function BirdDogPage() {
     const scopedTournamentKey = selectedTournamentId
       ? rosterCartStorageKey({ company, tournamentId: selectedTournamentId })
       : "";
-    const candidates = [
-      scopedInventoryKey,
-      scopedTournamentKey,
-      rosterCartStorageKey({ company }),
-      ROSTER_CART_GLOBAL_KEY,
-      legacyRosterCartStorageKey(company, selectedInventorySlug),
-      legacyRosterCartStorageKey(company)
-    ];
+    const hasScopedContext = Boolean(selectedInventorySlug || selectedTournamentId);
+    const candidates = hasScopedContext
+      ? [
+        scopedInventoryKey,
+        scopedTournamentKey,
+        legacyRosterCartStorageKey(company, selectedInventorySlug)
+      ]
+      : [
+        scopedInventoryKey,
+        scopedTournamentKey,
+        rosterCartStorageKey({ company }),
+        ROSTER_CART_GLOBAL_KEY,
+        legacyRosterCartStorageKey(company, selectedInventorySlug),
+        legacyRosterCartStorageKey(company)
+      ];
     return Array.from(new Set(candidates.filter(Boolean)));
   }, [company, selectedInventorySlug, selectedTournamentId]);
   const desiredPlayersStorageKey = useMemo(() => {
@@ -2753,12 +2760,44 @@ export default function BirdDogPage() {
     safeLocalSet(planWorkflowStatusKey, next);
   }
 
+  function keepDesiredPlayersInScope(rows: DesiredPlayer[]) {
+    const activeTeamIds = new Set(
+      selectedTournamentTeams
+        .map((team) => String(team.id || "").trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const activeTeamNames = new Set(
+      selectedTournamentTeams
+        .map((team) => normalizeSmartSearch(team.name || ""))
+        .filter(Boolean)
+    );
+    if (!activeTeamIds.size && !activeTeamNames.size) return rows;
+    return rows.filter((item) => {
+      const stableSelectionKey = String(desiredPlayerSelectionKey(item) || item.playerId || "").trim();
+      const sourceTeamId = String(item.sourceTeamId || "").trim().toLowerCase();
+      const sourceTeamName = normalizeSmartSearch(String(item.sourceTeamName || ""));
+      const teamName = normalizeSmartSearch(String(item.team || ""));
+      const isTeamSelection = stableSelectionKey.toLowerCase().startsWith("team:");
+      if (isTeamSelection) {
+        const keyTeamId = String(stableSelectionKey.split(":")[1] || "").trim().toLowerCase();
+        if (keyTeamId && activeTeamIds.has(keyTeamId)) return true;
+        if (sourceTeamId && activeTeamIds.has(sourceTeamId)) return true;
+        if (sourceTeamName && activeTeamNames.has(sourceTeamName)) return true;
+        if (teamName && activeTeamNames.has(teamName)) return true;
+        return false;
+      }
+      if (sourceTeamId && !activeTeamIds.has(sourceTeamId)) return false;
+      if (sourceTeamName && !activeTeamNames.has(sourceTeamName)) return false;
+      return true;
+    });
+  }
+
   function setDesiredPlayersAndPersist(nextState: SetStateAction<DesiredPlayer[]>) {
     setDesiredPlayers((prev) => {
       const nextRaw = typeof nextState === "function"
         ? (nextState as (previous: DesiredPlayer[]) => DesiredPlayer[])(prev)
         : nextState;
-      const next = sanitizeDesiredPlayers(nextRaw);
+      const next = keepDesiredPlayersInScope(sanitizeDesiredPlayers(nextRaw));
       writeDesiredPlayersStorage(desiredPlayersStorageKey, next);
       return next;
     });
@@ -2775,7 +2814,7 @@ export default function BirdDogPage() {
     if (!teamRosterCartStorageKey) return [] as DesiredPlayer[];
     const canonicalRows = readRosterCartStorage(teamRosterCartStorageKey);
     const aliasRows = mergeRosterCartStorage(teamRosterCartLegacyKeys);
-    const merged = sanitizeDesiredPlayers([...canonicalRows, ...aliasRows]);
+    const merged = keepDesiredPlayersInScope(sanitizeDesiredPlayers([...canonicalRows, ...aliasRows]));
     writeRosterCartStorage(teamRosterCartStorageKey, merged);
     pruneLegacyTeamRosterCartAliases();
     return merged;
@@ -2786,7 +2825,7 @@ export default function BirdDogPage() {
       const nextRaw = typeof nextState === "function"
         ? (nextState as (previous: DesiredPlayer[]) => DesiredPlayer[])(prev)
         : nextState;
-      const next = sanitizeDesiredPlayers(nextRaw);
+      const next = keepDesiredPlayersInScope(sanitizeDesiredPlayers(nextRaw));
       if (teamRosterCartStorageKey) {
         writeRosterCartStorage(teamRosterCartStorageKey, next);
       }
@@ -3316,7 +3355,7 @@ export default function BirdDogPage() {
         const key = desiredPlayerSelectionKey(item);
         if (!merged.has(key)) merged.set(key, item);
       });
-      return Array.from(merged.values());
+      return keepDesiredPlayersInScope(sanitizeDesiredPlayers(Array.from(merged.values())));
     });
   }, [desiredPlayersStorageKey, teamRosterCartPlayers]);
 
