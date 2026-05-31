@@ -1836,7 +1836,7 @@ function tournamentAgeGroups(item: InventoryTournament) {
   const values: number[] = [];
   const pushAge = (raw: string) => {
     const value = Number(raw);
-    if (Number.isFinite(value) && value >= 8 && value <= 22) values.push(value);
+    if (Number.isFinite(value) && value >= 1 && value <= 22) values.push(value);
   };
 
   const leading = rawName.match(/^\s*(\d{1,2})(?:\s*\/\s*(\d{1,2}))?(?:\s*u)?\b/i);
@@ -1873,9 +1873,9 @@ function hasUnder15AgeSignal(item: InventoryTournament) {
   ].join(" ").toLowerCase();
   if (!text.trim()) return false;
 
-  if (/\b(?:8|9|10|11|12|13|14)\s*u\b/.test(text)) return true;
-  if (/\b(?:8|9|10|11|12|13|14)\s*\/\s*(?:8|9|10|11|12|13|14)\s*u?\b/.test(text)) return true;
-  if (/(?:^|[^0-9])(?:8u|9u|10u|11u|12u|13u|14u)(?:[^0-9]|$)/.test(text)) return true;
+  if (/\b(?:0?[1-9]|1[0-4])\s*u\b/.test(text)) return true;
+  if (/\b(?:0?[1-9]|1[0-4])\s*\/\s*(?:0?[1-9]|1[0-4])\s*u?\b/.test(text)) return true;
+  if (/(?:^|[^0-9])(?:[1-9]u|10u|11u|12u|13u|14u)(?:[^0-9]|$)/.test(text)) return true;
   return false;
 }
 
