@@ -418,7 +418,7 @@ export async function GET(req: NextRequest) {
         ? "PG live sync was partial, so we kept the last complete list to avoid missing tournaments."
         : undefined);
     const hasLiveCatalogRows = livePg.length > 0 || livePbr.length > 0;
-    const inventoryWarmupWarning = (!hasImportedInventory && !hasLiveCatalogRows)
+    const inventoryWarmupWarning = (!hasImportedInventory && !hasLiveCatalogRows && isSeedOnlyInventory(mergedInventory))
       ? "Inventory table was empty. Using live + seeded fallback while sync catches up."
       : undefined;
     const unlockedSet = isBlockedUnlockEmail ? new Set<string>() : new Set(unlockedSlugs);
