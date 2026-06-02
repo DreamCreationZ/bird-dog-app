@@ -336,10 +336,10 @@ export async function GET(req: NextRequest) {
     const seedMetaBySlug = new Map(INVENTORY_SEED.map((item) => [item.slug, item]));
     const groupedEventsPromise = withTimeoutFallback(
       fetchPgGroupedEvents("23065").catch(() => []),
-      1500,
+      4000,
       [] as Awaited<ReturnType<typeof fetchPgGroupedEvents>>
     );
-    await withTimeoutFallback(seedCircuitInventory(), 1500, null);
+    await withTimeoutFallback(seedCircuitInventory(), 3000, null);
     const [inventory, unlockedSlugs, groupedEvents] = await Promise.all([
       withTimeoutFallback(
         listCircuitInventory(),
@@ -357,9 +357,6 @@ export async function GET(req: NextRequest) {
     const baseInventory = hasImportedInventory
       ? (inventory as InventoryItem[])
       : fallbackBaseInventory;
-    const inventoryWarmupWarning = hasImportedInventory
-      ? undefined
-      : "Inventory table was empty. Using live + seeded fallback while sync catches up.";
     const liveCatalogCache = getLiveCatalogCache();
     const hasFreshPbrCache =
       Date.now() - liveCatalogCache.fetchedAt < LIVE_CATALOG_CACHE_TTL_MS
@@ -370,14 +367,14 @@ export async function GET(req: NextRequest) {
     const [nextLivePgRaw, nextLivePbrRaw] = await Promise.all([
       withTimeoutFallback(
         fetchPgTournamentCatalog(false).then((result) => result.items as InventoryItem[]),
-        9000,
+        18000,
         liveCatalogCache.pg
       ),
       hasFreshPbrCache
         ? Promise.resolve(liveCatalogCache.pbr)
         : withTimeoutFallback(
           fetchPbrTournamentCatalog().then((result) => result.items as InventoryItem[]),
-          3000,
+          8000,
           liveCatalogCache.pbr
         )
     ]);
@@ -420,6 +417,10 @@ export async function GET(req: NextRequest) {
       : (looksLikePartialPgRefresh
         ? "PG live sync was partial, so we kept the last complete list to avoid missing tournaments."
         : undefined);
+    const hasLiveCatalogRows = livePg.length > 0 || livePbr.length > 0;
+    const inventoryWarmupWarning = (!hasImportedInventory && !hasLiveCatalogRows)
+      ? "Inventory table was empty. Using live + seeded fallback while sync catches up."
+      : undefined;
     const unlockedSet = isBlockedUnlockEmail ? new Set<string>() : new Set(unlockedSlugs);
 
     return NextResponse.json({
