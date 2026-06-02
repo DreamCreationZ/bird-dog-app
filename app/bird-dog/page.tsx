@@ -4090,9 +4090,36 @@ export default function BirdDogPage() {
     }
   }
 
+  function findInMemoryTournamentForItem(item: InventoryTournament) {
+    const canUseCurrentList = companyRef.current === item.company || company === item.company;
+    if (!canUseCurrentList) return null;
+
+    if (item.company === "PBR") {
+      const bySlug = tournaments.find((t) => String(t.id || "").trim() === item.slug) || null;
+      if (bySlug) return bySlug;
+    }
+
+    const wanted = normalizeTournamentName(item.name);
+    const exactMatches = tournaments.filter((t) => normalizeTournamentName(t.name) === wanted);
+    if (exactMatches.length === 1) return exactMatches[0];
+
+    const selectedId = String(selectedTournamentIdRef.current || selectedTournamentId || "").trim();
+    if (selectedId) {
+      const selectedMatch = tournaments.find((t) => String(t.id || "").trim() === selectedId) || null;
+      if (selectedMatch && normalizeTournamentName(selectedMatch.name) === wanted) {
+        return selectedMatch;
+      }
+    }
+
+    return exactMatches[0] || null;
+  }
+
   async function resolveTournamentIdForItem(item: InventoryTournament, preferredTournamentId = "") {
     const preferredId = String(preferredTournamentId || "").trim();
     if (preferredId) return preferredId;
+
+    const inMemoryMatch = findInMemoryTournamentForItem(item);
+    if (inMemoryMatch?.id) return inMemoryMatch.id;
 
     const currentlySelectedId = String(selectedTournamentIdRef.current || "").trim();
     if (
@@ -4169,14 +4196,7 @@ export default function BirdDogPage() {
   ) {
     if (Number.isFinite(mutationSeq) && !isTournamentMutationCurrent(Number(mutationSeq))) return false;
     const wanted = normalizeTournamentName(item.name);
-    const inMemoryMatch = company === item.company ? tournaments.find((t) => {
-      const normalized = normalizeTournamentName(t.name);
-      if (item.company === "PBR") {
-        if (String(t.id || "").trim() === item.slug) return true;
-        return normalized === wanted;
-      }
-      return normalized === wanted;
-    }) : undefined;
+    const inMemoryMatch = findInMemoryTournamentForItem(item);
     if (inMemoryMatch) {
       applyOpenedTournament(inMemoryMatch, mutationSeq);
       return true;
@@ -6703,6 +6723,19 @@ export default function BirdDogPage() {
       : null;
     if (currentTournament) {
       applyOpenedTournament(currentTournament, mutationSeq);
+      window.setTimeout(() => {
+        void refreshTournamentByInventory(item, {
+          mutationSeq,
+          onlyIfSelected: true,
+          background: true
+        });
+      }, 50);
+      setOpeningSlug((prev) => (prev === item.slug ? "" : prev));
+      return;
+    }
+    const inMemoryMatch = findInMemoryTournamentForItem(item);
+    if (inMemoryMatch) {
+      applyOpenedTournament(inMemoryMatch, mutationSeq);
       window.setTimeout(() => {
         void refreshTournamentByInventory(item, {
           mutationSeq,
