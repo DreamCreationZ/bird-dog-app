@@ -6708,6 +6708,9 @@ export default function BirdDogPage() {
   async function openUnlockedTournament(item: InventoryTournament) {
     const mutationSeq = nextTournamentMutationSeq();
     const isCurrentMutation = () => isTournamentMutationCurrent(mutationSeq);
+    const clearOpeningState = () => {
+      setOpeningSlug((prev) => (prev === item.slug ? "" : prev));
+    };
     setOpenError("");
     setOpeningSlug(item.slug);
     setSelectedInventorySlug(item.slug);
@@ -6841,17 +6844,23 @@ export default function BirdDogPage() {
         if (isCurrentMutation()) {
           setOpenError("");
         }
+        clearOpeningState();
         return;
       }
+      const rawErrorMessage = error instanceof Error ? error.message : "Failed to open tournament.";
+      const normalizedErrorMessage = /fetch is aborted|aborted|aborterror|timed out|timeout/i.test(rawErrorMessage)
+        ? "Tournament sync timed out. Please tap the tournament again."
+        : rawErrorMessage;
       if (isCurrentMutation()) {
-        setOpenError(error instanceof Error ? error.message : "Failed to open tournament.");
+        setOpenError(normalizedErrorMessage);
       }
-      await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
+      clearOpeningState();
+      void queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
       if (isCurrentMutation()) {
-        await loadCompanyData(item.company, true);
+        void loadCompanyData(item.company, true);
       }
     } finally {
-      setOpeningSlug((prev) => (prev === item.slug ? "" : prev));
+      clearOpeningState();
     }
   }
 
