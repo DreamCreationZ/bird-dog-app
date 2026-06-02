@@ -532,30 +532,23 @@ function isPlaceholderCellValue(value: string) {
 
 function hasTeamDetailsRosterSignal(row: TeamDetailsRosterRow, targetTeamName = "") {
   const no = String(row.no || "").trim();
-  const school = String(row.school || "").trim();
+  const position = String(row.position || "").trim();
   const hometown = String(row.hometown || "").trim();
   const commitment = String(row.commitment || "").trim();
-  const normalizedTargetTeam = normalizeSmartSearch(targetTeamName);
-  const schoolMatchesTargetTeam = Boolean(
-    normalizedTargetTeam
-    && school
-    && normalizeSmartSearch(school) === normalizedTargetTeam
-  );
   const noLooksReal = /^\d{1,3}$/.test(no);
   const hometownLooksReal = Boolean(!isPlaceholderCellValue(hometown) && /[a-z]/i.test(hometown));
-  const schoolLooksReal = Boolean(
-    school
-    && !isPlaceholderCellValue(school)
-    && /[a-z]/i.test(school)
-    && !schoolMatchesTargetTeam
+  const positionLooksReal = Boolean(
+    position
+    && !isPlaceholderCellValue(position)
+    && !/roster\s*schedule|advanced search|state rankings|tournament|leaders|top performers|probable pitchers/i.test(position)
+    && (
+      /^(?:LHP|RHP|P|C|1B|2B|3B|SS|IF|OF|CF|RF|LF|UT|DH|INF|RHP\/OF|LHP\/OF|RHP\/IF|LHP\/IF)$/i.test(position.replace(/\s+/g, ""))
+      || /\bpitcher|catcher|infield|outfield|utility|designated hitter|middle infield\b/i.test(position)
+    )
   );
   const commitmentLooksReal = Boolean(!isPlaceholderCellValue(commitment) && /[a-z]/i.test(commitment));
-  return Boolean(
-    noLooksReal
-    || hometownLooksReal
-    || schoolLooksReal
-    || commitmentLooksReal
-  );
+  const hasNonSchoolSignal = Boolean(noLooksReal || hometownLooksReal || commitmentLooksReal || positionLooksReal);
+  return hasNonSchoolSignal;
 }
 
 function normalizeTeamDetailsRosterRows(input: unknown, targetTeamName = "") {
@@ -576,7 +569,7 @@ function normalizeTeamDetailsRosterRows(input: unknown, targetTeamName = "") {
     .filter((row) => {
       if (!looksLikeRosterPlayerName(row.name || "")) return false;
       const position = String(row.position || "").trim();
-      if (/roster\s*schedule|advanced search|state rankings|tournament/i.test(position)) return false;
+      if (/roster\s*schedule|advanced search|state rankings|tournament|leaders|top performers|probable pitchers/i.test(position)) return false;
       if (!hasTeamDetailsRosterSignal(row, targetTeamName)) return false;
       return true;
     });
@@ -1933,7 +1926,7 @@ function mergeTeamDetailsRosterRows(groups: TeamDetailsRosterRow[][], targetTeam
     rows.forEach((row) => {
       if (!looksLikeRosterPlayerName(row.name || "")) return;
       const rawPosition = String(row.position || "").trim();
-      if (/roster\s*schedule|advanced search|state rankings|tournament/i.test(rawPosition)) return;
+      if (/roster\s*schedule|advanced search|state rankings|tournament|leaders|top performers|probable pitchers/i.test(rawPosition)) return;
       if (!hasTeamDetailsRosterSignal(row, targetTeamName)) return;
       const normalizedName = normalizeSmartSearch(row.name || "");
       if (!normalizedName) return;
@@ -2186,6 +2179,7 @@ export default function BirdDogPage() {
   const selectedInventorySlugRef = useRef("");
   const companyRef = useRef<"PG" | "PBR">("PG");
   const inventoryRef = useRef<InventoryTournament[]>([]);
+  const openedTournamentByInventoryRef = useRef<Record<string, Tournament>>({});
   const inventoryFetchSeqRef = useRef(0);
   const schedulesFetchSeqRef = useRef(0);
   const tournamentMutationSeqRef = useRef(0);
@@ -2399,6 +2393,17 @@ export default function BirdDogPage() {
   useEffect(() => {
     inventoryRef.current = inventory;
   }, [inventory]);
+
+  useEffect(() => {
+    const slug = String(selectedInventorySlug || "").trim();
+    const tournamentId = String(selectedTournamentId || "").trim();
+    if (!slug || !tournamentId) return;
+    const selected = tournaments.find((item) => String(item.id || "").trim() === tournamentId);
+    if (!selected?.id) return;
+    const key = inventoryOpenCacheKey({ company, inventorySlug: slug });
+    if (!key) return;
+    openedTournamentByInventoryRef.current[key] = selected;
+  }, [company, selectedInventorySlug, selectedTournamentId, tournaments]);
 
   const games = selectedTournament?.games || [];
   const players = useMemo(() => uniquePlayers(games), [games]);
@@ -4036,17 +4041,17 @@ export default function BirdDogPage() {
       const targetTournamentId = await resolveTournamentIdForItem(item, preferredTournamentId);
       if (!isCurrentMutation()) return;
       if (options?.onlyIfSelected && selectedInventorySlugRef.current !== item.slug) return;
-      const payload = {
+      const makePayload = (tournamentId?: string) => ({
         company: item.company,
         inventorySlug: item.slug,
         tournamentHint: item.harvestHint || item.name,
-        tournamentId: targetTournamentId || undefined
-      };
-      const attemptOpen = () =>
+        tournamentId: tournamentId || undefined
+      });
+      const attemptOpen = (tournamentId?: string) =>
         fetchWithTimeout("/api/harvest/open", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(makePayload(tournamentId || targetTournamentId || undefined))
         }, 30000);
       let liveOpen = await attemptOpen();
       if (!isCurrentMutation()) return;
@@ -4114,7 +4119,12 @@ export default function BirdDogPage() {
     return exactMatches[0] || null;
   }
 
-  async function resolveTournamentIdForItem(item: InventoryTournament, preferredTournamentId = "") {
+  async function resolveTournamentIdForItem(
+    item: InventoryTournament,
+    preferredTournamentId = "",
+    options?: { allowDatasetLookup?: boolean }
+  ) {
+    const allowDatasetLookup = options?.allowDatasetLookup !== false;
     const preferredId = String(preferredTournamentId || "").trim();
     if (preferredId) return preferredId;
 
@@ -4144,6 +4154,7 @@ export default function BirdDogPage() {
         return exactCurrentMatches[0].id;
       }
 
+      if (!allowDatasetLookup) return "";
       try {
         const dataset = await loadHarvestDataset(item.company);
         const bySlug = dataset.tournaments.find((t) => String(t.id || "").trim() === item.slug);
@@ -4164,6 +4175,7 @@ export default function BirdDogPage() {
       return exactCurrentMatches[0].id;
     }
 
+    if (!allowDatasetLookup) return "";
     try {
       const dataset = await loadHarvestDataset(item.company);
       const exactMatches = dataset.tournaments.filter((t) => normalizeTournamentName(t.name) === wanted);
@@ -4174,7 +4186,26 @@ export default function BirdDogPage() {
     }
   }
 
-  function applyOpenedTournament(openedTournament: Tournament, mutationSeq?: number) {
+  function inventoryOpenCacheKey(input: { company: "PG" | "PBR"; inventorySlug: string }) {
+    const slug = String(input.inventorySlug || "").trim();
+    if (!slug) return "";
+    return `${input.company}:${slug}`;
+  }
+
+  function rememberOpenedTournamentForInventory(item: InventoryTournament, tournament: Tournament | null | undefined) {
+    if (!tournament?.id) return;
+    const key = inventoryOpenCacheKey({ company: item.company, inventorySlug: item.slug });
+    if (!key) return;
+    openedTournamentByInventoryRef.current[key] = tournament;
+  }
+
+  function getRememberedTournamentForInventory(item: InventoryTournament) {
+    const key = inventoryOpenCacheKey({ company: item.company, inventorySlug: item.slug });
+    if (!key) return null;
+    return openedTournamentByInventoryRef.current[key] || null;
+  }
+
+  function applyOpenedTournament(openedTournament: Tournament, mutationSeq?: number, cacheItem?: InventoryTournament) {
     if (Number.isFinite(mutationSeq) && !isTournamentMutationCurrent(Number(mutationSeq))) return;
     let stableTournament = openedTournament;
     setTournaments((prev) => {
@@ -4186,6 +4217,9 @@ export default function BirdDogPage() {
     setSelectedTournamentId(stableTournament.id);
     setSelectedGameId(stableTournament.games?.[0]?.id || "");
     setTournamentViewTitle(stableTournament.name);
+    if (cacheItem) {
+      rememberOpenedTournamentForInventory(cacheItem, stableTournament);
+    }
     navigateTab("notes");
   }
 
@@ -4194,32 +4228,32 @@ export default function BirdDogPage() {
     targetTournamentId?: string,
     mutationSeq?: number
   ) {
-    if (Number.isFinite(mutationSeq) && !isTournamentMutationCurrent(Number(mutationSeq))) return false;
+    if (Number.isFinite(mutationSeq) && !isTournamentMutationCurrent(Number(mutationSeq))) return null;
     const wanted = normalizeTournamentName(item.name);
     const inMemoryMatch = findInMemoryTournamentForItem(item);
     if (inMemoryMatch) {
-      applyOpenedTournament(inMemoryMatch, mutationSeq);
-      return true;
+      applyOpenedTournament(inMemoryMatch, mutationSeq, item);
+      return inMemoryMatch;
     }
 
     const tryOpenById = async (candidateId: string) => {
       const details = await loadHarvestTournament(item.company, candidateId).catch(() => null);
-      if (Number.isFinite(mutationSeq) && !isTournamentMutationCurrent(Number(mutationSeq))) return false;
+      if (Number.isFinite(mutationSeq) && !isTournamentMutationCurrent(Number(mutationSeq))) return null;
       if (details) {
-        applyOpenedTournament(details, mutationSeq);
-        return true;
+        applyOpenedTournament(details, mutationSeq, item);
+        return details;
       }
-      return false;
+      return null;
     };
 
     if (targetTournamentId) {
       const opened = await tryOpenById(targetTournamentId);
-      if (opened) return true;
+      if (opened) return opened;
     }
 
     const dataset = await loadHarvestDataset(item.company).catch(() => null);
-    if (Number.isFinite(mutationSeq) && !isTournamentMutationCurrent(Number(mutationSeq))) return false;
-    if (!dataset?.tournaments?.length) return false;
+    if (Number.isFinite(mutationSeq) && !isTournamentMutationCurrent(Number(mutationSeq))) return null;
+    if (!dataset?.tournaments?.length) return null;
     const match = dataset.tournaments.find((t) => {
       const normalized = normalizeTournamentName(t.name);
       if (item.company === "PBR") {
@@ -4228,12 +4262,12 @@ export default function BirdDogPage() {
       }
       return normalized === wanted;
     });
-    if (!match) return false;
+    if (!match) return null;
 
     const opened = await tryOpenById(match.id);
-    if (opened) return true;
-    applyOpenedTournament(match, mutationSeq);
-    return true;
+    if (opened) return opened;
+    applyOpenedTournament(match, mutationSeq, item);
+    return match;
   }
 
   async function refreshFromPerfectGame(includeOpenedTournament: boolean) {
@@ -6716,6 +6750,19 @@ export default function BirdDogPage() {
     setSelectedInventorySlug(item.slug);
     setCompany(item.company);
     setJobHint(item.name);
+    const rememberedTournament = getRememberedTournamentForInventory(item);
+    if (rememberedTournament) {
+      applyOpenedTournament(rememberedTournament, mutationSeq, item);
+      window.setTimeout(() => {
+        void refreshTournamentByInventory(item, {
+          mutationSeq,
+          onlyIfSelected: true,
+          background: true
+        });
+      }, 50);
+      clearOpeningState();
+      return;
+    }
     // Re-opening the same tournament should not depend on another live open request.
     // Switch to Notes immediately from in-memory state, then refresh in background.
     const sameInventorySelected = selectedInventorySlugRef.current === item.slug
@@ -6725,7 +6772,7 @@ export default function BirdDogPage() {
       ? tournaments.find((t) => String(t.id || "").trim() === currentTournamentId) || null
       : null;
     if (currentTournament) {
-      applyOpenedTournament(currentTournament, mutationSeq);
+      applyOpenedTournament(currentTournament, mutationSeq, item);
       window.setTimeout(() => {
         void refreshTournamentByInventory(item, {
           mutationSeq,
@@ -6738,7 +6785,7 @@ export default function BirdDogPage() {
     }
     const inMemoryMatch = findInMemoryTournamentForItem(item);
     if (inMemoryMatch) {
-      applyOpenedTournament(inMemoryMatch, mutationSeq);
+      applyOpenedTournament(inMemoryMatch, mutationSeq, item);
       window.setTimeout(() => {
         void refreshTournamentByInventory(item, {
           mutationSeq,
@@ -6751,19 +6798,19 @@ export default function BirdDogPage() {
     }
     let targetTournamentId = "";
     try {
-      targetTournamentId = await resolveTournamentIdForItem(item);
+      targetTournamentId = await resolveTournamentIdForItem(item, "", { allowDatasetLookup: false });
       if (!isCurrentMutation()) return;
-      const payload = {
+      const payloadForOpen = (candidateTournamentId?: string) => ({
         company: item.company,
         inventorySlug: item.slug,
         tournamentHint: item.harvestHint || item.name,
-        tournamentId: targetTournamentId || undefined
-      };
-      const attemptOpen = () =>
+        tournamentId: candidateTournamentId || targetTournamentId || undefined
+      });
+      const attemptOpen = (candidateTournamentId?: string) =>
         fetchWithTimeout("/api/harvest/open", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payloadForOpen(candidateTournamentId))
         }, 30000);
       let liveOpen = await attemptOpen();
       if (!isCurrentMutation()) return;
@@ -6778,6 +6825,17 @@ export default function BirdDogPage() {
         }
         liveOpen = await attemptOpen();
         if (!isCurrentMutation()) return;
+      }
+      if (!liveOpen.ok && !targetTournamentId) {
+        targetTournamentId = await resolveTournamentIdForItem(item);
+        if (!isCurrentMutation()) return;
+        if (targetTournamentId) {
+          const retryOpen = await attemptOpen(targetTournamentId);
+          if (!isCurrentMutation()) return;
+          if (retryOpen.ok) {
+            liveOpen = retryOpen;
+          }
+        }
       }
       if (!liveOpen.ok) {
         const data = await liveOpen.json().catch(() => ({}));
@@ -6814,7 +6872,7 @@ export default function BirdDogPage() {
       if (!openedTournament) {
         throw new Error("Tournament data was empty.");
       }
-      applyOpenedTournament(openedTournament, mutationSeq);
+      applyOpenedTournament(openedTournament, mutationSeq, item);
       const gameCount = Array.isArray(openedTournament.games) ? openedTournament.games.length : 0;
       const teamCount = Array.isArray(openedTournament.teams) ? openedTournament.teams.length : 0;
       if (gameCount === 0) {

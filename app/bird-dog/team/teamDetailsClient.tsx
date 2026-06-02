@@ -665,22 +665,19 @@ function rosterSearchScore(row: TeamRosterRow, query: string, tokens: string[]) 
 
 function hasTeamRosterSignal(row: TeamRosterRow, targetTeamName = "") {
   const no = String(row.no || "").trim();
-  const school = String(row.school || "").trim();
+  const position = String(row.position || "").trim();
   const hometown = String(row.hometown || "").trim();
   const commitment = String(row.commitment || "").trim();
-  const normalizedTargetTeam = normalizeTeamName(targetTeamName);
-  const schoolMatchesTargetTeam = Boolean(
-    normalizedTargetTeam
-    && school
-    && normalizeTeamName(school) === normalizedTargetTeam
-  );
-  const schoolLooksReal = Boolean(
-    school
-    && !isPlaceholderValue(school)
-    && !looksLikeRosterMetadataValue(school)
-    && !schoolMatchesTargetTeam
-  );
   const noLooksReal = /^\d{1,3}$/.test(no);
+  const positionLooksReal = Boolean(
+    position
+    && !isPlaceholderValue(position)
+    && !looksLikeRosterMetadataValue(position)
+    && (
+      /^(?:LHP|RHP|P|C|1B|2B|3B|SS|IF|OF|CF|RF|LF|UT|DH|INF|RHP\/OF|LHP\/OF|RHP\/IF|LHP\/IF)$/i.test(position.replace(/\s+/g, ""))
+      || /\bpitcher|catcher|infield|outfield|utility|designated hitter|middle infield\b/i.test(position)
+    )
+  );
   const hometownLooksReal = Boolean(
     hometown
     && !isPlaceholderValue(hometown)
@@ -691,12 +688,8 @@ function hasTeamRosterSignal(row: TeamRosterRow, targetTeamName = "") {
     && !isPlaceholderValue(commitment)
     && !looksLikeRosterMetadataValue(commitment)
   );
-  return Boolean(
-    noLooksReal
-    || hometownLooksReal
-    || schoolLooksReal
-    || commitmentLooksReal
-  );
+  const hasNonSchoolSignal = Boolean(noLooksReal || positionLooksReal || hometownLooksReal || commitmentLooksReal);
+  return hasNonSchoolSignal;
 }
 
 function ensureRosterTeam(rows: TeamRosterRow[], fallbackTeam: string) {
@@ -718,7 +711,7 @@ function ensureRosterTeam(rows: TeamRosterRow[], fallbackTeam: string) {
       rank: String(row.rank || "").trim() || undefined
     };
     if (!looksLikeRosterPlayerName(normalized.name || "")) return;
-    if (/roster\s*schedule|advanced search|state rankings|tournament/i.test(normalized.position || "")) return;
+    if (/roster\s*schedule|advanced search|state rankings|tournament|leaders|top performers|probable pitchers/i.test(normalized.position || "")) return;
     if (!hasTeamRosterSignal(normalized, team)) return;
     const dedupeKey = [
       normalizeSearchText(normalized.no || ""),

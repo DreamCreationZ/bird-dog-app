@@ -53,45 +53,42 @@ function looksLikeRosterPlayerName(value: string) {
 function sanitizeRosterRows(rows: TeamRosterRow[], targetTeamName = "") {
   const seen = new Set<string>();
   const out: TeamRosterRow[] = [];
-  const normalizedTargetTeam = normalize(targetTeamName || "");
   rows.forEach((row) => {
     const name = cleanText(row.name || "");
     if (!looksLikeRosterPlayerName(name)) return;
     const position = cleanText(row.position || "");
-    if (/roster\s*schedule|advanced search|state rankings|tournament/i.test(position)) return;
+    if (/roster\s*schedule|advanced search|state rankings|tournament|leaders|top performers|probable pitchers/i.test(position)) return;
     const school = cleanText(row.school || "");
     const no = cleanText(row.no || "");
     const hometown = cleanText(row.hometown || "");
     const commitment = cleanText(row.commitment || "");
-    const schoolMatchesTargetTeam = Boolean(
-      normalizedTargetTeam
-      && school
-      && teamMatches(school, targetTeamName)
-    );
     const noLooksReal = /^\d{1,3}$/.test(no);
+    const positionLooksReal = Boolean(
+      position
+      && !isPlaceholderValue(position)
+      && !looksLikeRosterMetadataValue(position)
+      && (
+        /^(?:LHP|RHP|P|C|1B|2B|3B|SS|IF|OF|CF|RF|LF|UT|DH|INF|RHP\/OF|LHP\/OF|RHP\/IF|LHP\/IF)$/i.test(position.replace(/\s+/g, ""))
+        || /\bpitcher|catcher|infield|outfield|utility|designated hitter|middle infield\b/i.test(position)
+      )
+    );
     const hometownLooksReal = Boolean(
       !isPlaceholderValue(hometown)
       && !looksLikeRosterMetadataValue(hometown)
       && /[a-z]/i.test(hometown)
-    );
-    const schoolLooksReal = Boolean(
-      school
-      && !isPlaceholderValue(school)
-      && !looksLikeRosterMetadataValue(school)
-      && /[a-z]/i.test(school)
-      && !schoolMatchesTargetTeam
     );
     const commitmentLooksReal = Boolean(
       !isPlaceholderValue(commitment)
       && !looksLikeRosterMetadataValue(commitment)
       && /[a-z]/i.test(commitment)
     );
-    const hasRosterSignal = Boolean(
+    const hasNonSchoolSignal = Boolean(
       noLooksReal
+      || positionLooksReal
       || hometownLooksReal
-      || schoolLooksReal
       || commitmentLooksReal
     );
+    const hasRosterSignal = Boolean(hasNonSchoolSignal);
     if (!hasRosterSignal) return;
     const key = `${normalize(name)}|${normalize(school)}|${cleanText(row.no || "")}`;
     if (!key || seen.has(key)) return;
