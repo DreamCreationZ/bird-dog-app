@@ -1369,6 +1369,12 @@ async function resolveTeamUrl(input: {
   eventId: string;
 }) {
   let url = input.teamUrl;
+  const providedTeamNum = String(url || "").match(/[?&]team=(\d+)/i)?.[1] || "";
+  if (providedTeamNum) {
+    // Some upstream payloads still send /Tournaments/Teams/... paths that now
+    // 404 on PG. Always normalize to the canonical /Events/... team route.
+    url = `https://www.perfectgame.org/Events/Tournaments/Teams/Default.aspx?team=${providedTeamNum}`;
+  }
   if (!url && /^pg-team-\d+$/i.test(input.teamId)) {
     const teamNum = input.teamId.replace(/^pg-team-/i, "");
     url = `https://www.perfectgame.org/Events/Tournaments/Teams/Default.aspx?team=${teamNum}`;
