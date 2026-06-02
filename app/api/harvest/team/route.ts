@@ -732,7 +732,9 @@ async function fetchPbrSchedulePayload(
   const form = new URLSearchParams();
   form.set("event_id", String(context.eventId));
   form.set("event_price_id", String(eventPriceId));
-  form.set("event_registration_item_id", String(eventPriceId));
+  // PBR schedule_ajax expects event_registration_item_id=0 for board payloads.
+  // Passing event_price_id here can return empty schedules for many events.
+  form.set("event_registration_item_id", "0");
   form.set("schedule_id", String(scheduleId));
   form.set("data_type", "schedules");
   if (context.csrfToken) form.set("_token", context.csrfToken);
