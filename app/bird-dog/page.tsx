@@ -6693,8 +6693,29 @@ export default function BirdDogPage() {
     setSelectedInventorySlug(item.slug);
     setCompany(item.company);
     setJobHint(item.name);
+    // Re-opening the same tournament should not depend on another live open request.
+    // Switch to Notes immediately from in-memory state, then refresh in background.
+    const sameInventorySelected = selectedInventorySlugRef.current === item.slug
+      && companyRef.current === item.company;
+    const currentTournamentId = String(selectedTournamentIdRef.current || "").trim();
+    const currentTournament = sameInventorySelected && currentTournamentId
+      ? tournaments.find((t) => String(t.id || "").trim() === currentTournamentId) || null
+      : null;
+    if (currentTournament) {
+      applyOpenedTournament(currentTournament, mutationSeq);
+      window.setTimeout(() => {
+        void refreshTournamentByInventory(item, {
+          mutationSeq,
+          onlyIfSelected: true,
+          background: true
+        });
+      }, 50);
+      setOpeningSlug((prev) => (prev === item.slug ? "" : prev));
+      return;
+    }
+    let targetTournamentId = "";
     try {
-      const targetTournamentId = await resolveTournamentIdForItem(item);
+      targetTournamentId = await resolveTournamentIdForItem(item);
       if (!isCurrentMutation()) return;
       const payload = {
         company: item.company,
@@ -6725,17 +6746,18 @@ export default function BirdDogPage() {
       if (!liveOpen.ok) {
         const data = await liveOpen.json().catch(() => ({}));
         if (!isCurrentMutation()) return;
+        const openedFromLocal = await openTournamentFromExistingData(item, targetTournamentId || undefined, mutationSeq);
+        if (openedFromLocal) {
+          if (isCurrentMutation()) {
+            setOpenError("");
+          }
+          return;
+        }
         const detailText = typeof data?.detail === "string" ? data.detail : "";
         const missingSupabaseConfig = liveOpen.status === 503
           && /SUPABASE_URL|SUPABASE_SERVICE_ROLE_KEY/i.test(detailText);
         if (missingSupabaseConfig) {
-          const openedFromLocal = await openTournamentFromExistingData(item, targetTournamentId || undefined, mutationSeq);
-          if (openedFromLocal) {
-            if (isCurrentMutation()) {
-              setOpenError("");
-            }
-            return;
-          }
+          // already tried fallback from existing data above.
         }
         if (liveOpen.status === 409) {
           await queueHarvestJob(item.slug, item.harvestHint || item.name, item.company).catch(() => undefined);
@@ -6781,6 +6803,13 @@ export default function BirdDogPage() {
         }
       }
     } catch (error) {
+      const openedFromLocal = await openTournamentFromExistingData(item, targetTournamentId || undefined, mutationSeq);
+      if (openedFromLocal) {
+        if (isCurrentMutation()) {
+          setOpenError("");
+        }
+        return;
+      }
       if (isCurrentMutation()) {
         setOpenError(error instanceof Error ? error.message : "Failed to open tournament.");
       }
