@@ -680,6 +680,12 @@ function parseGameNumber(value: unknown, fallback: number) {
   return `#${num}`;
 }
 
+type PbrScheduleDivision = {
+  schedule_id?: string | number;
+  label?: string;
+  event_price_id?: string | number;
+};
+
 function parsePbrScheduleContext(html: string, sourceUrl: string) {
   const eventBase = toPbrEventBase(sourceUrl);
   const eventId = cleanText(
@@ -698,10 +704,10 @@ function parsePbrScheduleContext(html: string, sourceUrl: string) {
       || ""
   );
   const divisionsRaw = html.match(/window\.DIVISIONS\s*=\s*(\{[\s\S]*?\});/i)?.[1] || "";
-  let divisions: Record<string, { schedule_id?: string | number; label?: string }> = {};
+  let divisions: Record<string, PbrScheduleDivision> = {};
   if (divisionsRaw) {
     try {
-      divisions = JSON.parse(divisionsRaw) as Record<string, { schedule_id?: string | number; label?: string }>;
+      divisions = JSON.parse(divisionsRaw) as Record<string, PbrScheduleDivision>;
     } catch {
       divisions = {};
     }
@@ -996,6 +1002,15 @@ async function tryFetchPbrLiveTeamData(input: {
   }).catch(() => null);
   const scheduleHtml = schedulePageRes && schedulePageRes.ok ? await schedulePageRes.text() : "";
   const context = scheduleHtml ? parsePbrScheduleContext(scheduleHtml, `${eventBase}/schedule/all`) : null;
+  const eventOrigin = eventBase.match(/^(https?:\/\/[^/]+)/i)?.[1] || "https://tournaments.prepbaseballreport.com";
+  const targetTeamUuid = cleanText(
+    String(input.targetTeamId || "").replace(/^pbr-team-/i, "").match(/^([a-f0-9-]{8,})$/i)?.[1]
+    || String(input.providedTeamUrl || "").match(/#([a-f0-9-]{8,})/i)?.[1]
+    || ""
+  );
+  const ageFromUrl = cleanText(String(input.providedTeamUrl || "").match(/\/(\d{1,2}\s*u?)(?:[#/?]|$)/i)?.[1] || "");
+  const ageFromTeamName = cleanText(String(input.targetTeamName || "").match(/\b(\d{1,2})\s*u\b/i)?.[1] || "");
+  const requestedAgeDiv = cleanText(ageFromUrl || (ageFromTeamName ? `${ageFromTeamName}u` : "")).toLowerCase();
 
   const scheduleRows: Array<TeamScheduleRow & { _sortAt: string }> = [];
   const addSchedule = (rows: Array<TeamScheduleRow & { _sortAt: string }>) => {
@@ -1003,33 +1018,72 @@ async function tryFetchPbrLiveTeamData(input: {
   };
 
   if (context?.eventId) {
-    const primaryScheduleId = String(context.divisions?.[context.defaultEventPriceId]?.schedule_id || "");
-    if (context.defaultEventPriceId && primaryScheduleId) {
-      const payload = await fetchPbrSchedulePayload(context, context.defaultEventPriceId, primaryScheduleId);
+    const pullPayload = async (eventPriceId: string, scheduleId: string, defaultDivision = "") => {
+      if (!eventPriceId || !scheduleId) return;
+      const payload = await fetchPbrSchedulePayload(context, eventPriceId, scheduleId);
       addSchedule(parsePbrScheduleRowsFromPayload({
         payload,
         targetTeamName: input.targetTeamName,
-        fallbackIsoDate: input.fallbackIsoDate
+        fallbackIsoDate: input.fallbackIsoDate,
+        defaultDivision
       }));
+    };
+
+    // 0/0 returns the full board payload on many PBR events and avoids long division walks.
+    await pullPayload("0", "0");
+
+    const primaryDivision = context.divisions?.[context.defaultEventPriceId];
+    const primaryScheduleId = cleanText(String(primaryDivision?.schedule_id || ""));
+    const primaryEventPriceId = cleanText(
+      String((primaryDivision as PbrScheduleDivision | undefined)?.event_price_id || context.defaultEventPriceId || "")
+    );
+    if (!scheduleRows.length && primaryEventPriceId && primaryScheduleId) {
+      await pullPayload(primaryEventPriceId, primaryScheduleId, cleanText(String(primaryDivision?.label || "")));
     }
 
     if (!scheduleRows.length) {
-      for (const key of context.divisionKeys) {
-        const division = context.divisions[key];
-        const scheduleId = String(division?.schedule_id || "");
-        if (!scheduleId) continue;
-        const payload = await fetchPbrSchedulePayload(context, key, scheduleId);
-        addSchedule(parsePbrScheduleRowsFromPayload({
-          payload,
-          targetTeamName: input.targetTeamName,
-          fallbackIsoDate: input.fallbackIsoDate,
-          defaultDivision: cleanText(String(division?.label || ""))
-        }));
+      const divisionEntries = context.divisionKeys
+        .map((key) => {
+          const division = context.divisions[key];
+          const eventPriceId = cleanText(String((division as PbrScheduleDivision | undefined)?.event_price_id || key || ""));
+          const scheduleId = cleanText(String(division?.schedule_id || ""));
+          const label = cleanText(String(division?.label || ""));
+          if (!eventPriceId || !scheduleId) return null;
+          const labelNorm = normalize(label);
+          const wantsAge = requestedAgeDiv ? normalize(requestedAgeDiv) : "";
+          const agePriority = wantsAge && labelNorm && (labelNorm.includes(wantsAge) || wantsAge.includes(labelNorm))
+            ? 0
+            : 1;
+          return { eventPriceId, scheduleId, label, agePriority };
+        })
+        .filter((entry): entry is { eventPriceId: string; scheduleId: string; label: string; agePriority: number } => Boolean(entry))
+        .sort((left, right) =>
+          left.agePriority - right.agePriority
+          || Number(left.eventPriceId) - Number(right.eventPriceId)
+        );
+
+      for (const division of divisionEntries) {
+        const before = scheduleRows.length;
+        await pullPayload(division.eventPriceId, division.scheduleId, division.label);
+        if (scheduleRows.length > before && division.agePriority === 0) {
+          break;
+        }
+      }
+    }
+
+    if (!scheduleRows.length && context.defaultEventPriceId) {
+      const fallbackScheduleId = cleanText(String(context.divisions?.[context.defaultEventPriceId]?.schedule_id || ""));
+      if (fallbackScheduleId) {
+        await pullPayload(context.defaultEventPriceId, fallbackScheduleId);
       }
     }
   }
 
-  const orderedSchedule = scheduleRows
+  const dedupedSchedule = Array.from(
+    new Map(scheduleRows.map((row) => [scheduleRowDedupeKey(row), row])).values()
+  );
+  const orderedSchedule = dedupedSchedule
+    .filter((row) => scheduleRowIncludesTeam(row, input.targetTeamName))
     .sort((a, b) => a._sortAt.localeCompare(b._sortAt) || a.gameNo.localeCompare(b.gameNo))
     .map((row) => ({
       gameNo: row.gameNo,
@@ -1062,7 +1116,14 @@ async function tryFetchPbrLiveTeamData(input: {
     return { teamUrl: absolute, roster: rosterRows };
   };
 
+  const directTeamDetailsUrl = context?.eventId && targetTeamUuid
+    ? `${eventOrigin}/team/details/${context.eventId}/${targetTeamUuid}`
+    : "";
+
   let teamUrl = toAbsolutePbrUrl(input.providedTeamUrl || "");
+  if ((!teamUrl || !/\/team\/details\//i.test(teamUrl)) && directTeamDetailsUrl) {
+    teamUrl = directTeamDetailsUrl;
+  }
   let roster: TeamRosterRow[] = [];
   if (teamUrl) {
     const direct = await fetchRosterFromTeamUrl(teamUrl);
@@ -1080,7 +1141,8 @@ async function tryFetchPbrLiveTeamData(input: {
   }).catch(() => null);
   const teamsHtml = teamsRes && teamsRes.ok ? await teamsRes.text() : "";
   if (teamsHtml && (!teamUrl || !roster.length)) {
-    teamUrl = parsePbrTeamPageUrl(teamsHtml, input.targetTeamName, input.targetTeamId);
+    const parsedTeamUrl = parsePbrTeamPageUrl(teamsHtml, input.targetTeamName, input.targetTeamId);
+    if (parsedTeamUrl) teamUrl = parsedTeamUrl;
   }
   if (teamUrl && !roster.length) {
     const resolved = await fetchRosterFromTeamUrl(teamUrl);
@@ -1502,7 +1564,7 @@ export async function POST(req: NextRequest) {
               targetTeamName: targetTeamName || teamName,
               fallbackIsoDate: asIsoDate(tournament.date),
               providedTeamUrl: teamUrl
-            }), 12000) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[], teamUrl: "" };
+            }), 28000) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[], teamUrl: "" };
 
             if (livePbr.schedule.length || livePbr.roster.length) {
               const mergedSchedule = mergeScheduleRows(schedule, livePbr.schedule, targetTeamName);
@@ -1615,7 +1677,7 @@ export async function POST(req: NextRequest) {
             targetTeamName,
             fallbackIsoDate,
             providedTeamUrl: teamUrl
-          }), 12000) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[], teamUrl: "" };
+          }), 28000) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[], teamUrl: "" };
           if (livePbr.schedule.length || livePbr.roster.length) {
             const importedScheduleNormalized = mergeScheduleRows(importedFallback.schedule, [] as TeamScheduleRow[], targetTeamName);
             const mergedSchedule = mergeScheduleRows(importedFallback.schedule, livePbr.schedule, targetTeamName);
