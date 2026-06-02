@@ -1139,7 +1139,7 @@ async function resolveImportedTournamentFallback(input: {
   if (!normalizedWantedName) return null;
 
   const wantedDate = parseInventorySlugIsoDate(input.inventorySlug);
-  const tournaments = await withTimeout(listHarvestedTournaments(input.orgId, input.company), 3500);
+  const tournaments = await withTimeout(listHarvestedTournaments(input.orgId, input.company), 8000);
   if (!Array.isArray(tournaments) || !tournaments.length) return null;
 
   const normalizedWantedNameNoYear = normalizedWantedName.replace(/-\d{4}$/i, "");
@@ -1182,7 +1182,7 @@ async function resolveImportedTournamentFallback(input: {
 
   const best = ranked[0];
   if (!best || best.score < 80) return null;
-  return withTimeout(getHarvestedTournament(input.orgId, best.candidate.id).catch(() => null), 2500);
+  return withTimeout(getHarvestedTournament(input.orgId, best.candidate.id).catch(() => null), 6000);
 }
 
 async function resolvePbrEventHint(input: {
@@ -1373,7 +1373,7 @@ async function resolveTeamUrl(input: {
   }
   if (!url && input.teamName && input.eventId) {
     // Avoid long hangs when PG lookup stalls.
-    const resolved = await withTimeout(resolvePgTeamUrl(input.teamName, input.eventId), 1800);
+    const resolved = await withTimeout(resolvePgTeamUrl(input.teamName, input.eventId), 2600);
     url = resolved || "";
   }
   return url;
@@ -1405,9 +1405,14 @@ export async function POST(req: NextRequest) {
   const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
   const isBlockedUnlockEmail = !isAdminUser && isTournamentUnlockBlockedEmail(session.email);
   const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
-  const unlockedResult = await withTimeout(listOrgUnlocks(session.orgId), 1800);
+  const unlockedResult = await withTimeout(listOrgUnlocks(session.orgId), 3500);
   const unlocked: string[] = Array.isArray(unlockedResult) ? unlockedResult : [];
   const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
+  const isLikelyPbrRequest = Boolean(
+    seedMeta?.company === "PBR"
+    || inventorySlug.startsWith("pbr-live-")
+    || /^pbr-team-/i.test(teamId)
+  );
   if (isBlockedUnlockEmail) {
     return NextResponse.json({
       error: "Tournament access is locked for Gmail accounts. Sign in with your university domain email."
@@ -1426,7 +1431,7 @@ export async function POST(req: NextRequest) {
         ? (hasSupabaseConfig
             ? (await withTimeout(
               getHarvestedTournament(session.orgId, tournamentId).catch(() => null),
-              searchOnly ? 1800 : 3500
+              searchOnly ? 3500 : 8000
             ))
             : null)
         : null;
@@ -1481,7 +1486,7 @@ export async function POST(req: NextRequest) {
             tournament,
             teamUrl,
             tournamentName
-          }), 5000) || "";
+          }), 9000) || "";
           if (eventHint) {
             const livePbr = await withTimeout(tryFetchPbrLiveTeamData({
               eventHint,
@@ -1489,7 +1494,7 @@ export async function POST(req: NextRequest) {
               targetTeamName: targetTeamName || teamName,
               fallbackIsoDate: asIsoDate(tournament.date),
               providedTeamUrl: teamUrl
-            }), 7000) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[], teamUrl: "" };
+            }), 12000) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[], teamUrl: "" };
 
             if (livePbr.schedule.length || livePbr.roster.length) {
               const mergedSchedule = mergeScheduleRows(schedule, livePbr.schedule, targetTeamName);
@@ -1580,6 +1585,40 @@ export async function POST(req: NextRequest) {
             roster: importedRoster,
             teamUrl: ""
           });
+        }
+      }
+
+      if (!searchOnly && isLikelyPbrRequest && targetTeamName) {
+        const importedFallback = tournament
+          ? importedRowsForTeam(tournament, targetTeamName)
+          : { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[] };
+        const eventHint = await withTimeout(resolvePbrEventHint({
+          inventorySlug,
+          tournament,
+          teamUrl,
+          tournamentName: tournamentName || targetTeamName
+        }), 9000) || "";
+        const fallbackIsoDate = parseInventorySlugIsoDate(inventorySlug)
+          || asIsoDate(tournament?.date || new Date().toISOString());
+        if (eventHint) {
+          const livePbr = await withTimeout(tryFetchPbrLiveTeamData({
+            eventHint,
+            targetTeamId: teamId,
+            targetTeamName,
+            fallbackIsoDate,
+            providedTeamUrl: teamUrl
+          }), 12000) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[], teamUrl: "" };
+          if (livePbr.schedule.length || livePbr.roster.length) {
+            const importedScheduleNormalized = mergeScheduleRows(importedFallback.schedule, [] as TeamScheduleRow[], targetTeamName);
+            const mergedSchedule = mergeScheduleRows(importedFallback.schedule, livePbr.schedule, targetTeamName);
+            return NextResponse.json({
+              ok: true,
+              source: livePbr.schedule.length ? "pbr_live_team_schedule_fallback" : "pbr_live_roster_only_fallback",
+              schedule: mergedSchedule.length ? mergedSchedule : importedScheduleNormalized,
+              roster: mergeRosterRows(importedFallback.roster, livePbr.roster, targetTeamName),
+              teamUrl: livePbr.teamUrl || eventHint
+            });
+          }
         }
       }
 
@@ -1688,7 +1727,7 @@ export async function POST(req: NextRequest) {
     if (!searchOnly && hasSupabaseConfig && tournamentId) {
       const fallbackTournament = await withTimeout(
         getHarvestedTournament(session.orgId, tournamentId).catch(() => null),
-        2500
+        5000
       );
       if (fallbackTournament) {
         const fallbackTeamName = teamName || fallbackTournament.teams?.find((team) => team.id === teamId)?.name || "";
