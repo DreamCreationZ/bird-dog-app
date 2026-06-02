@@ -198,7 +198,7 @@ function teamDetailsCacheKey(input: Props["initialParams"]) {
     input.teamName || "",
     input.eventId || ""
   ].join("|");
-  return `bird_dog:team_details:v7:${identity}`;
+  return `bird_dog:team_details:v8:${identity}`;
 }
 
 function parseTeamDetailsCacheEntry(raw: string): TeamDetailsCachePayload | null {
@@ -372,6 +372,12 @@ function isPlaceholderValue(value: string) {
     || normalized === "unknown"
     || normalized === "tbd"
     || normalized === "null";
+}
+
+function looksLikeRosterMetadataValue(value: string) {
+  const normalized = normalizePlaceholderToken(value);
+  if (!normalized) return false;
+  return /visit team page|advanced search|state rankings|rankings|tournament|invitational|championship|world series|roster schedule|roster tools|diamondkast|perfect game|prep baseball|schedule|archive access|search players?|search teams?/.test(normalized);
 }
 
 function looksLikeRosterPlayerName(value: string) {
@@ -671,13 +677,25 @@ function hasTeamRosterSignal(row: TeamRosterRow, targetTeamName = "") {
   const schoolLooksReal = Boolean(
     school
     && !isPlaceholderValue(school)
+    && !looksLikeRosterMetadataValue(school)
     && !schoolMatchesTargetTeam
   );
+  const noLooksReal = /^\d{1,3}$/.test(no);
+  const hometownLooksReal = Boolean(
+    hometown
+    && !isPlaceholderValue(hometown)
+    && !looksLikeRosterMetadataValue(hometown)
+  );
+  const commitmentLooksReal = Boolean(
+    commitment
+    && !isPlaceholderValue(commitment)
+    && !looksLikeRosterMetadataValue(commitment)
+  );
   return Boolean(
-    (no && !isPlaceholderValue(no))
-    || (hometown && !isPlaceholderValue(hometown))
+    noLooksReal
+    || hometownLooksReal
     || schoolLooksReal
-    || (commitment && !isPlaceholderValue(commitment))
+    || commitmentLooksReal
   );
 }
 

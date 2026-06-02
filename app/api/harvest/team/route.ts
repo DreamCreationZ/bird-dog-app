@@ -69,14 +69,23 @@ function sanitizeRosterRows(rows: TeamRosterRow[], targetTeamName = "") {
       && teamMatches(school, targetTeamName)
     );
     const noLooksReal = /^\d{1,3}$/.test(no);
-    const hometownLooksReal = Boolean(!isPlaceholderValue(hometown) && /[a-z]/i.test(hometown));
+    const hometownLooksReal = Boolean(
+      !isPlaceholderValue(hometown)
+      && !looksLikeRosterMetadataValue(hometown)
+      && /[a-z]/i.test(hometown)
+    );
     const schoolLooksReal = Boolean(
       school
       && !isPlaceholderValue(school)
+      && !looksLikeRosterMetadataValue(school)
       && /[a-z]/i.test(school)
       && !schoolMatchesTargetTeam
     );
-    const commitmentLooksReal = Boolean(!isPlaceholderValue(commitment) && /[a-z]/i.test(commitment));
+    const commitmentLooksReal = Boolean(
+      !isPlaceholderValue(commitment)
+      && !looksLikeRosterMetadataValue(commitment)
+      && /[a-z]/i.test(commitment)
+    );
     const hasRosterSignal = Boolean(
       noLooksReal
       || hometownLooksReal
@@ -118,6 +127,12 @@ function isPlaceholderValue(value: string) {
     || normalized === "unknown"
     || normalized === "tbd"
     || normalized === "null";
+}
+
+function looksLikeRosterMetadataValue(value: string) {
+  const normalized = normalizePlaceholderToken(value);
+  if (!normalized) return false;
+  return /visit team page|advanced search|state rankings|rankings|tournament|invitational|championship|world series|roster schedule|roster tools|diamondkast|perfect game|prep baseball|schedule|archive access|search players?|search teams?/.test(normalized);
 }
 
 function normalizeTeamPhrase(value: string) {
