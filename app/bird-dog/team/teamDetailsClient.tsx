@@ -2942,7 +2942,7 @@ export default function TeamDetailsClient({ initialParams, inlineMode = false, o
                   </div>
                 </div>
                 <button type="button" onClick={() => openAppTab("tournaments")}>Tournament Dashboard</button>
-                <button type="button" onClick={() => openAppTab("notes")}>Tournament Schedule</button>
+                <button type="button" onClick={() => openAppTab("notes")}>Coach Notes</button>
                 <button type="button" className="active" onClick={() => openAppTab("myPlayersSchedule")}>My Players & Schedule</button>
                 <button type="button" onClick={() => openAppTab("profile")}>My Profile</button>
                 <button

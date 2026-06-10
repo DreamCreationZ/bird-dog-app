@@ -170,6 +170,14 @@ type CoachSharedNote = {
   observed_at: string;
 };
 
+type CoachQuickNote = {
+  id: string;
+  company: "PG" | "PBR";
+  text: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type CoachMeetSuggestion = {
   kind: "common" | "midpoint" | "none";
   label: string;
@@ -632,6 +640,29 @@ function parseJsonSafe<T>(raw: string | null, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function sanitizeCoachQuickNotes(input: unknown): CoachQuickNote[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((item) => {
+      const row = item as Record<string, unknown>;
+      const id = String(row.id || "").trim();
+      const text = String(row.text || "").trim();
+      const company = String(row.company || "").trim().toUpperCase() === "PBR" ? "PBR" : "PG";
+      if (!id || !text) return null;
+      const createdAt = String(row.createdAt || "").trim() || new Date().toISOString();
+      const updatedAt = String(row.updatedAt || "").trim() || createdAt;
+      return {
+        id,
+        company,
+        text,
+        createdAt,
+        updatedAt
+      } as CoachQuickNote;
+    })
+    .filter((row): row is CoachQuickNote => Boolean(row))
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
 }
 
 function safeLocalGet(key: string) {
@@ -2780,6 +2811,11 @@ export default function BirdDogPage() {
   const [watchlist, setWatchlist] = useState<string[]>([]);
   const watchlistSet = useMemo(() => new Set(watchlist), [watchlist]);
 
+  const [coachQuickNotes, setCoachQuickNotes] = useState<CoachQuickNote[]>([]);
+  const [coachQuickNoteDraft, setCoachQuickNoteDraft] = useState("");
+  const [coachQuickNoteStatus, setCoachQuickNoteStatus] = useState("");
+  const [coachQuickNoteListening, setCoachQuickNoteListening] = useState(false);
+
   const [notes, setNotes] = useState<ScoutNote[]>([]);
   const [pulses, setPulses] = useState<PulseEvent[]>([]);
 
@@ -2818,6 +2854,8 @@ export default function BirdDogPage() {
   const inlineTeamNoteMediaStreamRef = useRef<MediaStream | null>(null);
   const inlineTeamNoteAudioChunksRef = useRef<Blob[]>([]);
   const inlineTeamNoteSpeechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const coachQuickNoteSpeechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const coachQuickNoteSpeechBaseTextRef = useRef("");
 
   function setAndPersistPlanWorkflowStatus(next: PlanWorkflowStatus) {
     setPlanWorkflowStatus(next);
@@ -3218,6 +3256,8 @@ export default function BirdDogPage() {
   useEffect(() => () => {
     speechRecognitionRef.current?.stop();
     speechRecognitionRef.current = null;
+    coachQuickNoteSpeechRecognitionRef.current?.stop();
+    coachQuickNoteSpeechRecognitionRef.current = null;
     mediaRecorderRef.current?.stop();
     mediaRecorderRef.current = null;
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -3721,19 +3761,29 @@ export default function BirdDogPage() {
   }, [canAccessLockedPages, hotelBooked, questionOpen.hotel, requiredStateCodes, stateHotelInputs]);
 
   useEffect(() => {
+    if (activeTab === "notes") return;
+    coachQuickNoteSpeechRecognitionRef.current?.stop();
+    coachQuickNoteSpeechRecognitionRef.current = null;
+    setCoachQuickNoteListening(false);
+  }, [activeTab]);
+
+  useEffect(() => {
     if (!user) return;
     const rawWatch = safeLocalGet(makeOrgKey(user.orgId, user.userId, "watchlist"));
     const rawNotes = safeLocalGet(makeOrgKey(user.orgId, user.userId, "notes"));
     const rawPulses = safeLocalGet(makeOrgKey(user.orgId, user.userId, "pulses"));
+    const rawCoachQuickNotes = safeLocalGet(makeOrgKey(user.orgId, user.userId, "coachQuickNotes"));
     const rawSync = safeLocalGet(makeOrgKey(user.orgId, user.userId, "lastSyncAt"));
 
     const parsedWatch = parseJsonSafe<unknown>(rawWatch, []);
     const parsedNotes = parseJsonSafe<unknown>(rawNotes, []);
     const parsedPulses = parseJsonSafe<unknown>(rawPulses, []);
+    const parsedCoachQuickNotes = parseJsonSafe<unknown>(rawCoachQuickNotes, []);
 
     setWatchlist(Array.isArray(parsedWatch) ? parsedWatch as string[] : []);
     setNotes(Array.isArray(parsedNotes) ? parsedNotes as ScoutNote[] : []);
     setPulses(Array.isArray(parsedPulses) ? parsedPulses as PulseEvent[] : []);
+    setCoachQuickNotes(sanitizeCoachQuickNotes(parsedCoachQuickNotes));
     setLastSyncAt(rawSync || null);
   }, [user]);
 
@@ -3746,6 +3796,11 @@ export default function BirdDogPage() {
     if (!user) return;
     safeLocalSet(makeOrgKey(user.orgId, user.userId, "notes"), JSON.stringify(notes));
   }, [user, notes]);
+
+  useEffect(() => {
+    if (!user) return;
+    safeLocalSet(makeOrgKey(user.orgId, user.userId, "coachQuickNotes"), JSON.stringify(coachQuickNotes));
+  }, [user, coachQuickNotes]);
 
   useEffect(() => {
     if (!user) return;
@@ -7334,6 +7389,88 @@ export default function BirdDogPage() {
     setTranscript("");
   }
 
+  function stopCoachQuickNoteDictation() {
+    const recognition = coachQuickNoteSpeechRecognitionRef.current;
+    if (!recognition) return;
+    recognition.stop();
+    coachQuickNoteSpeechRecognitionRef.current = null;
+    setCoachQuickNoteListening(false);
+    setCoachQuickNoteStatus("Voice capture stopped. Review and Save.");
+  }
+
+  function startCoachQuickNoteDictation() {
+    if (coachQuickNoteListening) return;
+    const ctor = (window as unknown as { SpeechRecognition?: BrowserSpeechConstructor; webkitSpeechRecognition?: BrowserSpeechConstructor }).SpeechRecognition
+      || (window as unknown as { webkitSpeechRecognition?: BrowserSpeechConstructor }).webkitSpeechRecognition;
+    if (!ctor) {
+      setCoachQuickNoteStatus("Speech-to-text is unavailable in this browser.");
+      return;
+    }
+    try {
+      const recognition = new ctor();
+      coachQuickNoteSpeechBaseTextRef.current = coachQuickNoteDraft.trim();
+      recognition.lang = "en-US";
+      recognition.interimResults = true;
+      recognition.continuous = true;
+      recognition.onresult = (event) => {
+        let live = "";
+        for (let i = 0; i < event.results.length; i += 1) {
+          live += `${event.results[i][0].transcript} `;
+        }
+        const spoken = live.trim();
+        const base = coachQuickNoteSpeechBaseTextRef.current;
+        const merged = [base, spoken].filter(Boolean).join(base && spoken ? "\n" : "");
+        setCoachQuickNoteDraft(merged.trim());
+      };
+      recognition.onerror = () => {
+        setCoachQuickNoteStatus("Voice capture had an issue. Please retry.");
+      };
+      recognition.onend = () => {
+        if (coachQuickNoteSpeechRecognitionRef.current === recognition) {
+          coachQuickNoteSpeechRecognitionRef.current = null;
+        }
+        setCoachQuickNoteListening(false);
+      };
+      recognition.start();
+      coachQuickNoteSpeechRecognitionRef.current = recognition;
+      setCoachQuickNoteListening(true);
+      setCoachQuickNoteStatus("Listening... speak your coach note.");
+    } catch {
+      setCoachQuickNoteStatus("Microphone permission is blocked or unavailable.");
+      setCoachQuickNoteListening(false);
+    }
+  }
+
+  function saveCoachQuickNote() {
+    const text = coachQuickNoteDraft.trim();
+    if (!text) {
+      setCoachQuickNoteStatus("Type or speak a note first.");
+      return;
+    }
+    if (coachQuickNoteListening) {
+      stopCoachQuickNoteDictation();
+    }
+    const nowIso = new Date().toISOString();
+    setCoachQuickNotes((prev) => [
+      {
+        id: crypto.randomUUID(),
+        company,
+        text,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      },
+      ...prev
+    ]);
+    setCoachQuickNoteDraft("");
+    coachQuickNoteSpeechBaseTextRef.current = "";
+    setCoachQuickNoteStatus(`${companyLabel(company)} coach note saved.`);
+  }
+
+  function deleteCoachQuickNote(noteId: string) {
+    setCoachQuickNotes((prev) => prev.filter((note) => note.id !== noteId));
+    setCoachQuickNoteStatus("Coach note removed.");
+  }
+
   async function startInlineTeamNoteRecording(target: InlineTeamNoteTarget) {
     const key = inlineTeamNoteKey(target);
     if (inlineTeamNoteRecorderState === "recording") {
@@ -7714,6 +7851,12 @@ export default function BirdDogPage() {
     () => Array.from(new Set(shareableSchedules.map((item) => item.user_id).filter(Boolean))),
     [shareableSchedules]
   );
+  const coachQuickNotesForCompany = useMemo(
+    () => coachQuickNotes
+      .filter((note) => note.company === company)
+      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
+    [coachQuickNotes, company]
+  );
   const showTournaments = activeTab === "tournaments";
   const showNotes = activeTab === "notes";
   const showProfile = activeTab === "profile";
@@ -7923,7 +8066,7 @@ export default function BirdDogPage() {
                   navigateTab("notes", { closeMenu: true });
                 }}
               >
-                Tournament Schedule
+                Coach Notes
               </button>
               <button
                 type="button"
@@ -8139,6 +8282,78 @@ export default function BirdDogPage() {
       {showNotes ? (
       <section className="panel" id="teams-roster-section">
         <div style={{ width: "100%" }}>
+          <div className="panel" style={{ marginBottom: 10 }}>
+            <h3 style={{ marginTop: 0, marginBottom: 6 }}>{companyLabel(company)} Coach Notes</h3>
+            <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
+              Save private coach notes for this {companyLabel(company)} dashboard. Use voice dictation or type.
+            </p>
+            <label htmlFor="coach-quick-note-input" className="muted" style={{ display: "block", marginBottom: 6 }}>
+              New Coach Note
+            </label>
+            <textarea
+              id="coach-quick-note-input"
+              value={coachQuickNoteDraft}
+              onChange={(event) => {
+                setCoachQuickNoteDraft(event.target.value);
+                if (coachQuickNoteStatus) setCoachQuickNoteStatus("");
+              }}
+              placeholder={`Write anything important for ${companyLabel(company)} coaches...`}
+              rows={5}
+            />
+            <div className="row wrap" style={{ gap: 8, marginTop: 8 }}>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  if (coachQuickNoteListening) {
+                    stopCoachQuickNoteDictation();
+                    return;
+                  }
+                  startCoachQuickNoteDictation();
+                }}
+                disabled={!speechSupported}
+                title={!speechSupported ? "Speech-to-text is unavailable in this browser." : ""}
+              >
+                {coachQuickNoteListening ? "Stop Voice Note" : "Speak Note"}
+              </button>
+              <button
+                type="button"
+                onClick={saveCoachQuickNote}
+              >
+                Save Note
+              </button>
+            </div>
+            {coachQuickNoteStatus ? (
+              <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>{coachQuickNoteStatus}</p>
+            ) : null}
+            <h4 style={{ marginTop: 14, marginBottom: 6 }}>Saved Coach Notes</h4>
+            {coachQuickNotesForCompany.length ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                {coachQuickNotesForCompany.map((note) => (
+                  <article key={note.id} className="panel" style={{ marginBottom: 0 }}>
+                    <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <p className="muted small" style={{ margin: 0 }}>
+                        Saved {new Date(note.updatedAt || note.createdAt).toLocaleString()}
+                      </p>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => deleteCoachQuickNote(note.id)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                    <p style={{ marginTop: 8, marginBottom: 0, whiteSpace: "pre-wrap" }}>{note.text}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="muted" style={{ marginTop: 0, marginBottom: 0 }}>
+                No saved coach notes yet for {companyLabel(company)}.
+              </p>
+            )}
+          </div>
+
           <div className="panel" style={{ marginBottom: 10 }}>
             <h3 style={{ marginTop: 0 }}>Tournament Teams</h3>
             <p className="muted" style={{ marginTop: 6, marginBottom: 8 }}>
