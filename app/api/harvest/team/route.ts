@@ -532,6 +532,61 @@ function toPbrEventBase(url: string) {
   return match ? match[1] : "";
 }
 
+const PBR_FETCH_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
+function pbrHtmlLooksBlocked(status: number, html: string) {
+  if (status === 403 || status === 429 || status === 503) return true;
+  const low = String(html || "").toLowerCase();
+  if (!low) return true;
+  if (low.includes("cf-turnstile")) return true;
+  if (low.includes("just a moment")) return true;
+  if (low.includes("verify you are human")) return true;
+  if (low.includes("security check to access")) return true;
+  if (low.includes("attention required")) return true;
+  return false;
+}
+
+function pbrProxyTemplateUrls() {
+  return String(process.env.RESIDENTIAL_PROXY_TEMPLATE_URLS || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function pbrFetchCandidateUrls(targetUrl: string) {
+  const urls: string[] = [targetUrl];
+  pbrProxyTemplateUrls().forEach((template) => {
+    if (!template) return;
+    if (template.includes("{url}")) {
+      urls.push(template.replace("{url}", encodeURIComponent(targetUrl)));
+      return;
+    }
+    urls.push(template);
+  });
+  return Array.from(new Set(urls));
+}
+
+async function fetchPbrHtmlWithProxyFallback(targetUrl: string, perAttemptTimeoutMs = 6500) {
+  for (const url of pbrFetchCandidateUrls(targetUrl)) {
+    const res = await withTimeout(fetch(url, {
+      cache: "no-store",
+      headers: {
+        "User-Agent": PBR_FETCH_USER_AGENT,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Cache-Control": "no-cache"
+      }
+    }).catch(() => null), perAttemptTimeoutMs);
+    if (!res) continue;
+    const html = await res.text().catch(() => "");
+    if (!res.ok) continue;
+    if (pbrHtmlLooksBlocked(res.status, html)) continue;
+    if (!cleanText(html)) continue;
+    return html;
+  }
+  return "";
+}
+
 const PBR_EVENT_HINT_CACHE_TTL_MS = 20 * 60 * 1000;
 
 type PbrEventHintCacheEntry = {
@@ -746,8 +801,7 @@ async function fetchPbrSchedulePayload(
     method: "POST",
     cache: "no-store",
     headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      "User-Agent": PBR_FETCH_USER_AGENT,
       Accept: "application/json,text/plain,*/*",
       "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
       "X-Requested-With": "XMLHttpRequest",
@@ -989,16 +1043,9 @@ async function tryFetchPbrLiveTeamData(input: {
     };
   }
 
-  const schedulePageRes = await fetch(`${eventBase}/schedule/all`, {
-    cache: "no-store",
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    }
-  }).catch(() => null);
-  const scheduleHtml = schedulePageRes && schedulePageRes.ok ? await schedulePageRes.text() : "";
-  const context = scheduleHtml ? parsePbrScheduleContext(scheduleHtml, `${eventBase}/schedule/all`) : null;
+  const scheduleAllUrl = `${eventBase}/schedule/all`;
+  const scheduleHtml = await fetchPbrHtmlWithProxyFallback(scheduleAllUrl, 7000);
+  const context = scheduleHtml ? parsePbrScheduleContext(scheduleHtml, scheduleAllUrl) : null;
   const eventOrigin = eventBase.match(/^(https?:\/\/[^/]+)/i)?.[1] || "https://tournaments.prepbaseballreport.com";
   const targetTeamUuid = cleanText(
     String(input.targetTeamId || "").replace(/^pbr-team-/i, "").match(/^([a-f0-9-]{8,})$/i)?.[1]
@@ -1100,15 +1147,7 @@ async function tryFetchPbrLiveTeamData(input: {
     if (!absolute || !/\/team\/details\//i.test(absolute)) {
       return { teamUrl: "", roster: [] as TeamRosterRow[] };
     }
-    const teamRes = await fetch(absolute, {
-      cache: "no-store",
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-      }
-    }).catch(() => null);
-    const teamHtml = teamRes && teamRes.ok ? await teamRes.text() : "";
+    const teamHtml = await fetchPbrHtmlWithProxyFallback(absolute, 6500);
     const rosterRows = teamHtml ? parsePbrRosterRows(teamHtml) : [];
     return { teamUrl: absolute, roster: rosterRows };
   };
@@ -1128,15 +1167,7 @@ async function tryFetchPbrLiveTeamData(input: {
     roster = direct.roster;
   }
 
-  const teamsRes = await fetch(`${eventBase}/teams`, {
-    cache: "no-store",
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    }
-  }).catch(() => null);
-  const teamsHtml = teamsRes && teamsRes.ok ? await teamsRes.text() : "";
+  const teamsHtml = await fetchPbrHtmlWithProxyFallback(`${eventBase}/teams`, 6500);
   if (teamsHtml && (!teamUrl || !roster.length)) {
     const parsedTeamUrl = parsePbrTeamPageUrl(teamsHtml, input.targetTeamName, input.targetTeamId);
     if (parsedTeamUrl) teamUrl = parsedTeamUrl;
