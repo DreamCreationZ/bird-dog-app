@@ -59,7 +59,8 @@ export async function fetchTournamentHtml(company, hint) {
   let lastError = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const template = nextProxyTemplate();
+    // Always try direct origin first so provider outages do not block healthy sources.
+    const template = attempt === 1 ? null : nextProxyTemplate();
     const url = template ? template.replace("{url}", encodeURIComponent(target)) : target;
 
     try {

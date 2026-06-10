@@ -501,9 +501,10 @@ async function buildTournamentGamesFromScoreboardPages(input: {
 async function fetchHtml(target: string) {
   const raw = process.env.RESIDENTIAL_PROXY_TEMPLATE_URLS || "";
   const proxies = raw.split(",").map((item) => item.trim()).filter(Boolean);
-  const template = proxies.length ? proxies[proxyIndex % proxies.length] : null;
-  if (template) proxyIndex += 1;
-  const url = template ? template.replace("{url}", encodeURIComponent(target)) : target;
+  const candidateUrls = [
+    target,
+    ...proxies.map((template) => template.replace("{url}", encodeURIComponent(target)))
+  ];
 
   const customUa = process.env.SCRAPER_USER_AGENTS
     ? process.env.SCRAPER_USER_AGENTS.split("||").map((item) => item.trim()).filter(Boolean)
@@ -511,19 +512,24 @@ async function fetchHtml(target: string) {
   const ua = (customUa.length ? customUa : defaultUserAgents)[uaIndex % (customUa.length ? customUa.length : defaultUserAgents.length)];
   uaIndex += 1;
 
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": ua,
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Cache-Control": "no-cache"
-    },
-    cache: "no-store"
-  });
-  const html = await response.text();
-  if (!response.ok) {
-    throw new Error(`PG fetch failed (${response.status})`);
+  let lastStatus = 0;
+  for (const url of candidateUrls) {
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": ua,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Cache-Control": "no-cache"
+      },
+      cache: "no-store"
+    });
+    const html = await response.text();
+    if (!response.ok) {
+      lastStatus = response.status;
+      continue;
+    }
+    return { html, target };
   }
-  return { html, target };
+  throw new Error(`PG fetch failed (${lastStatus || 0})`);
 }
 
 function parseRosterFromTeamHtml(html: string, teamName: string, offset = 0) {
