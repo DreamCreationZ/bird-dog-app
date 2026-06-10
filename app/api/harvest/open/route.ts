@@ -945,6 +945,10 @@ export async function POST(req: NextRequest) {
     const liveScrapeTimeoutMs = Number.isFinite(liveScrapeTimeoutRaw)
       ? Math.max(3000, Math.min(30000, Math.trunc(liveScrapeTimeoutRaw)))
       : 14000;
+    const scopedSupabaseTimeoutMs = company === "PBR" ? 1200 : 3500;
+    const scopedLiveTimeoutMs = company === "PBR"
+      ? Math.min(liveScrapeTimeoutMs, 4500)
+      : liveScrapeTimeoutMs;
     const enableLivePreferredOpen = process.env.BIRD_DOG_ENABLE_LIVE_PREFERRED_OPEN === "true";
     const liveCacheKey = `${session.orgId}:${company}:${inventorySlug}`;
 
@@ -979,7 +983,7 @@ export async function POST(req: NextRequest) {
                 company
               })
             ),
-          liveScrapeTimeoutMs
+          scopedLiveTimeoutMs
         );
         const liveTournament = rawLiveTournament
           ? canonicalizeTournamentForInventory({
@@ -1013,7 +1017,7 @@ export async function POST(req: NextRequest) {
 
     const liveFirstPg = async () => {
       if (company !== "PG") return null as Tournament | null;
-      const rawLiveTournament = await withTimeout(scrapePgTournamentLive(pgLiveHint), liveScrapeTimeoutMs);
+      const rawLiveTournament = await withTimeout(scrapePgTournamentLive(pgLiveHint), scopedLiveTimeoutMs);
       const liveTournament = rawLiveTournament
         ? canonicalizeTournamentForInventory({
           tournament: rawLiveTournament,
@@ -1048,7 +1052,7 @@ export async function POST(req: NextRequest) {
         inventorySlug,
         tournamentHint,
         preferredName: selected?.name || seedMeta?.name || ""
-      }), liveScrapeTimeoutMs);
+      }), scopedLiveTimeoutMs);
       const liveTournament = rawLiveTournament
         ? canonicalizeTournamentForInventory({
           tournament: rawLiveTournament,
@@ -1119,7 +1123,7 @@ export async function POST(req: NextRequest) {
           session.orgId,
           company,
           inventorySlug
-        ).catch(() => null), 3500);
+        ).catch(() => null), scopedSupabaseTimeoutMs);
         if (tournamentByExternal) {
           const existingTeamCount = teamCount(tournamentByExternal.teams);
           const existingGameCount = teamCount(tournamentByExternal.games);
@@ -1144,7 +1148,7 @@ export async function POST(req: NextRequest) {
       if (hasSupabaseConfig && tournamentId) {
         const tournamentById = await withTimeout(
           getHarvestedTournament(session.orgId, tournamentId),
-          3500
+          scopedSupabaseTimeoutMs
         );
         if (tournamentById) {
           const existingTeamCount = teamCount(tournamentById.teams);
@@ -1170,7 +1174,7 @@ export async function POST(req: NextRequest) {
       if (hasSupabaseConfig) {
         const allResult = await withTimeout(
           listHarvestedTournaments(session.orgId, company).catch(() => []),
-          3500
+          scopedSupabaseTimeoutMs
         );
         const all = Array.isArray(allResult) ? allResult : [];
         const wantedList = [
@@ -1194,7 +1198,7 @@ export async function POST(req: NextRequest) {
         if (found) {
           const hydrated = await withTimeout(
             getHarvestedTournament(session.orgId, found.id).catch(() => null),
-            3500
+            scopedSupabaseTimeoutMs
           );
           const existingTournament = hydrated || found;
           const existingTeamCount = teamCount(existingTournament?.teams);
@@ -1217,12 +1221,12 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      if (company === "PBR") {
+      if (company === "PBR" && !livePreferredAttempted) {
         const livePbrRaw = await withTimeout(buildPbrLiveTournament({
           inventorySlug,
           tournamentHint,
           preferredName: selected?.name || seedMeta?.name || ""
-        }).catch(() => null), liveScrapeTimeoutMs);
+        }).catch(() => null), scopedLiveTimeoutMs);
         const livePbr = livePbrRaw
           ? canonicalizeTournamentForInventory({
             tournament: livePbrRaw,
