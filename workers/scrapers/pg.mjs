@@ -159,6 +159,19 @@ function parseParticipatingTeams(html) {
   return teams;
 }
 
+function mergeParsedTeams(primary, secondary) {
+  const merged = [];
+  const seen = new Set();
+  for (const team of [...primary, ...secondary]) {
+    if (!team || !team.name) continue;
+    const key = `${String(team.id || "").toLowerCase()}:${team.name.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(team);
+  }
+  return merged;
+}
+
 function parsePlayers(html) {
   const playerLinks = [...html.matchAll(/<a[^>]*href=["'][^"']*(PlayerProfile|playerprofile)[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi)];
   if (!playerLinks.length) return [];
@@ -245,8 +258,27 @@ export async function scrapePgTournament(hint) {
   const name = readTitle(html);
   const id = readEventId(target, hint);
   const date = parseDate(html);
+  const eventNum = numericEventId(target);
   const parsedGames = hasPgScheduleMarkup(html) ? parseGames(html) : [];
-  const teams = parseParticipatingTeams(html);
+  let teams = parseParticipatingTeams(html);
+
+  // PG event landing pages can omit the participating-team table.
+  // Fetch the dedicated teams page and merge results to avoid empty tournaments.
+  if (eventNum) {
+    try {
+      const teamsUrl = `https://www.perfectgame.org/events/TournamentTeams.aspx?event=${eventNum}`;
+      const teamsFetch = await fetchTournamentHtml("PG", teamsUrl);
+      const teamsFromDedicatedPage = parseParticipatingTeams(teamsFetch.html);
+      if (teamsFromDedicatedPage.length) {
+        teams = teams.length
+          ? mergeParsedTeams(teamsFromDedicatedPage, teams)
+          : teamsFromDedicatedPage;
+      }
+    } catch {
+      // Keep parsing from the initial page when dedicated teams fetch fails.
+    }
+  }
+
   const pagePlayers = parsePlayers(html);
   const teamPageRostersEnabled = process.env.BIRD_DOG_ENABLE_PG_TEAM_PAGE_ROSTERS === "true";
   const teamPlayers = teamPageRostersEnabled ? await enrichPlayersFromTeamPages(teams).catch(() => []) : [];
@@ -254,7 +286,6 @@ export async function scrapePgTournament(hint) {
   let games = parsedGames.length ? parsedGames : [];
 
   if (!games.length) {
-    const eventNum = numericEventId(target);
     if (eventNum) {
       try {
         const scheduleUrl = `https://www.perfectgame.org/events/TournamentSchedule.aspx?event=${eventNum}`;
