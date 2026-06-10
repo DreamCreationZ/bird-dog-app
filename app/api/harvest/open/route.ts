@@ -900,14 +900,21 @@ export async function POST(req: NextRequest) {
   const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
   const isBlockedUnlockEmail = !isAdminUser && isTournamentUnlockBlockedEmail(session.email);
   const hasSupabaseConfig = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
-  const [unlocked, inventory] = await Promise.all([
-    listOrgUnlocks(session.orgId).catch(() => [] as string[]),
-    listCircuitInventory().catch(() => [] as Array<{ slug: string; name: string }>)
+  const [unlockedResult, inventoryResult] = await Promise.all([
+    withTimeout(listOrgUnlocks(session.orgId).catch(() => [] as string[]), 3500),
+    withTimeout(
+      listCircuitInventory().catch(() => [] as Array<{ slug: string; name: string }>),
+      3500
+    )
   ]);
+  const unlocked = Array.isArray(unlockedResult) ? unlockedResult : [] as string[];
+  const inventory = Array.isArray(inventoryResult)
+    ? inventoryResult
+    : [] as Array<{ slug: string; name: string }>;
   const selected = inventory.find((item) => item.slug === inventorySlug);
   const seedMeta = INVENTORY_SEED.find((item) => item.slug === inventorySlug);
   const groupedEvents = company === "PG"
-    ? await fetchPgGroupedEvents("23065").catch(() => [])
+    ? ((await withTimeout(fetchPgGroupedEvents("23065").catch(() => []), 3500)) || [])
     : [];
   const groupedMatch = selected?.name && groupedEvents.length
     ? bestGroupedEventMatch(selected.name, groupedEvents)

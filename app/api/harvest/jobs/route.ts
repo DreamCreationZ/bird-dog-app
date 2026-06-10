@@ -4,6 +4,30 @@ import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 import { isTournamentUnlockBlockedEmail } from "@/lib/birddog/tournamentAccessPolicy";
 
+function withTimeout<T>(task: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let settled = false;
+  return new Promise<T | null>((resolve) => {
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
+    }, timeoutMs);
+    task
+      .then((value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      });
+  });
+}
+
 export async function GET(req: NextRequest) {
   const session = readSessionFromRequest(req);
   if (!session) {
@@ -39,7 +63,8 @@ export async function POST(req: NextRequest) {
       && process.env.NODE_ENV !== "production";
     const isAdminUser = Boolean(session.isAdmin) || isPrivilegedAdminEmail(String(session.email || ""));
     const isBlockedUnlockEmail = !isAdminUser && isTournamentUnlockBlockedEmail(session.email);
-    const unlocked = await listOrgUnlocks(session.orgId);
+    const unlockedResult = await withTimeout(listOrgUnlocks(session.orgId), 3500);
+    const unlocked = Array.isArray(unlockedResult) ? unlockedResult : [];
     if (isBlockedUnlockEmail) {
       return NextResponse.json({
         error: "Tournament access is locked for Gmail accounts. Sign in with your university domain email."
@@ -49,12 +74,29 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Tournament is locked for your organization domain." }, { status: 402 });
     }
 
-    const job = await createHarvestJob({
+    const job = await withTimeout(createHarvestJob({
       orgId: session.orgId,
       userId: session.userId,
       company,
       tournamentHint
-    });
+    }), 8000);
+
+    if (!job) {
+      return NextResponse.json({
+        ok: true,
+        degraded: true,
+        warning: "Queue datastore is temporarily unavailable. Open still supports live tournament load.",
+        job: {
+          id: `degraded-${Date.now()}`,
+          org_id: session.orgId,
+          company,
+          tournament_hint: tournamentHint,
+          status: "queued_degraded",
+          created_by: session.userId,
+          created_at: new Date().toISOString()
+        }
+      }, { status: 201 });
+    }
 
     return NextResponse.json({ ok: true, job }, { status: 201 });
   } catch (error) {
