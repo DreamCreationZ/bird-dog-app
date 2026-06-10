@@ -21,12 +21,16 @@ type BrowserSpeechResultEvent = Event & {
   };
 };
 
+type BrowserSpeechErrorEvent = Event & {
+  error?: string;
+};
+
 type BrowserSpeechRecognition = {
   lang: string;
   interimResults: boolean;
   continuous: boolean;
   onresult: ((event: BrowserSpeechResultEvent) => void) | null;
-  onerror?: ((event: Event) => void) | null;
+  onerror?: ((event: BrowserSpeechErrorEvent) => void) | null;
   onend?: (() => void) | null;
   start: () => void;
   stop: () => void;
@@ -330,7 +334,7 @@ type CoachGameCandidate = {
   point: GeoLocation | null;
 };
 
-type BirdDogTab = "tournaments" | "notes" | "myPlayersSchedule" | "profile";
+type BirdDogTab = "tournaments" | "notes" | "coachNotes" | "myPlayersSchedule" | "profile";
 
 const CACHE_KEY = "bird_dog_tournament_cache";
 const PREVIEW_UNLOCK_ALL =
@@ -2856,6 +2860,7 @@ export default function BirdDogPage() {
   const inlineTeamNoteSpeechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const coachQuickNoteSpeechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const coachQuickNoteSpeechBaseTextRef = useRef("");
+  const coachQuickNoteSpeechShouldRunRef = useRef(false);
 
   function setAndPersistPlanWorkflowStatus(next: PlanWorkflowStatus) {
     setPlanWorkflowStatus(next);
@@ -3147,7 +3152,7 @@ export default function BirdDogPage() {
     const focus = params.get("focus");
     if (tab === "coaches" || tab === "schedule" || tab === "bestPlayers" || tab === "myPlayers" || tab === "myPlayersSchedule") {
       navigateTab("myPlayersSchedule", { rememberCurrent: false });
-    } else if (tab === "tournaments" || tab === "notes" || tab === "profile") {
+    } else if (tab === "tournaments" || tab === "notes" || tab === "coachNotes" || tab === "profile") {
       navigateTab(tab, { rememberCurrent: false });
     }
     if (focus === "generatedSchedule") {
@@ -3256,6 +3261,7 @@ export default function BirdDogPage() {
   useEffect(() => () => {
     speechRecognitionRef.current?.stop();
     speechRecognitionRef.current = null;
+    coachQuickNoteSpeechShouldRunRef.current = false;
     coachQuickNoteSpeechRecognitionRef.current?.stop();
     coachQuickNoteSpeechRecognitionRef.current = null;
     mediaRecorderRef.current?.stop();
@@ -3761,7 +3767,8 @@ export default function BirdDogPage() {
   }, [canAccessLockedPages, hotelBooked, questionOpen.hotel, requiredStateCodes, stateHotelInputs]);
 
   useEffect(() => {
-    if (activeTab === "notes") return;
+    if (activeTab === "coachNotes") return;
+    coachQuickNoteSpeechShouldRunRef.current = false;
     coachQuickNoteSpeechRecognitionRef.current?.stop();
     coachQuickNoteSpeechRecognitionRef.current = null;
     setCoachQuickNoteListening(false);
@@ -7390,6 +7397,7 @@ export default function BirdDogPage() {
   }
 
   function stopCoachQuickNoteDictation() {
+    coachQuickNoteSpeechShouldRunRef.current = false;
     const recognition = coachQuickNoteSpeechRecognitionRef.current;
     if (!recognition) return;
     recognition.stop();
@@ -7398,7 +7406,7 @@ export default function BirdDogPage() {
     setCoachQuickNoteStatus("Voice capture stopped. Review and Save.");
   }
 
-  function startCoachQuickNoteDictation() {
+  async function startCoachQuickNoteDictation() {
     if (coachQuickNoteListening) return;
     const ctor = (window as unknown as { SpeechRecognition?: BrowserSpeechConstructor; webkitSpeechRecognition?: BrowserSpeechConstructor }).SpeechRecognition
       || (window as unknown as { webkitSpeechRecognition?: BrowserSpeechConstructor }).webkitSpeechRecognition;
@@ -7406,36 +7414,81 @@ export default function BirdDogPage() {
       setCoachQuickNoteStatus("Speech-to-text is unavailable in this browser.");
       return;
     }
-    try {
-      const recognition = new ctor();
-      coachQuickNoteSpeechBaseTextRef.current = coachQuickNoteDraft.trim();
-      recognition.lang = "en-US";
-      recognition.interimResults = true;
-      recognition.continuous = true;
-      recognition.onresult = (event) => {
-        let live = "";
-        for (let i = 0; i < event.results.length; i += 1) {
-          live += `${event.results[i][0].transcript} `;
-        }
-        const spoken = live.trim();
-        const base = coachQuickNoteSpeechBaseTextRef.current;
-        const merged = [base, spoken].filter(Boolean).join(base && spoken ? "\n" : "");
-        setCoachQuickNoteDraft(merged.trim());
-      };
-      recognition.onerror = () => {
-        setCoachQuickNoteStatus("Voice capture had an issue. Please retry.");
-      };
-      recognition.onend = () => {
-        if (coachQuickNoteSpeechRecognitionRef.current === recognition) {
-          coachQuickNoteSpeechRecognitionRef.current = null;
-        }
+    if (navigator.mediaDevices?.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((track) => track.stop());
+      } catch {
+        coachQuickNoteSpeechShouldRunRef.current = false;
         setCoachQuickNoteListening(false);
+        setCoachQuickNoteStatus("Microphone permission blocked. Allow mic access and retry.");
+        return;
+      }
+    }
+    coachQuickNoteSpeechShouldRunRef.current = true;
+    try {
+      coachQuickNoteSpeechBaseTextRef.current = coachQuickNoteDraft.trim();
+      const launchRecognition = () => {
+        if (!coachQuickNoteSpeechShouldRunRef.current || activeTab !== "coachNotes") return;
+        const recognition = new ctor();
+        recognition.lang = "en-US";
+        recognition.interimResults = true;
+        recognition.continuous = true;
+        recognition.onresult = (event) => {
+          let live = "";
+          for (let i = 0; i < event.results.length; i += 1) {
+            live += `${event.results[i][0].transcript} `;
+          }
+          const spoken = live.trim();
+          const base = coachQuickNoteSpeechBaseTextRef.current;
+          const merged = [base, spoken].filter(Boolean).join(base && spoken ? "\n" : "");
+          setCoachQuickNoteDraft(merged.trim());
+        };
+        recognition.onerror = (event) => {
+          const code = String(event?.error || "").trim().toLowerCase();
+          if (code === "aborted") return;
+          if (code === "no-speech") {
+            setCoachQuickNoteStatus("No speech detected. Keep speaking or retry.");
+            return;
+          }
+          if (code === "audio-capture") {
+            coachQuickNoteSpeechShouldRunRef.current = false;
+            setCoachQuickNoteListening(false);
+            setCoachQuickNoteStatus("Microphone not detected. Check mic and retry.");
+            return;
+          }
+          if (code === "not-allowed" || code === "service-not-allowed") {
+            coachQuickNoteSpeechShouldRunRef.current = false;
+            setCoachQuickNoteListening(false);
+            setCoachQuickNoteStatus("Microphone permission blocked. Allow mic access and retry.");
+            return;
+          }
+          if (code === "network") {
+            setCoachQuickNoteStatus("Speech service network issue. Retrying...");
+            return;
+          }
+          setCoachQuickNoteStatus("Voice capture had an issue. Retrying...");
+        };
+        recognition.onend = () => {
+          if (coachQuickNoteSpeechRecognitionRef.current === recognition) {
+            coachQuickNoteSpeechRecognitionRef.current = null;
+          }
+          if (!coachQuickNoteSpeechShouldRunRef.current || activeTab !== "coachNotes") {
+            setCoachQuickNoteListening(false);
+            return;
+          }
+          window.setTimeout(() => {
+            launchRecognition();
+          }, 180);
+        };
+        recognition.start();
+        coachQuickNoteSpeechRecognitionRef.current = recognition;
+        setCoachQuickNoteListening(true);
+        setCoachQuickNoteStatus("Listening... speak your coach note.");
       };
-      recognition.start();
-      coachQuickNoteSpeechRecognitionRef.current = recognition;
-      setCoachQuickNoteListening(true);
-      setCoachQuickNoteStatus("Listening... speak your coach note.");
+      launchRecognition();
     } catch {
+      coachQuickNoteSpeechShouldRunRef.current = false;
       setCoachQuickNoteStatus("Microphone permission is blocked or unavailable.");
       setCoachQuickNoteListening(false);
     }
@@ -7859,6 +7912,7 @@ export default function BirdDogPage() {
   );
   const showTournaments = activeTab === "tournaments";
   const showNotes = activeTab === "notes";
+  const showCoachNotes = activeTab === "coachNotes";
   const showProfile = activeTab === "profile";
   const showMyPlayersSchedule = activeTab === "myPlayersSchedule";
 
@@ -8064,6 +8118,15 @@ export default function BirdDogPage() {
                 className={activeTab === "notes" ? "active" : ""}
                 onClick={() => {
                   navigateTab("notes", { closeMenu: true });
+                }}
+              >
+                Tournament Schedule
+              </button>
+              <button
+                type="button"
+                className={activeTab === "coachNotes" ? "active" : ""}
+                onClick={() => {
+                  navigateTab("coachNotes", { closeMenu: true });
                 }}
               >
                 Coach Notes
@@ -8279,81 +8342,85 @@ export default function BirdDogPage() {
       </section>
       ) : null}
 
+      {showCoachNotes ? (
+      <section className="panel" id="coach-notes-section">
+        <div className="panel" style={{ marginBottom: 0 }}>
+          <h3 style={{ marginTop: 0, marginBottom: 6 }}>{companyLabel(company)} Coach Notes</h3>
+          <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
+            Save private coach notes for this {companyLabel(company)} dashboard. Use voice dictation or type.
+          </p>
+          <label htmlFor="coach-quick-note-input" className="muted" style={{ display: "block", marginBottom: 6 }}>
+            New Coach Note
+          </label>
+          <textarea
+            id="coach-quick-note-input"
+            value={coachQuickNoteDraft}
+            onChange={(event) => {
+              setCoachQuickNoteDraft(event.target.value);
+              if (coachQuickNoteStatus) setCoachQuickNoteStatus("");
+            }}
+            placeholder={`Write anything important for ${companyLabel(company)} coaches...`}
+            rows={5}
+          />
+          <div className="row wrap" style={{ gap: 8, marginTop: 8 }}>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                if (coachQuickNoteListening) {
+                  stopCoachQuickNoteDictation();
+                  return;
+                }
+                void startCoachQuickNoteDictation();
+              }}
+              disabled={!speechSupported}
+              title={!speechSupported ? "Speech-to-text is unavailable in this browser." : ""}
+            >
+              {coachQuickNoteListening ? "Stop Voice Note" : "Speak Note"}
+            </button>
+            <button
+              type="button"
+              onClick={saveCoachQuickNote}
+            >
+              Save Note
+            </button>
+          </div>
+          {coachQuickNoteStatus ? (
+            <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>{coachQuickNoteStatus}</p>
+          ) : null}
+          <h4 style={{ marginTop: 14, marginBottom: 6 }}>Saved Coach Notes</h4>
+          {coachQuickNotesForCompany.length ? (
+            <div style={{ display: "grid", gap: 8 }}>
+              {coachQuickNotesForCompany.map((note) => (
+                <article key={note.id} className="panel" style={{ marginBottom: 0 }}>
+                  <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <p className="muted small" style={{ margin: 0 }}>
+                      Saved {new Date(note.updatedAt || note.createdAt).toLocaleString()}
+                    </p>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => deleteCoachQuickNote(note.id)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                  <p style={{ marginTop: 8, marginBottom: 0, whiteSpace: "pre-wrap" }}>{note.text}</p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="muted" style={{ marginTop: 0, marginBottom: 0 }}>
+              No saved coach notes yet for {companyLabel(company)}.
+            </p>
+          )}
+        </div>
+      </section>
+      ) : null}
+
       {showNotes ? (
       <section className="panel" id="teams-roster-section">
         <div style={{ width: "100%" }}>
-          <div className="panel" style={{ marginBottom: 10 }}>
-            <h3 style={{ marginTop: 0, marginBottom: 6 }}>{companyLabel(company)} Coach Notes</h3>
-            <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
-              Save private coach notes for this {companyLabel(company)} dashboard. Use voice dictation or type.
-            </p>
-            <label htmlFor="coach-quick-note-input" className="muted" style={{ display: "block", marginBottom: 6 }}>
-              New Coach Note
-            </label>
-            <textarea
-              id="coach-quick-note-input"
-              value={coachQuickNoteDraft}
-              onChange={(event) => {
-                setCoachQuickNoteDraft(event.target.value);
-                if (coachQuickNoteStatus) setCoachQuickNoteStatus("");
-              }}
-              placeholder={`Write anything important for ${companyLabel(company)} coaches...`}
-              rows={5}
-            />
-            <div className="row wrap" style={{ gap: 8, marginTop: 8 }}>
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => {
-                  if (coachQuickNoteListening) {
-                    stopCoachQuickNoteDictation();
-                    return;
-                  }
-                  startCoachQuickNoteDictation();
-                }}
-                disabled={!speechSupported}
-                title={!speechSupported ? "Speech-to-text is unavailable in this browser." : ""}
-              >
-                {coachQuickNoteListening ? "Stop Voice Note" : "Speak Note"}
-              </button>
-              <button
-                type="button"
-                onClick={saveCoachQuickNote}
-              >
-                Save Note
-              </button>
-            </div>
-            {coachQuickNoteStatus ? (
-              <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>{coachQuickNoteStatus}</p>
-            ) : null}
-            <h4 style={{ marginTop: 14, marginBottom: 6 }}>Saved Coach Notes</h4>
-            {coachQuickNotesForCompany.length ? (
-              <div style={{ display: "grid", gap: 8 }}>
-                {coachQuickNotesForCompany.map((note) => (
-                  <article key={note.id} className="panel" style={{ marginBottom: 0 }}>
-                    <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                      <p className="muted small" style={{ margin: 0 }}>
-                        Saved {new Date(note.updatedAt || note.createdAt).toLocaleString()}
-                      </p>
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => deleteCoachQuickNote(note.id)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                    <p style={{ marginTop: 8, marginBottom: 0, whiteSpace: "pre-wrap" }}>{note.text}</p>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <p className="muted" style={{ marginTop: 0, marginBottom: 0 }}>
-                No saved coach notes yet for {companyLabel(company)}.
-              </p>
-            )}
-          </div>
-
           <div className="panel" style={{ marginBottom: 10 }}>
             <h3 style={{ marginTop: 0 }}>Tournament Teams</h3>
             <p className="muted" style={{ marginTop: 6, marginBottom: 8 }}>
