@@ -587,7 +587,11 @@ function targetFromHint(hint: string) {
   return `https://www.perfectgame.org/search.aspx?search=${encoded}`;
 }
 
-export async function scrapePgTournamentLive(hint: string): Promise<Tournament> {
+export async function scrapePgTournamentLive(
+  hint: string,
+  options: { includePlayers?: boolean } = {}
+): Promise<Tournament> {
+  const includePlayers = options.includePlayers === true;
   const initial = await fetchHtml(targetFromHint(hint));
   let html = initial.html;
   let target = initial.target;
@@ -623,7 +627,7 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
     }
   }
 
-  const teamPlayers = await enrichPlayersFromTeamPages(teams);
+  const teamPlayers = includePlayers ? await enrichPlayersFromTeamPages(teams) : [];
 
   if (eventNum) {
     const scheduleGames = await buildTournamentGamesFromScoreboardPages({
@@ -650,7 +654,7 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
   if (!games.length && teams.length && allowSyntheticGames) {
     games = gamesFromTeams(teams, date);
   }
-  games = attachPlayersToGamesByTeam(games, teamPlayers);
+  games = teamPlayers.length ? attachPlayersToGamesByTeam(games, teamPlayers) : games;
 
   return {
     id,
