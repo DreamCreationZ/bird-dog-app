@@ -64,6 +64,11 @@ function teamCount(value: unknown) {
   return value.length;
 }
 
+function tournamentHasAnyData(tournament: Tournament | null | undefined) {
+  if (!tournament) return false;
+  return teamCount(tournament.teams) > 0 || teamCount(tournament.games) > 0;
+}
+
 function safeString(value: unknown) {
   return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
 }
@@ -797,6 +802,7 @@ export async function POST(req: NextRequest) {
     const dataMode = (process.env.BIRD_DOG_DATA_MODE || "imported").toLowerCase();
     const allowLiveScrape = process.env.BIRD_DOG_ALLOW_PG_LIVE_SCRAPE === "true";
     const liveScrapeTimeoutMs = 9000;
+    const enableLivePreferredOpen = process.env.BIRD_DOG_ENABLE_LIVE_PREFERRED_OPEN === "true";
     const liveCacheKey = `${session.orgId}:${company}:${inventorySlug}`;
 
     const pgLiveHint = tournamentHint || inventoryHarvestHint({
@@ -811,7 +817,7 @@ export async function POST(req: NextRequest) {
       if (company === "PG" && isArchive && existingTeamCount > 0 && existingTeamCount <= 120) return true;
       return false;
     };
-    const shouldForceLiveRefresh = company === "PG" || company === "PBR";
+    const shouldForceLiveRefresh = process.env.BIRD_DOG_FORCE_LIVE_REFRESH_ON_OPEN === "true";
     const liveRefreshSourcePrefix = company === "PBR" ? "pbr" : "pg";
 
     const refreshFromLive = async (fallbackName: string) => {
@@ -920,7 +926,7 @@ export async function POST(req: NextRequest) {
 
     if (dataMode !== "live" || !allowLiveScrape) {
       const cachedLive = readCachedLiveTournament(liveCacheKey);
-      if (cachedLive) {
+      if (cachedLive && tournamentHasAnyData(cachedLive.tournament)) {
         return NextResponse.json({
           ok: true,
           tournament: cachedLive.tournament,
@@ -929,10 +935,10 @@ export async function POST(req: NextRequest) {
       }
       let livePreferredAttempted = false;
       let livePreferredFailed = false;
-      if (company === "PG") {
+      if (enableLivePreferredOpen && company === "PG") {
         livePreferredAttempted = true;
         const livePgTournament = await liveFirstPg().catch(() => null);
-        if (livePgTournament) {
+        if (livePgTournament && tournamentHasAnyData(livePgTournament)) {
           return NextResponse.json({
             ok: true,
             tournament: livePgTournament,
@@ -941,10 +947,10 @@ export async function POST(req: NextRequest) {
         }
         livePreferredFailed = true;
       }
-      if (company === "PBR") {
+      if (enableLivePreferredOpen && company === "PBR") {
         livePreferredAttempted = true;
         const livePbrTournament = await liveFirstPbr().catch(() => null);
-        if (livePbrTournament) {
+        if (livePbrTournament && tournamentHasAnyData(livePbrTournament)) {
           return NextResponse.json({
             ok: true,
             tournament: livePbrTournament,
