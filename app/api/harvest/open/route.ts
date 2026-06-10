@@ -126,6 +126,61 @@ function toPbrEventBase(url: string) {
   return match ? match[1] : "";
 }
 
+const PBR_FETCH_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
+function pbrHtmlLooksBlocked(status: number, html: string) {
+  if (status === 403 || status === 429 || status === 503) return true;
+  const low = String(html || "").toLowerCase();
+  if (!low) return true;
+  if (low.includes("cf-turnstile")) return true;
+  if (low.includes("just a moment")) return true;
+  if (low.includes("verify you are human")) return true;
+  if (low.includes("security check to access")) return true;
+  if (low.includes("attention required")) return true;
+  return false;
+}
+
+function pbrProxyTemplateUrls() {
+  return String(process.env.RESIDENTIAL_PROXY_TEMPLATE_URLS || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function pbrFetchCandidateUrls(targetUrl: string) {
+  const urls: string[] = [targetUrl];
+  pbrProxyTemplateUrls().forEach((template) => {
+    if (!template) return;
+    if (template.includes("{url}")) {
+      urls.push(template.replace("{url}", encodeURIComponent(targetUrl)));
+      return;
+    }
+    urls.push(template);
+  });
+  return Array.from(new Set(urls));
+}
+
+async function fetchPbrHtmlWithProxyFallback(targetUrl: string, perAttemptTimeoutMs = 6500) {
+  for (const url of pbrFetchCandidateUrls(targetUrl)) {
+    const res = await withTimeout(fetch(url, {
+      cache: "no-store",
+      headers: {
+        "User-Agent": PBR_FETCH_USER_AGENT,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Cache-Control": "no-cache"
+      }
+    }).catch(() => null), perAttemptTimeoutMs);
+    if (!res) continue;
+    const html = await res.text().catch(() => "");
+    if (!res.ok) continue;
+    if (pbrHtmlLooksBlocked(res.status, html)) continue;
+    if (!cleanText(html)) continue;
+    return html;
+  }
+  return "";
+}
+
 const PBR_EVENT_HINT_CACHE_TTL_MS = 20 * 60 * 1000;
 
 type PbrEventHintCacheEntry = {
@@ -384,6 +439,33 @@ function parsePbrTeamsFromPayload(payloads: Array<Record<string, unknown> | null
   return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function parsePbrTeamsFromScheduleHtml(html: string) {
+  const out = new Map<string, ParticipatingTeam>();
+  const links = [...html.matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)];
+  links.forEach((link) => {
+    const href = toAbsolutePbrUrl(link[1] || "");
+    if (!/\/team\/details\/\d+\//i.test(href) && !/#([a-f0-9-]{8,})/i.test(href)) return;
+    const name = cleanText(link[2] || "");
+    if (!name || /register|login|account|schedule|teams/i.test(name.toLowerCase())) return;
+    const uuid = cleanText(
+      href.match(/\/team\/details\/\d+\/([a-f0-9-]{8,})/i)?.[1]
+      || href.match(/#([a-f0-9-]{8,})/i)?.[1]
+      || ""
+    );
+    const id = uuid ? `pbr-team-${uuid}` : `pbr-team-${slugify(name)}`;
+    const key = (id || "").toLowerCase() || (href || "").toLowerCase() || `name:${normalizeTeam(name)}`;
+    if (!key || out.has(key)) return;
+    out.set(key, {
+      id,
+      name,
+      from: "",
+      record: "",
+      href: href || undefined
+    });
+  });
+  return Array.from(out.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function parsePbrTeamsFromTeamsHtml(html: string) {
   const out = new Map<string, ParticipatingTeam>();
   const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((match) => match[1]);
@@ -535,6 +617,79 @@ function parsePbrGamesFromPayload(payloads: Array<Record<string, unknown> | null
   return Array.from(map.values()).sort((a, b) => a.startTime.localeCompare(b.startTime));
 }
 
+function parsePbrGamesFromScheduleHtml(html: string) {
+  const out: Array<Game & Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((match) => match[1]);
+
+  rows.forEach((row, index) => {
+    const links = [...row.matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)]
+      .map((link) => ({
+        href: toAbsolutePbrUrl(link[1] || ""),
+        name: cleanText(link[2] || "")
+      }))
+      .filter((item) => item.name && /\/team\/details\/\d+\//i.test(item.href));
+    if (links.length < 2) return;
+
+    const homeTeam = cleanText(links[0]?.name || "");
+    const awayTeam = cleanText(links[1]?.name || "");
+    if (!homeTeam || !awayTeam) return;
+
+    const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((cell) => cleanText(cell[1] || ""));
+    const dateLabel = cleanText(
+      row.match(/\b(\d{1,2}\/\d{1,2}\/\d{4})\b/i)?.[1]
+      || cells.find((cell) => /\d{1,2}\/\d{1,2}\/\d{4}/.test(cell))
+      || ""
+    );
+    const timeLabel = cleanText(
+      row.match(/\b(\d{1,2}:\d{2}\s*[AP]M)\b/i)?.[1]
+      || cells.find((cell) => /\d{1,2}:\d{2}\s*[AP]M/i.test(cell))
+      || ""
+    );
+    const field = cleanText(
+      cells.find((cell) => /(field|park|complex|stadium|academy|ballpark|sportsplex|site\s+\d+)/i.test(cell))
+      || "Field TBD"
+    );
+    const gameNo = cleanText(
+      row.match(/\bgame(?:\s*id)?\s*[:#]?\s*(\d{3,})\b/i)?.[1]
+      || ""
+    );
+
+    const isoDate = toIsoDate(dateLabel) || new Date().toISOString().slice(0, 10);
+    let startTime = `${isoDate}T09:00:00.000Z`;
+    const ampm = timeLabel.match(/^(\d{1,2}):(\d{2})\s*([AP]M)$/i);
+    if (ampm) {
+      let hour = Number(ampm[1]);
+      const min = Number(ampm[2]);
+      if (ampm[3].toUpperCase() === "PM" && hour < 12) hour += 12;
+      if (ampm[3].toUpperCase() === "AM" && hour === 12) hour = 0;
+      startTime = `${isoDate}T${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}:00.000Z`;
+    }
+
+    const dedupeKey = [
+      startTime,
+      normalizeTeam(homeTeam),
+      normalizeTeam(awayTeam),
+      field.toLowerCase(),
+      gameNo
+    ].join("|");
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+
+    out.push({
+      id: gameNo ? `pbr-game-${gameNo}` : `pbr-game-${slugify(`${homeTeam}-${awayTeam}-${index + 1}`)}`,
+      field: field || "Field TBD",
+      fieldLocation: { x: 0, y: 0 },
+      startTime,
+      homeTeam,
+      awayTeam,
+      players: []
+    });
+  });
+
+  return out.sort((a, b) => a.startTime.localeCompare(b.startTime));
+}
+
 async function resolvePbrTournamentHint(input: {
   inventorySlug: string;
   tournamentHint: string;
@@ -579,21 +734,13 @@ async function resolvePbrTournamentHint(input: {
     candidateSlugs.add(nameSlug.replace(/-\d{2}-\d{2}-\d{4}-\d{2}-\d{2}-\d{4}$/i, ""));
   }
 
-  const userAgent =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
   for (const slug of candidateSlugs) {
     const cleanSlug = String(slug || "").replace(/^-+|-+$/g, "");
     if (!cleanSlug) continue;
     const eventBase = `https://tournaments.prepbaseballreport.com/events/${cleanSlug}`;
     const teamsUrl = `${eventBase}/teams`;
-    const probe = await withTimeout(fetch(teamsUrl, {
-      cache: "no-store",
-      headers: {
-        "User-Agent": userAgent,
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-      }
-    }).catch(() => null), 5000);
-    if (probe && probe.ok) {
+    const probeHtml = await fetchPbrHtmlWithProxyFallback(teamsUrl, 5000);
+    if (probeHtml) {
       writeCachedPbrEventHint(cacheKeys, eventBase);
       return eventBase;
     }
@@ -634,16 +781,8 @@ async function buildPbrLiveTournament(input: {
   if (!eventBase) return null;
 
   const scheduleAllUrl = `${eventBase}/schedule/all`;
-  const scheduleRes = await fetch(scheduleAllUrl, {
-    cache: "no-store",
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    }
-  }).catch(() => null);
-  if (!scheduleRes || !scheduleRes.ok) return null;
-  const scheduleHtml = await scheduleRes.text();
+  const scheduleHtml = await fetchPbrHtmlWithProxyFallback(scheduleAllUrl, 7000);
+  if (!scheduleHtml) return null;
   const context = parsePbrScheduleContext(scheduleHtml, scheduleAllUrl);
 
   const payloads: Array<Record<string, unknown> | null> = [];
@@ -688,19 +827,17 @@ async function buildPbrLiveTournament(input: {
     }
   }
 
-  const teamsRes = await fetch(`${eventBase}/teams`, {
-    cache: "no-store",
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    }
-  }).catch(() => null);
-  const teamsHtml = teamsRes && teamsRes.ok ? await teamsRes.text() : "";
+  const teamsHtml = await fetchPbrHtmlWithProxyFallback(`${eventBase}/teams`, 6500);
 
+  const teamsFromSchedule = scheduleHtml ? parsePbrTeamsFromScheduleHtml(scheduleHtml) : [];
   const teamsFromHtml = teamsHtml ? parsePbrTeamsFromTeamsHtml(teamsHtml) : [];
-  const teams = teamsFromHtml.length ? teamsFromHtml : parsePbrTeamsFromPayload(payloads);
-  const games = parsePbrGamesFromPayload(payloads);
+  const teamsFromPayload = parsePbrTeamsFromPayload(payloads);
+  const teams = teamsFromHtml.length
+    ? teamsFromHtml
+    : (teamsFromPayload.length ? teamsFromPayload : teamsFromSchedule);
+
+  const gamesFromPayload = parsePbrGamesFromPayload(payloads);
+  const games = gamesFromPayload.length ? gamesFromPayload : parsePbrGamesFromScheduleHtml(scheduleHtml);
 
   const name = cleanText(
     scheduleHtml.match(/<meta itemprop="name" content="([^"]+)"/i)?.[1]
@@ -797,7 +934,10 @@ export async function POST(req: NextRequest) {
   try {
     const dataMode = (process.env.BIRD_DOG_DATA_MODE || "imported").toLowerCase();
     const allowLiveScrape = process.env.BIRD_DOG_ALLOW_PG_LIVE_SCRAPE === "true";
-    const liveScrapeTimeoutMs = 9000;
+    const liveScrapeTimeoutRaw = Number(String(process.env.BIRD_DOG_OPEN_LIVE_TIMEOUT_MS || "").trim());
+    const liveScrapeTimeoutMs = Number.isFinite(liveScrapeTimeoutRaw)
+      ? Math.max(3000, Math.min(30000, Math.trunc(liveScrapeTimeoutRaw)))
+      : 14000;
     const enableLivePreferredOpen = process.env.BIRD_DOG_ENABLE_LIVE_PREFERRED_OPEN === "true";
     const liveCacheKey = `${session.orgId}:${company}:${inventorySlug}`;
 
