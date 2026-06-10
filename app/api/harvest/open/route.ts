@@ -876,16 +876,20 @@ export async function POST(req: NextRequest) {
         writeCachedLiveTournament(liveCacheKey, "pg_live_preferred", liveTournament);
         return liveTournament;
       }
-      const dbId = await upsertHarvestedTournament({
+      writeCachedLiveTournament(liveCacheKey, "pg_live_preferred", liveTournament);
+      void upsertHarvestedTournament({
         orgId: session.orgId,
         company,
         tournament: liveTournament
-      }).catch(() => "");
-      if (!dbId) return liveTournament;
-      const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
-      const next = hydrated || liveTournament;
-      writeCachedLiveTournament(liveCacheKey, "pg_live_preferred", next);
-      return next;
+      })
+        .then(async (dbId) => {
+          if (!dbId) return;
+          const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
+          const next = hydrated || liveTournament;
+          writeCachedLiveTournament(liveCacheKey, "pg_live_preferred", next);
+        })
+        .catch(() => {});
+      return liveTournament;
     };
 
     const liveFirstPbr = async () => {
@@ -907,16 +911,20 @@ export async function POST(req: NextRequest) {
         writeCachedLiveTournament(liveCacheKey, "pbr_live_preferred", liveTournament);
         return liveTournament;
       }
-      const dbId = await upsertHarvestedTournament({
+      writeCachedLiveTournament(liveCacheKey, "pbr_live_preferred", liveTournament);
+      void upsertHarvestedTournament({
         orgId: session.orgId,
         company,
         tournament: liveTournament
-      }).catch(() => "");
-      if (!dbId) return liveTournament;
-      const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
-      const next = hydrated || liveTournament;
-      writeCachedLiveTournament(liveCacheKey, "pbr_live_preferred", next);
-      return next;
+      })
+        .then(async (dbId) => {
+          if (!dbId) return;
+          const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
+          const next = hydrated || liveTournament;
+          writeCachedLiveTournament(liveCacheKey, "pbr_live_preferred", next);
+        })
+        .catch(() => {});
+      return liveTournament;
     };
 
     if (dataMode !== "live" || !allowLiveScrape) {
