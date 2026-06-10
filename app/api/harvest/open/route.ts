@@ -814,7 +814,6 @@ export async function POST(req: NextRequest) {
 
     const shouldRefreshImportedSnapshot = (existingTeamCount: number) => {
       if (existingTeamCount === 0) return true;
-      if (company === "PG" && isArchive && existingTeamCount > 0 && existingTeamCount <= 120) return true;
       return false;
     };
     const shouldForceLiveRefresh = process.env.BIRD_DOG_FORCE_LIVE_REFRESH_ON_OPEN === "true";
