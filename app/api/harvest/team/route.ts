@@ -1332,21 +1332,13 @@ async function resolvePbrEventHint(input: {
     candidateSlugs.add(`${slugifyText(rawInventorySlug.replace(/-\d{4}-\d{2}-\d{2}$/i, ""))}-${citySlug}`);
   }
 
-  const userAgent =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
   for (const slug of candidateSlugs) {
     const cleanSlug = String(slug || "").replace(/^-+|-+$/g, "");
     if (!cleanSlug) continue;
     const eventBase = `https://tournaments.prepbaseballreport.com/events/${cleanSlug}`;
     const teamsUrl = `${eventBase}/teams`;
-    const probe = await withTimeout(fetch(teamsUrl, {
-      cache: "no-store",
-      headers: {
-        "User-Agent": userAgent,
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-      }
-    }).catch(() => null), 5000);
-    if (probe && probe.ok) {
+    const probeHtml = await fetchPbrHtmlWithProxyFallback(teamsUrl, 5000);
+    if (probeHtml) {
       writeCachedPbrEventHint(cacheKeys, eventBase);
       return eventBase;
     }
