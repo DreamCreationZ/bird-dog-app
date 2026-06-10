@@ -53,9 +53,32 @@ function serviceKey() {
   return required("SUPABASE_SERVICE_ROLE_KEY");
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableStatus(status) {
+  return status === 408
+    || status === 425
+    || status === 429
+    || status === 500
+    || status === 502
+    || status === 503
+    || status === 504;
+}
+
+function isPgrstSchemaCacheError(text) {
+  const raw = String(text || "");
+  if (!raw) return false;
+  if (/PGRST002/i.test(raw)) return true;
+  return /schema cache/i.test(raw);
+}
+
 export async function supabaseRequest(pathname, options = {}) {
   const method = options.method || "GET";
   const url = new URL(`${baseUrl()}/rest/${API_VERSION}/${pathname}`);
+  const timeoutMs = Number.parseInt(process.env.SUPABASE_REQUEST_TIMEOUT_MS || "12000", 10);
+  const maxRetries = Math.max(0, Number.parseInt(process.env.SUPABASE_REQUEST_MAX_RETRIES || "4", 10) || 0);
 
   if (options.query) {
     for (const [key, value] of Object.entries(options.query)) {
@@ -73,27 +96,62 @@ export async function supabaseRequest(pathname, options = {}) {
     headers.Prefer = options.prefer;
   }
 
-  const response = await fetch(url.toString(), {
-    method,
-    headers,
-    body: options.body ? JSON.stringify(options.body) : undefined
-  });
+  let lastError = null;
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Supabase ${method} ${pathname} failed (${response.status}): ${text}`);
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) ? timeoutMs : 12000);
+    try {
+      const response = await fetch(url.toString(), {
+        method,
+        headers,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        const statusRetryable = isRetryableStatus(response.status);
+        const schemaCacheRetryable = response.status === 503 && isPgrstSchemaCacheError(text);
+        if (attempt < maxRetries && (statusRetryable || schemaCacheRetryable)) {
+          await wait(Math.min(250 * (attempt + 1), 1200));
+          continue;
+        }
+        throw new Error(`Supabase ${method} ${pathname} failed (${response.status}): ${text}`);
+      }
+
+      if (response.status === 204) return null;
+
+      const payload = await response.text();
+      if (!payload || !payload.trim()) {
+        return null;
+      }
+
+      try {
+        return JSON.parse(payload);
+      } catch {
+        throw new Error(`Supabase ${method} ${pathname} returned invalid JSON payload.`);
+      }
+    } catch (error) {
+      const abortErr = error instanceof Error && error.name === "AbortError";
+      const isNetworkErr = error instanceof Error
+        && /fetch failed|network|ENOTFOUND|ECONNRESET|ETIMEDOUT|socket/i.test(error.message);
+      const canRetryWrite = method === "GET" || method === "DELETE";
+      const retryableThrown = abortErr || isNetworkErr;
+      if (attempt < maxRetries && retryableThrown && canRetryWrite) {
+        await wait(Math.min(250 * (attempt + 1), 1200));
+        continue;
+      }
+      if (abortErr) {
+        lastError = new Error(`Supabase ${method} ${pathname} timed out after ${timeoutMs}ms`);
+      } else {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+      break;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
-  if (response.status === 204) return null;
-
-  const payload = await response.text();
-  if (!payload || !payload.trim()) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(payload);
-  } catch {
-    throw new Error(`Supabase ${method} ${pathname} returned invalid JSON payload.`);
-  }
+  throw lastError || new Error(`Supabase ${method} ${pathname} failed`);
 }
