@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cleanupPastCoachSchedules, deleteCoachScheduleForUser, listCoachSchedules, upsertCoachSchedule } from "@/lib/birddog/repository";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
+import { readFile, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 
 type ScheduleScopeInput = {
   company?: string;
@@ -24,6 +26,8 @@ type ScopeMeta = {
   scopes: Record<string, ScopeSnapshot>;
 };
 
+type ScheduleRow = Awaited<ReturnType<typeof listCoachSchedules>>[number];
+
 type DesiredPlayerSnapshot = {
   playerId: string;
   selectionKey?: string;
@@ -39,8 +43,168 @@ type DesiredPlayerSnapshot = {
   sourceGameField?: string;
 };
 
+type GeneratedPlanSnapshot = {
+  at: string;
+  title: string;
+  detail: string;
+};
+
 const SCOPE_META_OPEN = "[[BD_SCOPE_META_V1]]";
 const SCOPE_META_CLOSE = "[[/BD_SCOPE_META_V1]]";
+const DEGRADED_SCHEDULE_STORE_PATH = "/tmp/bird_dog_degraded_schedules.json";
+
+function withTimeout<T>(task: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let settled = false;
+  return new Promise<T | null>((resolve) => {
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
+    }, timeoutMs);
+    task
+      .then((value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      });
+  });
+}
+
+function latestScheduleAtMsLocal(schedule: Pick<ScheduleRow, "generated_plan" | "flight_arrival_time">) {
+  const planTimes = Array.isArray(schedule.generated_plan)
+    ? schedule.generated_plan
+      .map((step) => Date.parse(String((step as { at?: unknown })?.at || "")))
+      .filter((value) => Number.isFinite(value))
+    : [];
+  if (planTimes.length) return Math.max(...planTimes);
+  const flightAt = Date.parse(String(schedule.flight_arrival_time || ""));
+  if (Number.isFinite(flightAt)) return flightAt;
+  return NaN;
+}
+
+function normalizeDegradedScheduleRow(value: unknown): ScheduleRow | null {
+  if (!value || typeof value !== "object") return null;
+  const row = value as Record<string, unknown>;
+  const id = String(row.id || "").trim();
+  const orgId = String(row.org_id || "").trim();
+  const userId = String(row.user_id || "").trim();
+  if (!id || !orgId || !userId) return null;
+  const createdAt = String(row.created_at || "").trim() || new Date().toISOString();
+  const updatedAt = String(row.updated_at || "").trim() || createdAt;
+  return {
+    id,
+    org_id: orgId,
+    user_id: userId,
+    coach_name: String(row.coach_name || "").trim() || "Coach",
+    coach_email: row.coach_email ? String(row.coach_email) : null,
+    flight_source: row.flight_source ? String(row.flight_source) : null,
+    flight_destination: row.flight_destination ? String(row.flight_destination) : null,
+    flight_arrival_time: row.flight_arrival_time ? String(row.flight_arrival_time) : null,
+    hotel_name: row.hotel_name ? String(row.hotel_name) : null,
+    notes: row.notes ? String(row.notes) : null,
+    desired_players: sanitizeDesiredPlayers(row.desired_players),
+    generated_plan: Array.isArray(row.generated_plan) ? row.generated_plan : [],
+    created_at: createdAt,
+    updated_at: updatedAt
+  };
+}
+
+async function readDegradedScheduleStore(): Promise<ScheduleRow[]> {
+  try {
+    const raw = await readFile(DEGRADED_SCHEDULE_STORE_PATH, "utf8");
+    const parsed = JSON.parse(raw) as { rows?: unknown };
+    const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
+    return rows
+      .map((item) => normalizeDegradedScheduleRow(item))
+      .filter((item): item is ScheduleRow => Boolean(item))
+      .sort((left, right) =>
+        Date.parse(String(right.updated_at || "")) - Date.parse(String(left.updated_at || ""))
+      );
+  } catch {
+    return [];
+  }
+}
+
+async function writeDegradedScheduleStore(rows: ScheduleRow[]) {
+  const payload = JSON.stringify({ rows }, null, 2);
+  const tmp = `${DEGRADED_SCHEDULE_STORE_PATH}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    await writeFile(tmp, payload, "utf8");
+    await rename(tmp, DEGRADED_SCHEDULE_STORE_PATH);
+  } catch {
+    await writeFile(DEGRADED_SCHEDULE_STORE_PATH, payload, "utf8").catch(() => undefined);
+  }
+}
+
+async function listDegradedCoachSchedules(orgId: string): Promise<ScheduleRow[]> {
+  const rows = await readDegradedScheduleStore();
+  return rows
+    .filter((row) => row.org_id === orgId)
+    .sort((left, right) =>
+      Date.parse(String(right.updated_at || "")) - Date.parse(String(left.updated_at || ""))
+    );
+}
+
+async function cleanupPastDegradedCoachSchedules(orgId: string) {
+  const nowMs = Date.now();
+  const rows = await readDegradedScheduleStore();
+  const next = rows.filter((row) => {
+    if (row.org_id !== orgId) return true;
+    const latestAt = latestScheduleAtMsLocal(row);
+    if (Number.isFinite(latestAt) && latestAt < nowMs) return false;
+    return true;
+  });
+  if (next.length !== rows.length) {
+    await writeDegradedScheduleStore(next);
+  }
+}
+
+async function upsertDegradedCoachSchedule(input: {
+  orgId: string;
+  userId: string;
+  coachName: string;
+  coachEmail: string;
+  snapshot: ScopeSnapshot;
+  persistedNotes: string | null;
+}) {
+  const rows = await readDegradedScheduleStore();
+  const nowIso = new Date().toISOString();
+  const existing = rows.find((row) => row.org_id === input.orgId && row.user_id === input.userId) || null;
+  const nextRow: ScheduleRow = {
+    id: existing?.id || randomUUID(),
+    org_id: input.orgId,
+    user_id: input.userId,
+    coach_name: input.coachName || existing?.coach_name || "Coach",
+    coach_email: input.coachEmail || existing?.coach_email || null,
+    flight_source: input.snapshot.flight_source,
+    flight_destination: input.snapshot.flight_destination,
+    flight_arrival_time: input.snapshot.flight_arrival_time,
+    hotel_name: input.snapshot.hotel_name,
+    notes: input.persistedNotes,
+    desired_players: sanitizeDesiredPlayers(input.snapshot.desired_players),
+    generated_plan: sanitizeGeneratedPlan(input.snapshot.generated_plan),
+    created_at: existing?.created_at || nowIso,
+    updated_at: input.snapshot.updated_at || nowIso
+  };
+  const kept = rows.filter((row) => !(row.org_id === input.orgId && row.user_id === input.userId));
+  kept.push(nextRow);
+  await writeDegradedScheduleStore(kept);
+}
+
+async function deleteDegradedCoachScheduleForUser(orgId: string, userId: string) {
+  const rows = await readDegradedScheduleStore();
+  const next = rows.filter((row) => !(row.org_id === orgId && row.user_id === userId));
+  if (next.length !== rows.length) {
+    await writeDegradedScheduleStore(next);
+  }
+}
 
 function domainFromEmail(email: string | null | undefined) {
   const clean = String(email || "").trim().toLowerCase();
@@ -189,6 +353,21 @@ function sanitizeDesiredPlayers(input: unknown): DesiredPlayerSnapshot[] {
   return Array.from(deduped.values());
 }
 
+function sanitizeGeneratedPlan(input: unknown): GeneratedPlanSnapshot[] {
+  const rows = Array.isArray(input) ? input : [];
+  const normalized: GeneratedPlanSnapshot[] = [];
+  rows.forEach((item) => {
+    if (!item || typeof item !== "object") return;
+    const row = item as Record<string, unknown>;
+    const at = String(row.at || "").trim();
+    const title = String(row.title || "").trim();
+    const detail = String(row.detail || "").trim();
+    if (!at || !title || !detail) return;
+    normalized.push({ at, title, detail });
+  });
+  return normalized;
+}
+
 function scopeKeyFromInput(input: ScheduleScopeInput) {
   const company = normalizeScopePart(input.company || "");
   if (company === "-") return "";
@@ -213,7 +392,7 @@ function normalizeScopeSnapshot(value: unknown): ScopeSnapshot | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
   const desiredPlayers = sanitizeDesiredPlayers(row.desired_players);
-  const generatedPlan = Array.isArray(row.generated_plan) ? row.generated_plan : [];
+  const generatedPlan = sanitizeGeneratedPlan(row.generated_plan);
   const updatedAtRaw = String(row.updated_at || "").trim();
   return {
     flight_source: row.flight_source ? String(row.flight_source) : null,
@@ -297,7 +476,7 @@ function snapshotFromBody(body: Record<string, unknown>): ScopeSnapshot {
     hotel_name: body?.hotelName ? String(body.hotelName).trim() || null : null,
     notes: body?.notes ? String(body.notes) : null,
     desired_players: sanitizeDesiredPlayers(body?.desiredPlayers),
-    generated_plan: Array.isArray(body?.generatedPlan) ? body.generatedPlan : [],
+    generated_plan: sanitizeGeneratedPlan(body?.generatedPlan),
     updated_at: new Date().toISOString()
   };
 }
@@ -310,7 +489,7 @@ function snapshotFromScheduleRow(row: Awaited<ReturnType<typeof listCoachSchedul
     hotel_name: row.hotel_name || null,
     notes: row.notes || null,
     desired_players: sanitizeDesiredPlayers(row.desired_players),
-    generated_plan: Array.isArray(row.generated_plan) ? row.generated_plan : [],
+    generated_plan: sanitizeGeneratedPlan(row.generated_plan),
     updated_at: row.updated_at || new Date().toISOString()
   };
 }
@@ -411,10 +590,22 @@ export async function GET(req: NextRequest) {
   const scopeKey = scopeKeyFromRequest(req);
 
   try {
-    await cleanupPastCoachSchedules(session.orgId);
-    const schedules = await listCoachSchedules(session.orgId);
-    const scoped = scopedSchedules(schedules, scopeKey);
-    return NextResponse.json({ schedules: sameDomainSchedulesOnly(session.email, session.userId, scoped) });
+    const cloudSchedules = await withTimeout((async () => {
+      await cleanupPastCoachSchedules(session.orgId);
+      return await listCoachSchedules(session.orgId);
+    })(), 6000);
+    if (Array.isArray(cloudSchedules)) {
+      const scoped = scopedSchedules(cloudSchedules, scopeKey);
+      return NextResponse.json({ schedules: sameDomainSchedulesOnly(session.email, session.userId, scoped) });
+    }
+    await cleanupPastDegradedCoachSchedules(session.orgId);
+    const degradedSchedules = await listDegradedCoachSchedules(session.orgId);
+    const scoped = scopedSchedules(degradedSchedules, scopeKey);
+    return NextResponse.json({
+      schedules: sameDomainSchedulesOnly(session.email, session.userId, scoped),
+      degraded: true,
+      warning: "Cloud schedule sync is unavailable. Showing degraded schedule cache."
+    });
   } catch (error) {
     return NextResponse.json({ error: "Failed to load schedules", detail: String(error) }, { status: 500 });
   }
@@ -430,12 +621,49 @@ export async function POST(req: NextRequest) {
   const scopeKey = scopeKeyFromRequest(req, body);
 
   try {
-    await cleanupPastCoachSchedules(session.orgId);
-    const schedules = await listCoachSchedules(session.orgId);
-    const existing = schedules.find((item) => item.user_id === session.userId) || null;
+    const cloudResult = await withTimeout((async () => {
+      await cleanupPastCoachSchedules(session.orgId);
+      const schedules = await listCoachSchedules(session.orgId);
+      const existing = schedules.find((item) => item.user_id === session.userId) || null;
+      const existingParsed = existing ? readScopeMetaFromNotes(existing.notes) : { userNote: "", meta: { activeScope: "", scopes: {} as Record<string, ScopeSnapshot> } };
+      const nextSnapshot = snapshotFromBody(body);
+
+      const nextMeta: ScopeMeta = {
+        activeScope: scopeKey || existingParsed.meta.activeScope || scopeByMostRecent(existingParsed.meta),
+        scopes: { ...existingParsed.meta.scopes }
+      };
+      if (scopeKey) {
+        nextMeta.scopes[scopeKey] = nextSnapshot;
+        nextMeta.activeScope = scopeKey;
+      }
+
+      const persistedNotes = writeScopeMetaToNotes(nextSnapshot.notes, nextMeta);
+      await upsertCoachSchedule({
+        orgId: session.orgId,
+        userId: session.userId,
+        coachName: session.name,
+        flightSource: nextSnapshot.flight_source || undefined,
+        flightDestination: nextSnapshot.flight_destination || undefined,
+        flightArrivalTime: nextSnapshot.flight_arrival_time || undefined,
+        hotelName: nextSnapshot.hotel_name || undefined,
+        notes: persistedNotes || undefined,
+        desiredPlayers: nextSnapshot.desired_players as Array<{ playerId: string; name: string; team: string }>,
+        generatedPlan: nextSnapshot.generated_plan as Array<{ at: string; title: string; detail: string }>
+      });
+
+      const nextSchedules = await listCoachSchedules(session.orgId);
+      const scoped = scopedSchedules(nextSchedules, scopeKey);
+      return sameDomainSchedulesOnly(session.email, session.userId, scoped);
+    })(), 7000);
+    if (Array.isArray(cloudResult)) {
+      return NextResponse.json({ ok: true, schedules: cloudResult });
+    }
+
+    await cleanupPastDegradedCoachSchedules(session.orgId);
+    const degradedSchedules = await listDegradedCoachSchedules(session.orgId);
+    const existing = degradedSchedules.find((item) => item.user_id === session.userId) || null;
     const existingParsed = existing ? readScopeMetaFromNotes(existing.notes) : { userNote: "", meta: { activeScope: "", scopes: {} as Record<string, ScopeSnapshot> } };
     const nextSnapshot = snapshotFromBody(body);
-
     const nextMeta: ScopeMeta = {
       activeScope: scopeKey || existingParsed.meta.activeScope || scopeByMostRecent(existingParsed.meta),
       scopes: { ...existingParsed.meta.scopes }
@@ -444,24 +672,23 @@ export async function POST(req: NextRequest) {
       nextMeta.scopes[scopeKey] = nextSnapshot;
       nextMeta.activeScope = scopeKey;
     }
-
     const persistedNotes = writeScopeMetaToNotes(nextSnapshot.notes, nextMeta);
-    await upsertCoachSchedule({
+    await upsertDegradedCoachSchedule({
       orgId: session.orgId,
       userId: session.userId,
       coachName: session.name,
-      flightSource: nextSnapshot.flight_source || undefined,
-      flightDestination: nextSnapshot.flight_destination || undefined,
-      flightArrivalTime: nextSnapshot.flight_arrival_time || undefined,
-      hotelName: nextSnapshot.hotel_name || undefined,
-      notes: persistedNotes || undefined,
-      desiredPlayers: nextSnapshot.desired_players as Array<{ playerId: string; name: string; team: string }>,
-      generatedPlan: nextSnapshot.generated_plan as Array<{ at: string; title: string; detail: string }>
+      coachEmail: session.email,
+      snapshot: nextSnapshot,
+      persistedNotes
     });
-
-    const nextSchedules = await listCoachSchedules(session.orgId);
+    const nextSchedules = await listDegradedCoachSchedules(session.orgId);
     const scoped = scopedSchedules(nextSchedules, scopeKey);
-    return NextResponse.json({ ok: true, schedules: sameDomainSchedulesOnly(session.email, session.userId, scoped) });
+    return NextResponse.json({
+      ok: true,
+      degraded: true,
+      warning: "Cloud schedule sync is unavailable. Saved using degraded schedule cache.",
+      schedules: sameDomainSchedulesOnly(session.email, session.userId, scoped)
+    });
   } catch (error) {
     return NextResponse.json({ error: "Failed to save schedule", detail: String(error) }, { status: 500 });
   }
@@ -475,26 +702,81 @@ export async function DELETE(req: NextRequest) {
   const scopeKey = scopeKeyFromRequest(req);
 
   try {
-    await cleanupPastCoachSchedules(session.orgId);
-    const schedules = await listCoachSchedules(session.orgId);
+    const cloudResult = await withTimeout((async () => {
+      await cleanupPastCoachSchedules(session.orgId);
+      const schedules = await listCoachSchedules(session.orgId);
+      const mine = schedules.find((item) => item.user_id === session.userId) || null;
+      if (!mine) {
+        return [] as ScheduleRow[];
+      }
+
+      if (!scopeKey) {
+        await deleteCoachScheduleForUser(session.orgId, session.userId);
+      } else {
+        const parsed = readScopeMetaFromNotes(mine.notes);
+        const hasScopedData = Object.keys(parsed.meta.scopes).length > 0;
+        if (!hasScopedData) {
+          await deleteCoachScheduleForUser(session.orgId, session.userId);
+        } else {
+          const nextScopes = { ...parsed.meta.scopes };
+          delete nextScopes[scopeKey];
+          const remainingKeys = Object.keys(nextScopes);
+          if (!remainingKeys.length) {
+            await deleteCoachScheduleForUser(session.orgId, session.userId);
+          } else {
+            const activeScope = nextScopes[parsed.meta.activeScope]
+              ? parsed.meta.activeScope
+              : scopeByMostRecent({ activeScope: "", scopes: nextScopes });
+            const activeSnapshot = nextScopes[activeScope] || snapshotFromScheduleRow(mine);
+            const nextNotes = writeScopeMetaToNotes(activeSnapshot.notes, {
+              activeScope,
+              scopes: nextScopes
+            });
+            await upsertCoachSchedule({
+              orgId: session.orgId,
+              userId: session.userId,
+              coachName: mine.coach_name || session.name,
+              flightSource: activeSnapshot.flight_source || undefined,
+              flightDestination: activeSnapshot.flight_destination || undefined,
+              flightArrivalTime: activeSnapshot.flight_arrival_time || undefined,
+              hotelName: activeSnapshot.hotel_name || undefined,
+              notes: nextNotes || undefined,
+              desiredPlayers: activeSnapshot.desired_players as Array<{ playerId: string; name: string; team: string }>,
+              generatedPlan: activeSnapshot.generated_plan as Array<{ at: string; title: string; detail: string }>
+            });
+          }
+        }
+      }
+
+      await cleanupPastCoachSchedules(session.orgId);
+      const nextSchedules = await listCoachSchedules(session.orgId);
+      const scoped = scopedSchedules(nextSchedules, scopeKey);
+      return sameDomainSchedulesOnly(session.email, session.userId, scoped);
+    })(), 7000);
+    if (Array.isArray(cloudResult)) {
+      return NextResponse.json({ ok: true, schedules: cloudResult });
+    }
+
+    await cleanupPastDegradedCoachSchedules(session.orgId);
+    const schedules = await listDegradedCoachSchedules(session.orgId);
     const mine = schedules.find((item) => item.user_id === session.userId) || null;
     if (!mine) {
-      return NextResponse.json({ ok: true, schedules: [] });
+      return NextResponse.json({ ok: true, degraded: true, schedules: [] });
     }
 
     if (!scopeKey) {
-      await deleteCoachScheduleForUser(session.orgId, session.userId);
+      await deleteDegradedCoachScheduleForUser(session.orgId, session.userId);
     } else {
       const parsed = readScopeMetaFromNotes(mine.notes);
       const hasScopedData = Object.keys(parsed.meta.scopes).length > 0;
       if (!hasScopedData) {
-        await deleteCoachScheduleForUser(session.orgId, session.userId);
+        await deleteDegradedCoachScheduleForUser(session.orgId, session.userId);
       } else {
         const nextScopes = { ...parsed.meta.scopes };
         delete nextScopes[scopeKey];
         const remainingKeys = Object.keys(nextScopes);
         if (!remainingKeys.length) {
-          await deleteCoachScheduleForUser(session.orgId, session.userId);
+          await deleteDegradedCoachScheduleForUser(session.orgId, session.userId);
         } else {
           const activeScope = nextScopes[parsed.meta.activeScope]
             ? parsed.meta.activeScope
@@ -504,26 +786,27 @@ export async function DELETE(req: NextRequest) {
             activeScope,
             scopes: nextScopes
           });
-          await upsertCoachSchedule({
+          await upsertDegradedCoachSchedule({
             orgId: session.orgId,
             userId: session.userId,
             coachName: mine.coach_name || session.name,
-            flightSource: activeSnapshot.flight_source || undefined,
-            flightDestination: activeSnapshot.flight_destination || undefined,
-            flightArrivalTime: activeSnapshot.flight_arrival_time || undefined,
-            hotelName: activeSnapshot.hotel_name || undefined,
-            notes: nextNotes || undefined,
-            desiredPlayers: activeSnapshot.desired_players as Array<{ playerId: string; name: string; team: string }>,
-            generatedPlan: activeSnapshot.generated_plan as Array<{ at: string; title: string; detail: string }>
+            coachEmail: session.email,
+            snapshot: activeSnapshot,
+            persistedNotes: nextNotes
           });
         }
       }
     }
 
-    await cleanupPastCoachSchedules(session.orgId);
-    const nextSchedules = await listCoachSchedules(session.orgId);
+    await cleanupPastDegradedCoachSchedules(session.orgId);
+    const nextSchedules = await listDegradedCoachSchedules(session.orgId);
     const scoped = scopedSchedules(nextSchedules, scopeKey);
-    return NextResponse.json({ ok: true, schedules: sameDomainSchedulesOnly(session.email, session.userId, scoped) });
+    return NextResponse.json({
+      ok: true,
+      degraded: true,
+      warning: "Cloud schedule sync is unavailable. Using degraded schedule cache.",
+      schedules: sameDomainSchedulesOnly(session.email, session.userId, scoped)
+    });
   } catch (error) {
     return NextResponse.json({ error: "Failed to delete schedule", detail: String(error) }, { status: 500 });
   }
