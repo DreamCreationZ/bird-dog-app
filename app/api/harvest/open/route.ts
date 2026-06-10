@@ -3,7 +3,7 @@ import { getHarvestedTournament, getHarvestedTournamentByExternalId, listCircuit
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { scrapePgTournamentLive } from "@/lib/birddog/pgScraper";
 import { INVENTORY_SEED, inventoryHarvestHint } from "@/lib/birddog/inventoryCatalog";
-import { isFreeTournamentAccess } from "@/lib/birddog/tournamentAccess";
+import { isPastTournament } from "@/lib/birddog/tournamentAccess";
 import { bestGroupedEventMatch, fetchPgGroupedEvents } from "@/lib/birddog/pgGroupedEvents";
 import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
 import { fetchPbrTournamentCatalog } from "@/lib/birddog/pbrTournamentCatalog";
@@ -783,11 +783,7 @@ export async function POST(req: NextRequest) {
     inventorySlug
   ].filter(Boolean) as string[];
   const isArchive = archiveCandidates.some((name) =>
-    isFreeTournamentAccess({
-      slug: inventorySlug,
-      name,
-      displayDate
-    })
+    isPastTournament({ name, displayDate })
   );
   if (isBlockedUnlockEmail) {
     return NextResponse.json({
