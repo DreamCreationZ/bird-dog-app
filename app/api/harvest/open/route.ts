@@ -993,13 +993,16 @@ export async function POST(req: NextRequest) {
           writeCachedLiveTournament(liveCacheKey, `${liveRefreshSourcePrefix}_live_refresh`, liveTournament);
           return liveTournament;
         }
-        const dbId = await upsertHarvestedTournament({
+        const dbId = (await withTimeout(upsertHarvestedTournament({
           orgId: session.orgId,
           company,
           tournament: liveTournament
-        }).catch(() => "");
+        }).catch(() => ""), 3500)) || "";
         if (!dbId) return liveTournament;
-        const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
+        const hydrated = await withTimeout(
+          getHarvestedTournament(session.orgId, dbId).catch(() => null),
+          3500
+        );
         const next = hydrated || liveTournament;
         writeCachedLiveTournament(liveCacheKey, `${liveRefreshSourcePrefix}_live_refresh`, next);
         return next;
@@ -1112,11 +1115,11 @@ export async function POST(req: NextRequest) {
       const allowBlockingRefresh = !livePreferredAttempted || !livePreferredFailed;
 
       if (hasSupabaseConfig) {
-        const tournamentByExternal = await getHarvestedTournamentByExternalId(
+        const tournamentByExternal = await withTimeout(getHarvestedTournamentByExternalId(
           session.orgId,
           company,
           inventorySlug
-        ).catch(() => null);
+        ).catch(() => null), 3500);
         if (tournamentByExternal) {
           const existingTeamCount = teamCount(tournamentByExternal.teams);
           const existingGameCount = teamCount(tournamentByExternal.games);
@@ -1139,7 +1142,10 @@ export async function POST(req: NextRequest) {
       }
 
       if (hasSupabaseConfig && tournamentId) {
-        const tournamentById = await getHarvestedTournament(session.orgId, tournamentId);
+        const tournamentById = await withTimeout(
+          getHarvestedTournament(session.orgId, tournamentId),
+          3500
+        );
         if (tournamentById) {
           const existingTeamCount = teamCount(tournamentById.teams);
           const existingGameCount = teamCount(tournamentById.games);
@@ -1162,7 +1168,11 @@ export async function POST(req: NextRequest) {
       }
 
       if (hasSupabaseConfig) {
-        const all = await listHarvestedTournaments(session.orgId, company).catch(() => []);
+        const allResult = await withTimeout(
+          listHarvestedTournaments(session.orgId, company).catch(() => []),
+          3500
+        );
+        const all = Array.isArray(allResult) ? allResult : [];
         const wantedList = [
           ...extractHintCandidates(tournamentHint),
           selected?.name || "",
@@ -1182,7 +1192,10 @@ export async function POST(req: NextRequest) {
           .find((item) => Boolean(item));
 
         if (found) {
-          const hydrated = await getHarvestedTournament(session.orgId, found.id).catch(() => null);
+          const hydrated = await withTimeout(
+            getHarvestedTournament(session.orgId, found.id).catch(() => null),
+            3500
+          );
           const existingTournament = hydrated || found;
           const existingTeamCount = teamCount(existingTournament?.teams);
           const existingGameCount = teamCount(existingTournament?.games);
@@ -1205,11 +1218,11 @@ export async function POST(req: NextRequest) {
       }
 
       if (company === "PBR") {
-        const livePbrRaw = await buildPbrLiveTournament({
+        const livePbrRaw = await withTimeout(buildPbrLiveTournament({
           inventorySlug,
           tournamentHint,
           preferredName: selected?.name || seedMeta?.name || ""
-        }).catch(() => null);
+        }).catch(() => null), liveScrapeTimeoutMs);
         const livePbr = livePbrRaw
           ? canonicalizeTournamentForInventory({
             tournament: livePbrRaw,
@@ -1220,12 +1233,14 @@ export async function POST(req: NextRequest) {
         if (livePbr) {
           if (hasSupabaseConfig) {
             try {
-              const dbId = await upsertHarvestedTournament({
+              const dbId = await withTimeout(upsertHarvestedTournament({
                 orgId: session.orgId,
                 company,
                 tournament: livePbr
-              });
-              const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
+              }), 3500);
+              const hydrated = dbId
+                ? await withTimeout(getHarvestedTournament(session.orgId, dbId).catch(() => null), 3500)
+                : null;
               return NextResponse.json({
                 ok: true,
                 tournament: hydrated || livePbr,
