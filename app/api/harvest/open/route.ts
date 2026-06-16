@@ -829,7 +829,8 @@ export async function POST(req: NextRequest) {
                 slug: inventorySlug,
                 name: preferredName,
                 company
-              })
+              }),
+              { skipTeamRosters: true }
             ),
           liveScrapeTimeoutMs
         );
@@ -862,7 +863,10 @@ export async function POST(req: NextRequest) {
 
     const liveFirstPg = async () => {
       if (company !== "PG") return null as Tournament | null;
-      const rawLiveTournament = await withTimeout(scrapePgTournamentLive(pgLiveHint), liveScrapeTimeoutMs);
+      const rawLiveTournament = await withTimeout(
+        scrapePgTournamentLive(pgLiveHint, { skipTeamRosters: true }),
+        liveScrapeTimeoutMs
+      );
       const liveTournament = rawLiveTournament
         ? canonicalizeTournamentForInventory({
           tournament: rawLiveTournament,
@@ -1095,7 +1099,7 @@ export async function POST(req: NextRequest) {
           company
         });
         try {
-          const scrapedRaw = await scrapePgTournamentLive(scrapeHint);
+          const scrapedRaw = await scrapePgTournamentLive(scrapeHint, { skipTeamRosters: true });
           const scrapedTournament = canonicalizeTournamentForInventory({
             tournament: scrapedRaw,
             inventorySlug,
@@ -1132,7 +1136,7 @@ export async function POST(req: NextRequest) {
           company
         });
         try {
-          const scrapedRaw = await scrapePgTournamentLive(scrapeHint);
+          const scrapedRaw = await scrapePgTournamentLive(scrapeHint, { skipTeamRosters: true });
           const scrapedTournament = canonicalizeTournamentForInventory({
             tournament: scrapedRaw,
             inventorySlug,
@@ -1162,7 +1166,10 @@ export async function POST(req: NextRequest) {
           company
         });
         try {
-          const scrapedRaw = await withTimeout(scrapePgTournamentLive(scrapeHint), liveScrapeTimeoutMs);
+          const scrapedRaw = await withTimeout(
+            scrapePgTournamentLive(scrapeHint, { skipTeamRosters: true }),
+            liveScrapeTimeoutMs
+          );
           const scrapedTournament = scrapedRaw
             ? canonicalizeTournamentForInventory({
               tournament: scrapedRaw,
@@ -1279,7 +1286,7 @@ export async function POST(req: NextRequest) {
       }, { status: 409 });
     }
 
-    const scrapedRaw = await scrapePgTournamentLive(pgLiveHint);
+    const scrapedRaw = await scrapePgTournamentLive(pgLiveHint, { skipTeamRosters: true });
     const scrapedTournament = canonicalizeTournamentForInventory({
       tournament: scrapedRaw,
       inventorySlug,

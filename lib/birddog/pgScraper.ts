@@ -581,7 +581,10 @@ function targetFromHint(hint: string) {
   return `https://www.perfectgame.org/search.aspx?search=${encoded}`;
 }
 
-export async function scrapePgTournamentLive(hint: string): Promise<Tournament> {
+export async function scrapePgTournamentLive(
+  hint: string,
+  options?: { skipTeamRosters?: boolean }
+): Promise<Tournament> {
   const initial = await fetchHtml(targetFromHint(hint));
   let html = initial.html;
   let target = initial.target;
@@ -617,7 +620,9 @@ export async function scrapePgTournamentLive(hint: string): Promise<Tournament> 
     }
   }
 
-  const teamPlayers = await enrichPlayersFromTeamPages(teams);
+  const teamPlayers = options?.skipTeamRosters
+    ? []
+    : await enrichPlayersFromTeamPages(teams);
 
   if (eventNum) {
     const scheduleGames = await buildTournamentGamesFromScoreboardPages({
