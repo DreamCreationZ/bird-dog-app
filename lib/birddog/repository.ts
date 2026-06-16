@@ -236,6 +236,91 @@ export type ScoutSharedNote = {
   observed_at: string;
 };
 
+type CoachScheduleWriteInput = {
+  orgId: string;
+  userId: string;
+  coachName: string;
+  flightSource?: string;
+  flightDestination?: string;
+  flightArrivalTime?: string;
+  hotelName?: string;
+  notes?: string;
+  desiredPlayers?: Array<{
+    playerId: string;
+    name: string;
+    team: string;
+  }>;
+  generatedPlan?: Array<{
+    at: string;
+    title: string;
+    detail: string;
+  }>;
+};
+
+function coachScheduleFallbackKey(orgId: string, userId: string) {
+  return `${String(orgId || "").trim()}::${String(userId || "").trim()}`;
+}
+
+function getCoachScheduleFallbackStore() {
+  const g = globalThis as unknown as {
+    __BIRD_DOG_COACH_SCHEDULE_FALLBACK__?: Map<string, CoachSchedule>;
+  };
+  if (!g.__BIRD_DOG_COACH_SCHEDULE_FALLBACK__) {
+    g.__BIRD_DOG_COACH_SCHEDULE_FALLBACK__ = new Map<string, CoachSchedule>();
+  }
+  return g.__BIRD_DOG_COACH_SCHEDULE_FALLBACK__;
+}
+
+function isCoachScheduleFallbackError(error: unknown) {
+  const text = String(error || "").toLowerCase();
+  return (
+    text.includes("supabase request failed (503)")
+    || text.includes("pgrst002")
+    || text.includes("request timed out")
+    || text.includes("fetch failed")
+    || text.includes("upstream connect error")
+    || text.includes("enotfound")
+    || text.includes("econn")
+  );
+}
+
+function upsertCoachScheduleFallback(input: CoachScheduleWriteInput) {
+  const store = getCoachScheduleFallbackStore();
+  const key = coachScheduleFallbackKey(input.orgId, input.userId);
+  const nowIso = new Date().toISOString();
+  const existing = store.get(key);
+  const next: CoachSchedule = {
+    id: existing?.id || key,
+    org_id: input.orgId,
+    user_id: input.userId,
+    coach_name: input.coachName,
+    coach_email: existing?.coach_email || null,
+    flight_source: input.flightSource || null,
+    flight_destination: input.flightDestination || null,
+    flight_arrival_time: input.flightArrivalTime || null,
+    hotel_name: input.hotelName || null,
+    notes: input.notes || null,
+    desired_players: input.desiredPlayers || [],
+    generated_plan: input.generatedPlan || [],
+    created_at: existing?.created_at || nowIso,
+    updated_at: nowIso
+  };
+  store.set(key, next);
+  return next;
+}
+
+function listCoachSchedulesFallback(orgId: string): CoachSchedule[] {
+  const store = getCoachScheduleFallbackStore();
+  return Array.from(store.values())
+    .filter((row) => row.org_id === orgId)
+    .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+}
+
+function deleteCoachScheduleFallback(orgId: string, userId: string) {
+  const store = getCoachScheduleFallbackStore();
+  store.delete(coachScheduleFallbackKey(orgId, userId));
+}
+
 export async function upsertCoachSchedule(input: {
   orgId: string;
   userId: string;
@@ -256,33 +341,57 @@ export async function upsertCoachSchedule(input: {
     detail: string;
   }>;
 }) {
-  await supabaseRequest("coach_schedules", {
-    method: "POST",
-    query: { on_conflict: "user_id" },
-    body: [{
-      org_id: input.orgId,
-      user_id: input.userId,
-      coach_name: input.coachName,
-      flight_source: input.flightSource || null,
-      flight_destination: input.flightDestination || null,
-      flight_arrival_time: input.flightArrivalTime || null,
-      hotel_name: input.hotelName || null,
-      notes: input.notes || null,
-      desired_players: input.desiredPlayers || [],
-      generated_plan: input.generatedPlan || []
-    }],
-    prefer: "resolution=merge-duplicates,return=minimal"
-  });
+  upsertCoachScheduleFallback(input);
+  try {
+    await supabaseRequest("coach_schedules", {
+      method: "POST",
+      query: { on_conflict: "user_id" },
+      body: [{
+        org_id: input.orgId,
+        user_id: input.userId,
+        coach_name: input.coachName,
+        flight_source: input.flightSource || null,
+        flight_destination: input.flightDestination || null,
+        flight_arrival_time: input.flightArrivalTime || null,
+        hotel_name: input.hotelName || null,
+        notes: input.notes || null,
+        desired_players: input.desiredPlayers || [],
+        generated_plan: input.generatedPlan || []
+      }],
+      prefer: "resolution=merge-duplicates,return=minimal"
+    });
+  } catch (error) {
+    if (!isCoachScheduleFallbackError(error)) {
+      throw error;
+    }
+  }
 }
 
 export async function listCoachSchedules(orgId: string): Promise<CoachSchedule[]> {
-  const rows = (await supabaseRequest("coach_schedules", {
-    query: {
-      org_id: `eq.${orgId}`,
-      select: "id,org_id,user_id,coach_name,flight_source,flight_destination,flight_arrival_time,hotel_name,notes,desired_players,generated_plan,created_at,updated_at",
-      order: "updated_at.desc"
+  let rows: CoachSchedule[] = [];
+  try {
+    rows = (await supabaseRequest("coach_schedules", {
+      query: {
+        org_id: `eq.${orgId}`,
+        select: "id,org_id,user_id,coach_name,flight_source,flight_destination,flight_arrival_time,hotel_name,notes,desired_players,generated_plan,created_at,updated_at",
+        order: "updated_at.desc"
+      }
+    })) as CoachSchedule[];
+    const store = getCoachScheduleFallbackStore();
+    rows.forEach((row) => {
+      const key = coachScheduleFallbackKey(row.org_id, row.user_id);
+      const existing = store.get(key);
+      store.set(key, {
+        ...row,
+        coach_email: existing?.coach_email || null
+      });
+    });
+  } catch (error) {
+    if (!isCoachScheduleFallbackError(error)) {
+      throw error;
     }
-  })) as CoachSchedule[];
+    rows = listCoachSchedulesFallback(orgId);
+  }
   const users = (await supabaseRequest("scout_users", {
     query: {
       org_id: `eq.${orgId}`,
@@ -319,7 +428,10 @@ export async function cleanupPastCoachSchedules(orgId: string) {
       flight_arrival_time: `lt.${nowIso}`
     },
     prefer: "return=minimal"
-  }).catch(() => undefined);
+  }).catch((error) => {
+    if (!isCoachScheduleFallbackError(error)) return undefined;
+    return undefined;
+  });
 
   const schedules = await listCoachSchedules(orgId).catch(() => [] as CoachSchedule[]);
   const expiredUserIds = schedules
@@ -330,6 +442,7 @@ export async function cleanupPastCoachSchedules(orgId: string) {
     .map((item) => item.user_id)
     .filter(Boolean);
   if (!expiredUserIds.length) return;
+  expiredUserIds.forEach((userId) => deleteCoachScheduleFallback(orgId, userId));
   await Promise.allSettled(expiredUserIds.map((userId) =>
     supabaseRequest("coach_schedules", {
       method: "DELETE",
@@ -338,19 +451,28 @@ export async function cleanupPastCoachSchedules(orgId: string) {
         user_id: `eq.${userId}`
       },
       prefer: "return=minimal"
+    }).catch((error) => {
+      if (!isCoachScheduleFallbackError(error)) throw error;
     })
   ));
 }
 
 export async function deleteCoachScheduleForUser(orgId: string, userId: string) {
-  await supabaseRequest("coach_schedules", {
-    method: "DELETE",
-    query: {
-      org_id: `eq.${orgId}`,
-      user_id: `eq.${userId}`
-    },
-    prefer: "return=minimal"
-  });
+  deleteCoachScheduleFallback(orgId, userId);
+  try {
+    await supabaseRequest("coach_schedules", {
+      method: "DELETE",
+      query: {
+        org_id: `eq.${orgId}`,
+        user_id: `eq.${userId}`
+      },
+      prefer: "return=minimal"
+    });
+  } catch (error) {
+    if (!isCoachScheduleFallbackError(error)) {
+      throw error;
+    }
+  }
 }
 
 export async function upsertCoachLiveLocation(input: {
