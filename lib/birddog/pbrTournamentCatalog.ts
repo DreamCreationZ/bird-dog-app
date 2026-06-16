@@ -3,9 +3,12 @@ import { CircuitSeason } from "@/lib/birddog/inventoryCatalog";
 
 const PBR_LIST_URL = "https://tournaments.prepbaseballreport.com";
 const PBR_AJAX_EVENTS_URL = `${PBR_LIST_URL}/ajax-events`;
+const PBR_EVENTS_SITE_URL = "https://www.prepbaseballreport.com";
+const PBR_FILTER_EVENTS_URL = `${PBR_EVENTS_SITE_URL}/myincludes/filter_Events.php`;
 const CACHE_TTL_MS = 2 * 60 * 1000;
 const MAX_AJAX_PAGES = 10;
 const MAX_CATALOG_ITEMS = 80;
+const MAX_EVENTS_FEED_STATE_ID = 60;
 
 export type PbrCatalogItem = {
   slug: string;
@@ -135,8 +138,44 @@ function toAbsoluteUrl(value: string) {
   return `${PBR_LIST_URL}/${value}`;
 }
 
+function toAbsoluteEventUrl(value: string) {
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.startsWith("/")) return `${PBR_EVENTS_SITE_URL}${value}`;
+  return `${PBR_EVENTS_SITE_URL}/${value}`;
+}
+
 function sortCatalog(items: PbrCatalogItem[]) {
   return items.sort((a, b) => `${a.displayDate} ${a.name}`.localeCompare(`${b.displayDate} ${b.name}`));
+}
+
+function formatDisplayDateFromParts(year: number, month: number, day: number) {
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return "";
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC"
+  });
+}
+
+function inferYearFromEventUrl(eventUrl: string, month: number) {
+  const currentYear = new Date().getUTCFullYear();
+  const fullMatch = eventUrl.match(/(?:^|[^0-9])(20[2-9][0-9])(?:[^0-9]|$)/);
+  if (fullMatch) return Number(fullMatch[1]);
+
+  const yyMatch = eventUrl.match(/(?:-|\/)(\d{2})(?:$|[^0-9])/);
+  if (yyMatch) {
+    const yy = Number(yyMatch[1]);
+    if (yy >= 20 && yy <= 99) return 2000 + yy;
+  }
+
+  const currentMonth = new Date().getUTCMonth() + 1;
+  if (month && currentMonth >= 10 && month <= 3) {
+    return currentYear + 1;
+  }
+  return currentYear;
 }
 
 function mapAjaxEventToCatalogItem(event: PbrAjaxEvent): PbrCatalogItem | null {
@@ -221,6 +260,73 @@ async function parseCatalogFromAjaxEvents(): Promise<PbrCatalogItem[]> {
   return sortCatalog(rows.slice(0, MAX_CATALOG_ITEMS));
 }
 
+async function parseCatalogFromEventsFeed(): Promise<PbrCatalogItem[]> {
+  const rows: PbrCatalogItem[] = [];
+  const seenByHref = new Set<string>();
+
+  for (let stateId = 1; stateId <= MAX_EVENTS_FEED_STATE_ID; stateId += 1) {
+    const url = `${PBR_FILTER_EVENTS_URL}?st=${stateId}&cache=${Date.now()}`;
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      }
+    }).catch(() => null);
+
+    if (!res || !res.ok) continue;
+    const html = await res.text().catch(() => "");
+    if (!html || !html.includes("/event/")) continue;
+
+    const pattern =
+      /<a href="([^"]*\/event\/[^"]+)">[\s\S]*?<span class="date">\s*<span>(\d{1,2})<\/span>\s*<span>(\d{1,2})<\/span>[\s\S]*?<span class="state">([^<]*)<\/span>[\s\S]*?<span class="title">([^<]*)<\/span>[\s\S]*?<span class="location">([^<]*)<\/span>/gi;
+
+    let match: RegExpExecArray | null = pattern.exec(html);
+    while (match) {
+      const href = normalizeSpace(match[1]);
+      const month = Number(normalizeSpace(match[2]));
+      const day = Number(normalizeSpace(match[3]));
+      const title = normalizeSpace(match[5]);
+      const location = normalizeSpace(match[6]);
+      const hrefKey = href.toLowerCase();
+
+      if (!href || !title || seenByHref.has(hrefKey)) {
+        match = pattern.exec(html);
+        continue;
+      }
+
+      const year = inferYearFromEventUrl(href, month);
+      const isoStart = [
+        String(year).padStart(4, "0"),
+        String(Math.max(1, Math.min(12, month || 1))).padStart(2, "0"),
+        String(Math.max(1, Math.min(31, day || 1))).padStart(2, "0")
+      ].join("-");
+      const displayDate = formatDisplayDateFromParts(year, month || 1, day || 1);
+      const slug = `pbr-live-${slugify(title)}-${slugify(location || "city-tbd")}-${isoStart}`;
+
+      rows.push({
+        slug,
+        name: title,
+        season: inferSeason(isoStart),
+        company: "PBR",
+        displayDate,
+        displayCity: location,
+        displayTeams: "",
+        harvestHint: toAbsoluteEventUrl(href)
+      });
+      seenByHref.add(hrefKey);
+
+      if (rows.length >= MAX_CATALOG_ITEMS) {
+        return sortCatalog(rows.slice(0, MAX_CATALOG_ITEMS));
+      }
+      match = pattern.exec(html);
+    }
+  }
+
+  return sortCatalog(rows.slice(0, MAX_CATALOG_ITEMS));
+}
+
 function parseCatalogFromHtml(html: string): PbrCatalogItem[] {
   const rows: PbrCatalogItem[] = [];
   const seen = new Set<string>();
@@ -285,6 +391,19 @@ export async function fetchPbrTournamentCatalog(forceRefresh = false) {
         items: ajaxItems
       };
       return { items: ajaxItems, source: "live" as const };
+    }
+  } catch {
+    // Fall through to HTML parser.
+  }
+
+  try {
+    const eventsFeedItems = await parseCatalogFromEventsFeed();
+    if (eventsFeedItems.length) {
+      g.__BIRD_DOG_PBR_CATALOG_CACHE__ = {
+        fetchedAt: Date.now(),
+        items: eventsFeedItems
+      };
+      return { items: eventsFeedItems, source: "live" as const };
     }
   } catch {
     // Fall through to HTML parser.

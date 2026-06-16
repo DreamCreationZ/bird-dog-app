@@ -1155,6 +1155,31 @@ export async function POST(req: NextRequest) {
         }, { status: 503 });
       }
 
+      if (company === "PBR") {
+        const selectedMeta = selected as ({ displayCity?: string; displayDate?: string } | undefined);
+        const selectedDisplayDate = cleanText(String(selectedMeta?.displayDate || seedMeta?.displayDate || ""));
+        let fallbackDate = new Date().toISOString().slice(0, 10);
+        if (selectedDisplayDate) {
+          const parsed = Date.parse(selectedDisplayDate);
+          if (Number.isFinite(parsed)) {
+            fallbackDate = new Date(parsed).toISOString().slice(0, 10);
+          }
+        }
+        return NextResponse.json({
+          ok: true,
+          tournament: {
+            id: inventorySlug,
+            name: cleanText(selected?.name || seedMeta?.name || "PBR Event"),
+            city: cleanText(String(selectedMeta?.displayCity || seedMeta?.displayCity || "TBD")),
+            date: fallbackDate,
+            games: [],
+            teams: []
+          },
+          source: "pbr_metadata_fallback",
+          warning: "PBR source has not published team rosters or schedules for this event yet."
+        });
+      }
+
       return NextResponse.json({
         error: "Tournament not available in imported dataset yet.",
         detail: "Live scrape is disabled for this source right now. Queue an ingest job and retry after sync completes.",
