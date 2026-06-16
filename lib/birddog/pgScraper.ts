@@ -501,29 +501,50 @@ async function buildTournamentGamesFromScoreboardPages(input: {
 async function fetchHtml(target: string) {
   const raw = process.env.RESIDENTIAL_PROXY_TEMPLATE_URLS || "";
   const proxies = raw.split(",").map((item) => item.trim()).filter(Boolean);
-  const template = proxies.length ? proxies[proxyIndex % proxies.length] : null;
-  if (template) proxyIndex += 1;
-  const url = template ? template.replace("{url}", encodeURIComponent(target)) : target;
+  const proxyUrls = proxies.map((template) => {
+    proxyIndex += 1;
+    return template.replace("{url}", encodeURIComponent(target));
+  });
+  const requestUrls = [target, ...proxyUrls];
 
   const customUa = process.env.SCRAPER_USER_AGENTS
     ? process.env.SCRAPER_USER_AGENTS.split("||").map((item) => item.trim()).filter(Boolean)
     : defaultUserAgents;
   const ua = (customUa.length ? customUa : defaultUserAgents)[uaIndex % (customUa.length ? customUa.length : defaultUserAgents.length)];
   uaIndex += 1;
+  const timeoutRaw = Number(String(process.env.PG_SCRAPER_REQUEST_TIMEOUT_MS || process.env.SCRAPER_REQUEST_TIMEOUT_MS || "").trim());
+  const requestTimeoutMs = Number.isFinite(timeoutRaw) ? Math.max(3000, Math.min(20000, Math.trunc(timeoutRaw))) : 9000;
+  let lastError: Error | null = null;
 
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": ua,
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Cache-Control": "no-cache"
-    },
-    cache: "no-store"
-  });
-  const html = await response.text();
-  if (!response.ok) {
-    throw new Error(`PG fetch failed (${response.status})`);
+  for (const requestUrl of requestUrls) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
+    try {
+      const response = await fetch(requestUrl, {
+        headers: {
+          "User-Agent": ua,
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Cache-Control": "no-cache"
+        },
+        cache: "no-store",
+        signal: controller.signal
+      });
+      const html = await response.text();
+      if (!response.ok) {
+        lastError = new Error(`PG fetch failed (${response.status})`);
+        continue;
+      }
+      // Keep the original URL so downstream event-id parsing is stable even
+      // when this response came through a proxy wrapper URL.
+      return { html, target };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    } finally {
+      clearTimeout(timer);
+    }
   }
-  return { html, target };
+
+  throw lastError || new Error("PG fetch failed");
 }
 
 function parseRosterFromTeamHtml(html: string, teamName: string, offset = 0) {
