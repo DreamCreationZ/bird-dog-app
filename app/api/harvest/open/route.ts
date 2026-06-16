@@ -1155,6 +1155,54 @@ export async function POST(req: NextRequest) {
         }, { status: 503 });
       }
 
+      if (company === "PG") {
+        const scrapeHint = tournamentHint || inventoryHarvestHint({
+          slug: inventorySlug,
+          name: selected?.name || seedMeta?.name || "Perfect Game Tournament",
+          company
+        });
+        try {
+          const scrapedRaw = await withTimeout(scrapePgTournamentLive(scrapeHint), liveScrapeTimeoutMs);
+          const scrapedTournament = scrapedRaw
+            ? canonicalizeTournamentForInventory({
+              tournament: scrapedRaw,
+              inventorySlug,
+              preferredName: selected?.name || seedMeta?.name || ""
+            })
+            : null;
+          const hasScrapedData = Boolean(
+            scrapedTournament
+            && (teamCount(scrapedTournament.teams) > 0 || teamCount(scrapedTournament.games) > 0)
+          );
+          if (scrapedTournament && hasScrapedData) {
+            if (hasSupabaseConfig) {
+              try {
+                const dbId = await upsertHarvestedTournament({
+                  orgId: session.orgId,
+                  company,
+                  tournament: scrapedTournament
+                });
+                const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
+                return NextResponse.json({
+                  ok: true,
+                  tournament: hydrated || scrapedTournament,
+                  source: "pg_live_imported_fallback"
+                });
+              } catch {
+                // Continue with in-memory payload.
+              }
+            }
+            return NextResponse.json({
+              ok: true,
+              tournament: scrapedTournament,
+              source: "pg_live_imported_fallback"
+            });
+          }
+        } catch {
+          // Continue to imported-mode response below.
+        }
+      }
+
       if (company === "PBR") {
         const selectedMeta = selected as ({ displayCity?: string; displayDate?: string } | undefined);
         const selectedDisplayDate = cleanText(String(selectedMeta?.displayDate || seedMeta?.displayDate || ""));
