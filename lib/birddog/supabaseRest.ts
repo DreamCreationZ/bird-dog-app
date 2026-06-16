@@ -22,12 +22,15 @@ type RequestOptions = {
   query?: Record<string, string>;
   body?: unknown;
   prefer?: string;
+  timeoutMs?: number;
 };
 
 export async function supabaseRequest(path: string, options: RequestOptions = {}) {
   const method = options.method || "GET";
   const url = new URL(`${baseUrl()}/rest/${API_VERSION}/${path}`);
-  const timeoutMs = Number.parseInt(process.env.SUPABASE_REQUEST_TIMEOUT_MS || "12000", 10);
+  const timeoutMs = Number.isFinite(options.timeoutMs)
+    ? Math.max(500, Math.trunc(options.timeoutMs as number))
+    : Number.parseInt(process.env.SUPABASE_REQUEST_TIMEOUT_MS || "12000", 10);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) ? timeoutMs : 12000);
 

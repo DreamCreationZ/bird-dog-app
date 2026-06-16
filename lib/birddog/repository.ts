@@ -284,6 +284,12 @@ function isCoachScheduleFallbackError(error: unknown) {
   );
 }
 
+function coachScheduleSupabaseTimeoutMs() {
+  const raw = Number(String(process.env.BIRD_DOG_COACH_SCHEDULE_SUPABASE_TIMEOUT_MS || "").trim());
+  if (Number.isFinite(raw)) return Math.max(500, Math.min(5000, Math.trunc(raw)));
+  return 1800;
+}
+
 function upsertCoachScheduleFallback(input: CoachScheduleWriteInput) {
   const store = getCoachScheduleFallbackStore();
   const key = coachScheduleFallbackKey(input.orgId, input.userId);
@@ -346,6 +352,7 @@ export async function upsertCoachSchedule(input: {
     await supabaseRequest("coach_schedules", {
       method: "POST",
       query: { on_conflict: "user_id" },
+      timeoutMs: coachScheduleSupabaseTimeoutMs(),
       body: [{
         org_id: input.orgId,
         user_id: input.userId,
@@ -375,7 +382,8 @@ export async function listCoachSchedules(orgId: string): Promise<CoachSchedule[]
         org_id: `eq.${orgId}`,
         select: "id,org_id,user_id,coach_name,flight_source,flight_destination,flight_arrival_time,hotel_name,notes,desired_players,generated_plan,created_at,updated_at",
         order: "updated_at.desc"
-      }
+      },
+      timeoutMs: coachScheduleSupabaseTimeoutMs()
     })) as CoachSchedule[];
     const store = getCoachScheduleFallbackStore();
     rows.forEach((row) => {
@@ -396,7 +404,8 @@ export async function listCoachSchedules(orgId: string): Promise<CoachSchedule[]
     query: {
       org_id: `eq.${orgId}`,
       select: "id,email"
-    }
+    },
+    timeoutMs: coachScheduleSupabaseTimeoutMs()
   }).catch(() => [])) as Array<{ id: string; email: string }>;
 
   const emailById = new Map(users.map((u) => [u.id, u.email]));
@@ -427,6 +436,7 @@ export async function cleanupPastCoachSchedules(orgId: string) {
       org_id: `eq.${orgId}`,
       flight_arrival_time: `lt.${nowIso}`
     },
+    timeoutMs: coachScheduleSupabaseTimeoutMs(),
     prefer: "return=minimal"
   }).catch((error) => {
     if (!isCoachScheduleFallbackError(error)) return undefined;
@@ -450,6 +460,7 @@ export async function cleanupPastCoachSchedules(orgId: string) {
         org_id: `eq.${orgId}`,
         user_id: `eq.${userId}`
       },
+      timeoutMs: coachScheduleSupabaseTimeoutMs(),
       prefer: "return=minimal"
     }).catch((error) => {
       if (!isCoachScheduleFallbackError(error)) throw error;
@@ -466,6 +477,7 @@ export async function deleteCoachScheduleForUser(orgId: string, userId: string) 
         org_id: `eq.${orgId}`,
         user_id: `eq.${userId}`
       },
+      timeoutMs: coachScheduleSupabaseTimeoutMs(),
       prefer: "return=minimal"
     });
   } catch (error) {
