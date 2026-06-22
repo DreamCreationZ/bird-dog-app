@@ -353,6 +353,87 @@ export async function deleteCoachScheduleForUser(orgId: string, userId: string) 
   });
 }
 
+export async function deleteScoutAccountData(input: {
+  orgId: string;
+  userId: string;
+}) {
+  const orgId = String(input.orgId || "").trim();
+  const userId = String(input.userId || "").trim();
+  if (!orgId || !userId) {
+    throw new Error("Missing orgId or userId for account deletion.");
+  }
+
+  await Promise.all([
+    supabaseRequest("scout_notes", {
+      method: "DELETE",
+      query: {
+        org_id: `eq.${orgId}`,
+        user_id: `eq.${userId}`
+      },
+      prefer: "return=minimal"
+    }),
+    supabaseRequest("pulse_events", {
+      method: "DELETE",
+      query: {
+        org_id: `eq.${orgId}`,
+        user_id: `eq.${userId}`
+      },
+      prefer: "return=minimal"
+    }),
+    supabaseRequest("coach_live_locations", {
+      method: "DELETE",
+      query: {
+        org_id: `eq.${orgId}`,
+        user_id: `eq.${userId}`
+      },
+      prefer: "return=minimal"
+    }),
+    supabaseRequest("coach_schedules", {
+      method: "DELETE",
+      query: {
+        org_id: `eq.${orgId}`,
+        user_id: `eq.${userId}`
+      },
+      prefer: "return=minimal"
+    }),
+    supabaseRequest("scout_users", {
+      method: "DELETE",
+      query: {
+        org_id: `eq.${orgId}`,
+        id: `eq.${userId}`
+      },
+      prefer: "return=minimal"
+    })
+  ]);
+
+  // Keep org-level purchase/history continuity while removing direct user linkage.
+  const tombstoneUserId = `deleted_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  await Promise.allSettled([
+    supabaseRequest("org_tournament_unlocks", {
+      method: "PATCH",
+      query: {
+        org_id: `eq.${orgId}`,
+        user_id: `eq.${userId}`
+      },
+      body: {
+        user_id: tombstoneUserId
+      },
+      prefer: "return=minimal"
+    }),
+    supabaseRequest("harvest_jobs", {
+      method: "PATCH",
+      query: {
+        org_id: `eq.${orgId}`,
+        created_by: `eq.${userId}`
+      },
+      body: {
+        created_by: tombstoneUserId
+      },
+      prefer: "return=minimal"
+    })
+  ]);
+}
+
 export async function upsertCoachLiveLocation(input: {
   orgId: string;
   userId: string;

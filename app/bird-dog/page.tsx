@@ -2262,6 +2262,8 @@ export default function BirdDogPage() {
     dateOfBirth: "1990-01-01"
   });
   const [profileStatus, setProfileStatus] = useState("");
+  const [deleteAccountStatus, setDeleteAccountStatus] = useState("");
+  const [deleteAccountBusy, setDeleteAccountBusy] = useState(false);
 
   const selectedTournament = useMemo(
     () => tournaments.find((t) => t.id === selectedTournamentId) || null,
@@ -4713,6 +4715,7 @@ export default function BirdDogPage() {
     const normalizedEmail = profileForm.universityEmail.trim().toLowerCase();
     const normalizedCode = profileForm.countryCallingCode.replace(/[^\d]/g, "");
     const normalizedPhone = profileForm.mobileNumber.replace(/[^\d]/g, "");
+    const codeToPersist = normalizedPhone ? (normalizedCode || "1") : "";
     const fullName = `${firstName} ${lastName}`.trim();
     if (!firstName) {
       setProfileStatus("First name is required.");
@@ -4722,11 +4725,11 @@ export default function BirdDogPage() {
       setProfileStatus("Enter a valid email address.");
       return;
     }
-    if (!normalizedCode || normalizedCode.length > 4) {
+    if (normalizedPhone && (!normalizedCode || normalizedCode.length > 4)) {
       setProfileStatus("Enter a valid country code.");
       return;
     }
-    if (!normalizedPhone || normalizedPhone.length < 7 || normalizedPhone.length > 15) {
+    if (normalizedPhone && (normalizedPhone.length < 7 || normalizedPhone.length > 15)) {
       setProfileStatus("Enter a valid mobile number.");
       return;
     }
@@ -4740,7 +4743,7 @@ export default function BirdDogPage() {
           email: normalizedEmail,
           gender: profileForm.gender,
           phone: normalizedPhone,
-          countryCallingCode: normalizedCode
+          countryCallingCode: codeToPersist
         })
       });
       const data = await res.json().catch(() => ({}));
@@ -4762,7 +4765,7 @@ export default function BirdDogPage() {
             lastName,
             universityEmail: normalizedEmail,
             gender: profileForm.gender,
-            countryCallingCode: normalizedCode,
+            countryCallingCode: codeToPersist,
             mobileNumber: normalizedPhone,
             dateOfBirth: profileForm.dateOfBirth || "1990-01-01"
           } satisfies ProfileFormState));
@@ -7509,6 +7512,79 @@ export default function BirdDogPage() {
     }
   }
 
+  function clearBirdDogStorage() {
+    if (typeof window === "undefined") return;
+    const localKeysToRemove: string[] = [];
+    const sessionKeysToRemove: string[] = [];
+    try {
+      for (let index = 0; index < window.localStorage.length; index += 1) {
+        const key = window.localStorage.key(index);
+        if (!key) continue;
+        if (key.startsWith("bird_dog:") || key.startsWith("bd-coach-booking-profile:")) {
+          localKeysToRemove.push(key);
+        }
+      }
+    } catch {
+      // Ignore storage enumeration failures.
+    }
+    try {
+      for (let index = 0; index < window.sessionStorage.length; index += 1) {
+        const key = window.sessionStorage.key(index);
+        if (!key) continue;
+        if (key.startsWith("bird_dog:")) {
+          sessionKeysToRemove.push(key);
+        }
+      }
+    } catch {
+      // Ignore storage enumeration failures.
+    }
+    localKeysToRemove.forEach((key) => safeLocalRemove(key));
+    sessionKeysToRemove.forEach((key) => {
+      try {
+        window.sessionStorage.removeItem(key);
+      } catch {
+        // Ignore storage errors.
+      }
+    });
+  }
+
+  async function deleteAccount() {
+    if (!user || deleteAccountBusy) return;
+    setDeleteAccountStatus("");
+    const confirmed = window.confirm(
+      "Delete account permanently? This removes your profile and scouting data from this app."
+    );
+    if (!confirmed) return;
+    const typed = window.prompt("Type DELETE to confirm account deletion.");
+    if (typed !== "DELETE") {
+      setDeleteAccountStatus("Deletion cancelled. Type DELETE exactly to confirm.");
+      return;
+    }
+
+    setDeleteAccountBusy(true);
+    setDeleteAccountStatus("Deleting account...");
+    try {
+      const res = await fetch("/api/session/delete", {
+        method: "DELETE",
+        cache: "no-store"
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDeleteAccountStatus(String(data?.error || "Unable to delete account right now."));
+        return;
+      }
+      clearBirdDogStorage();
+      setDeleteAccountStatus("Account deleted. Redirecting to login...");
+      window.setTimeout(() => {
+        window.location.href = "/login";
+      }, 600);
+    } catch {
+      setDeleteAccountStatus("Unable to delete account right now.");
+    } finally {
+      setDeleteAccountBusy(false);
+    }
+  }
+
   async function logout() {
     try {
       await fetch("/api/session/logout", { method: "POST", cache: "no-store" });
@@ -8015,7 +8091,7 @@ export default function BirdDogPage() {
               />
             </label>
             <label style={{ gridColumn: "1 / -1" }}>
-              Mobile Number
+              Mobile Number (Optional)
               <input
                 value={profileForm.mobileNumber}
                 onChange={(e) => setProfileForm((prev) => ({ ...prev, mobileNumber: e.target.value.replace(/[^\d]/g, "") }))}
@@ -8028,6 +8104,31 @@ export default function BirdDogPage() {
             <button type="button" onClick={() => void saveProfile()}>Save Profile</button>
           </div>
           {profileStatus ? <p className="muted" style={{ marginTop: 8 }}>{profileStatus}</p> : null}
+          <div
+            style={{
+              marginTop: 18,
+              borderTop: "1px solid rgba(255,255,255,0.18)",
+              paddingTop: 14
+            }}
+          >
+            <h3 style={{ marginTop: 0, marginBottom: 6 }}>Delete Account</h3>
+            <p className="muted" style={{ marginTop: 0 }}>
+              Permanently delete your account and scout data from the app.
+            </p>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => void deleteAccount()}
+              disabled={deleteAccountBusy}
+              style={{
+                borderColor: "rgba(255, 111, 111, 0.6)",
+                color: "#ffb9b9"
+              }}
+            >
+              {deleteAccountBusy ? "Deleting..." : "Delete Account"}
+            </button>
+            {deleteAccountStatus ? <p className="muted" style={{ marginTop: 8 }}>{deleteAccountStatus}</p> : null}
+          </div>
         </section>
       ) : null}
 
