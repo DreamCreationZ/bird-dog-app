@@ -57,6 +57,10 @@ function buildUser(input: {
   countryCallingCode?: string;
 }) {
   const org = getOrgByEmail(input.email);
+  const normalizedPhone = String(input.phone || "").trim();
+  const normalizedCountryCode = normalizedPhone
+    ? String(input.countryCallingCode || "").trim() || "1"
+    : "";
   return {
     userId: input.isAdmin ? adminUserIdFromEmail(input.email) : `u_${Buffer.from(input.email).toString("base64url")}`,
     name: input.name,
@@ -74,8 +78,8 @@ function buildUser(input: {
     isAdmin: Boolean(input.isAdmin),
     authMethod: input.authMethod,
     gender: input.gender || "UNSPECIFIED",
-    phone: input.phone || "",
-    countryCallingCode: input.countryCallingCode || "1"
+    phone: normalizedPhone,
+    countryCallingCode: normalizedCountryCode
   } satisfies SessionUser;
 }
 
@@ -89,7 +93,7 @@ async function saveScoutProfile(user: SessionUser) {
       email: user.email,
       gender: user.gender || "UNSPECIFIED",
       phone: user.phone || "",
-      countryCallingCode: user.countryCallingCode || "1"
+      countryCallingCode: user.phone ? (user.countryCallingCode || "1") : ""
     });
   } catch (error) {
     console.error("Failed to upsert scout user during login. Continuing with session fallback.", error);
@@ -123,6 +127,8 @@ export async function POST(req: NextRequest) {
   const gender = normalizeGender(body?.gender);
   const phone = normalizePhone(body?.phone);
   const countryCallingCode = normalizeCountryCallingCode(body?.countryCallingCode || "1");
+  const hasPhone = Boolean(phone);
+  const normalizedCountryCallingCode = hasPhone ? (countryCallingCode || "1") : "";
 
   if (!isSupportedScoutEmail(email)) {
     return NextResponse.json({ error: "Valid email is required." }, { status: 400 });
@@ -209,10 +215,10 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Country is required for sign up." }, { status: 400 });
       }
     }
-    if (!countryCallingCode || countryCallingCode.length < 1 || countryCallingCode.length > 4) {
+    if (hasPhone && (!normalizedCountryCallingCode || normalizedCountryCallingCode.length < 1 || normalizedCountryCallingCode.length > 4)) {
       return NextResponse.json({ error: "Enter a valid country code like 1 or 91." }, { status: 400 });
     }
-    if (!phone || phone.length < 7 || phone.length > 15) {
+    if (hasPhone && (phone.length < 7 || phone.length > 15)) {
       return NextResponse.json({ error: "Enter a valid mobile number." }, { status: 400 });
     }
   }
@@ -230,8 +236,8 @@ export async function POST(req: NextRequest) {
       passwordHash,
       codeHash: hashSecret(nextMfaCode),
       gender,
-      phone,
-      countryCallingCode
+      phone: hasPhone ? phone : "",
+      countryCallingCode: normalizedCountryCallingCode
     });
     await setPendingMfaCookie(pendingToken);
 
@@ -244,6 +250,14 @@ export async function POST(req: NextRequest) {
     });
 
     if (delivery.delivered) {
+      if (delivery.channel === "on_screen") {
+        return NextResponse.json({
+          ok: true,
+          mfaRequired: true,
+          fallbackMfaCode: delivery.code,
+          message: delivery.reason
+        }, { status: 202 });
+      }
       return NextResponse.json({
         ok: true,
         mfaRequired: true,
@@ -252,7 +266,8 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({
-      error: "We could not send the MFA code to your email right now. Please try again."
+      error: "We could not send the MFA code to your email right now. Please try again.",
+      detail: delivery.reason
     }, { status: 503 });
   }
 
@@ -282,7 +297,7 @@ export async function POST(req: NextRequest) {
     passwordHash,
     gender: pending.gender || "UNSPECIFIED",
     phone: pending.phone || "",
-    countryCallingCode: pending.countryCallingCode || "1"
+    countryCallingCode: pending.phone ? (pending.countryCallingCode || "1") : ""
   }));
 
   const user = buildUser({
@@ -296,7 +311,7 @@ export async function POST(req: NextRequest) {
     authMethod: "password_mfa",
     gender: pending.gender || "UNSPECIFIED",
     phone: pending.phone || "",
-    countryCallingCode: pending.countryCallingCode || "1"
+    countryCallingCode: pending.phone ? (pending.countryCallingCode || "1") : ""
   });
   return finishLogin(user);
 }

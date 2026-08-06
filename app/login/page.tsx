@@ -32,8 +32,10 @@ function fromBase64Url(value: string) {
 type LoginResult = {
   ok?: boolean;
   error?: string;
+  detail?: string;
   mfaRequired?: boolean;
   message?: string;
+  fallbackMfaCode?: string;
 };
 
 type DashboardProvider = "PG" | "PBR";
@@ -201,12 +203,18 @@ export default function LoginPage() {
 
       const data = (await res.json().catch(() => ({}))) as LoginResult;
       if (!res.ok) {
-        setError(data?.error || "Login failed.");
+        const details = [data?.error, data?.detail].filter(Boolean).join(" ");
+        setError(details || "Login failed.");
         return;
       }
 
       if (data?.mfaRequired) {
         setStage("mfa");
+        if (data?.fallbackMfaCode) {
+          setMfaCode(data.fallbackMfaCode);
+          setInfo(`${data?.message || "Use this fallback MFA code to continue."} Code: ${data.fallbackMfaCode}`);
+          return;
+        }
         setInfo(data?.message || "Enter the MFA code to continue.");
         return;
       }
@@ -561,7 +569,6 @@ export default function LoginPage() {
                     }}
                     inputMode="numeric"
                     placeholder="+91 India"
-                    required
                   />
                   <datalist id="country-codes">
                     {countryCodeOptions.map((item) => (
@@ -570,13 +577,12 @@ export default function LoginPage() {
                   </datalist>
                 </label>
                 <label>
-                  Mobile Number
+                  Mobile Number (Optional)
                   <input
                     value={phone}
                     onChange={(e) => setPhone(e.target.value.replace(/[^\d]/g, ""))}
                     inputMode="tel"
                     placeholder="9876543210"
-                    required
                   />
                 </label>
               </>

@@ -32,6 +32,10 @@ This app includes:
 cp .env.example .env.local
 ```
 
+For first-time user login/signup:
+- Configure `RESEND_API_KEY` and `BIRD_DOG_MFA_FROM_EMAIL` for MFA email delivery.
+- If you need temporary recovery while email is unavailable, set `BIRD_DOG_MFA_ALLOW_ONSCREEN_FALLBACK=true` (not recommended for long-term production use).
+
 ## Run app
 
 ```bash

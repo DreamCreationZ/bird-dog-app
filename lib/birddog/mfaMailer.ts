@@ -7,6 +7,7 @@ type SendMfaInput = {
 
 type SendMfaResult =
   | { delivered: true; channel: "email" }
+  | { delivered: true; channel: "on_screen"; code: string; reason: string }
   | { delivered: false; channel: "on_screen"; reason: string };
 
 function escapeHtml(input: string) {
@@ -19,9 +20,18 @@ function escapeHtml(input: string) {
 }
 
 export async function sendMfaCodes(input: SendMfaInput): Promise<SendMfaResult> {
+  const allowOnScreenFallback = String(process.env.BIRD_DOG_MFA_ALLOW_ONSCREEN_FALLBACK || "").toLowerCase() === "true";
   const resendKey = process.env.RESEND_API_KEY || "";
   const fromEmail = process.env.BIRD_DOG_MFA_FROM_EMAIL || "";
   if (!resendKey || !fromEmail) {
+    if (allowOnScreenFallback) {
+      return {
+        delivered: true,
+        channel: "on_screen",
+        code: input.code,
+        reason: "MFA email provider is not configured. Using on-screen fallback code."
+      };
+    }
     return { delivered: false, channel: "on_screen", reason: "MFA email provider is not configured." };
   }
 
@@ -68,6 +78,14 @@ export async function sendMfaCodes(input: SendMfaInput): Promise<SendMfaResult> 
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
+    if (allowOnScreenFallback) {
+      return {
+        delivered: true,
+        channel: "on_screen",
+        code: input.code,
+        reason: `Email send failed (${response.status}). Using on-screen fallback code.`
+      };
+    }
     return { delivered: false, channel: "on_screen", reason: `Email send failed (${response.status}) ${detail}`.trim() };
   }
 
