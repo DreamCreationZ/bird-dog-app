@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getHarvestedTournament, listHarvestedTournaments, listOrgUnlocks } from "@/lib/birddog/repository";
-import { resolvePgTeamUrl, scrapePgTeamLive } from "@/lib/birddog/pgScraper";
+import { resolvePgTeamUrl, scrapePgTeamLive, scrapePgTournamentLive } from "@/lib/birddog/pgScraper";
 import { readSessionFromRequest } from "@/lib/birddog/serverSession";
 import { INVENTORY_SEED } from "@/lib/birddog/inventoryCatalog";
 import { isPrivilegedAdminEmail } from "@/lib/birddog/adminAccess";
@@ -1765,6 +1765,33 @@ export async function POST(req: NextRequest) {
 
     teamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName, eventId: resolvedEventId });
     if (!teamUrl) {
+      if (!searchOnly && !isLikelyPbrRequest && teamName) {
+        const liveTournamentHint = resolvedEventId
+          ? `https://www.perfectgame.org/Events/Default.aspx?event=${resolvedEventId}`
+          : (tournamentName || inventorySlug);
+        const liveTournamentFallback = await withTimeout(
+          scrapePgTournamentLive(liveTournamentHint).catch(() => null),
+          9000
+        );
+        if (liveTournamentFallback) {
+          const fallbackRows = importedRowsForTeam(liveTournamentFallback, teamName);
+          const normalizedSchedule = mergeScheduleRows(
+            fallbackRows.schedule,
+            [] as TeamScheduleRow[],
+            teamName
+          );
+          if (normalizedSchedule.length) {
+            return NextResponse.json({
+              ok: true,
+              source: "pg_live_tournament_schedule_fallback",
+              schedule: normalizedSchedule,
+              // Strict PG rule: no roster unless scraped from live PG team page.
+              roster: [] as TeamRosterRow[],
+              teamUrl: ""
+            });
+          }
+        }
+      }
       return NextResponse.json({
         ok: true,
         source: "team_url_unresolved",
