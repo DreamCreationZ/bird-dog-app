@@ -1252,7 +1252,10 @@ export async function POST(req: NextRequest) {
       }, { status: 409 });
     }
 
-    const scrapedRaw = await withTimeout(scrapePgTournamentLive(pgLiveHint), liveScrapeTimeoutMs);
+    let scrapedRaw = await withTimeout(scrapePgTournamentLive(pgLiveHint), liveScrapeTimeoutMs);
+    if (!scrapedRaw) {
+      scrapedRaw = await withTimeout(scrapePgTournamentLive(pgLiveHint), Math.max(18000, liveScrapeTimeoutMs * 2));
+    }
     if (!scrapedRaw) {
       const cachedLive = readCachedLiveTournament(liveCacheKey);
       if (cachedLive && tournamentHasAnyData(cachedLive.tournament)) {
