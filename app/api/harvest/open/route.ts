@@ -1029,7 +1029,7 @@ export async function POST(req: NextRequest) {
       }
 
       if (hasSupabaseConfig && tournamentId) {
-        const tournamentById = await getHarvestedTournament(session.orgId, tournamentId);
+        const tournamentById = await getHarvestedTournament(session.orgId, tournamentId).catch(() => null);
         if (tournamentById) {
           const existingTeamCount = teamCount(tournamentById.teams);
           const existingGameCount = teamCount(tournamentById.games);
@@ -1153,7 +1153,7 @@ export async function POST(req: NextRequest) {
               company,
               tournament: scrapedTournament
             });
-            const hydrated = await getHarvestedTournament(session.orgId, dbId);
+            const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
             return NextResponse.json({
               ok: true,
               tournament: hydrated || scrapedTournament,
@@ -1300,18 +1300,29 @@ export async function POST(req: NextRequest) {
         source: "pg_live_scrape_no_db"
       });
     }
-    const dbId = await upsertHarvestedTournament({
-      orgId: session.orgId,
-      company,
-      tournament: scrapedTournament
-    });
-    const hydrated = await getHarvestedTournament(session.orgId, dbId);
-
-    return NextResponse.json({
-      ok: true,
-      tournament: hydrated || scrapedTournament,
-      source: "pg_live_scrape"
-    });
+    try {
+      const dbId = await upsertHarvestedTournament({
+        orgId: session.orgId,
+        company,
+        tournament: scrapedTournament
+      });
+      const hydrated = await getHarvestedTournament(session.orgId, dbId).catch(() => null);
+      const next = hydrated || scrapedTournament;
+      writeCachedLiveTournament(liveCacheKey, "pg_live_scrape", next);
+      return NextResponse.json({
+        ok: true,
+        tournament: next,
+        source: "pg_live_scrape"
+      });
+    } catch {
+      // DB hiccups must not block tournament open in live mode.
+      writeCachedLiveTournament(liveCacheKey, "pg_live_scrape", scrapedTournament);
+      return NextResponse.json({
+        ok: true,
+        tournament: scrapedTournament,
+        source: "pg_live_scrape_db_pending"
+      });
+    }
   } catch (error) {
     return NextResponse.json({ error: "Failed to open tournament", detail: String(error) }, { status: 500 });
   }

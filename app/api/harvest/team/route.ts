@@ -1440,7 +1440,7 @@ async function resolveTeamUrl(input: {
   }
   if (!url && input.teamName && input.eventId) {
     // Avoid long hangs when PG lookup stalls.
-    const resolved = await withTimeout(resolvePgTeamUrl(input.teamName, input.eventId), 2600);
+    const resolved = await withTimeout(resolvePgTeamUrl(input.teamName, input.eventId), 6500);
     url = resolved || "";
   }
   return url;
