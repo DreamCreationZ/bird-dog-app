@@ -1296,6 +1296,40 @@ export async function POST(req: NextRequest) {
       preferredName: selected?.name || seedMeta?.name || "",
       tournamentHint
     });
+    if (!tournamentHasAnyData(scrapedTournament)) {
+      const cachedLive = readCachedLiveTournament(liveCacheKey);
+      if (cachedLive && tournamentHasAnyData(cachedLive.tournament)) {
+        return NextResponse.json({
+          ok: true,
+          tournament: cachedLive.tournament,
+          source: `${cachedLive.source}_cache_reuse`
+        });
+      }
+      if (hasSupabaseConfig) {
+        const fallbackTournament = await getHarvestedTournamentByExternalId(
+          session.orgId,
+          company,
+          inventorySlug
+        ).catch(() => null);
+        if (fallbackTournament && tournamentHasAnyData(fallbackTournament)) {
+          const canonicalFallback = canonicalizeTournamentForInventory({
+            tournament: fallbackTournament,
+            inventorySlug,
+            preferredName: selected?.name || seedMeta?.name || "",
+            tournamentHint
+          });
+          return NextResponse.json({
+            ok: true,
+            tournament: canonicalFallback,
+            source: "pg_live_fallback_cached"
+          });
+        }
+      }
+      return NextResponse.json({
+        error: "Failed to open tournament",
+        detail: "Live PG scrape returned empty tournament and no cached tournament is available."
+      }, { status: 502 });
+    }
     if (!hasSupabaseConfig) {
       return NextResponse.json({
         ok: true,
