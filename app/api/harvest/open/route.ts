@@ -725,15 +725,61 @@ function canonicalizeTournamentForInventory(input: {
   tournament: Tournament;
   inventorySlug: string;
   preferredName?: string;
+  tournamentHint?: string;
 }) {
   const canonicalId = cleanText(input.inventorySlug);
   if (!canonicalId) return input.tournament;
   const preferredName = cleanText(input.preferredName || "");
-  return {
+  const normalized = {
     ...input.tournament,
     id: canonicalId,
     name: preferredName || input.tournament.name
   } as Tournament;
+
+  const isPgInventory = !/^pbr-/i.test(canonicalId) && !canonicalId.includes("pbr-live-");
+  if (!isPgInventory) return normalized;
+
+  const normalizedWithMeta = normalized as Tournament & { eventId?: string };
+  const eventIdFromExisting = safeString(normalizedWithMeta.eventId).replace(/^pg-/i, "");
+  const eventIdFromSlug = canonicalId.match(/^pg-live-event-(\d+)/i)?.[1] || "";
+  const eventIdFromHint = safeString(input.tournamentHint).match(/[?&]event=(\d+)/i)?.[1] || "";
+  const eventIdFromTournamentId = safeString(input.tournament.id).match(/\b(\d{5,})\b/)?.[1] || "";
+  const eventId = eventIdFromExisting || eventIdFromSlug || eventIdFromHint || eventIdFromTournamentId;
+
+  const existingTeams = Array.isArray(normalizedWithMeta.teams) ? normalizedWithMeta.teams : [];
+  const derivedTeamMap = new Map<string, ParticipatingTeam>();
+  const addTeam = (rawName: unknown) => {
+    const name = cleanText(safeString(rawName));
+    if (!name || name.length < 2) return;
+    if (/^(tbd|bye|winner|loser|team a|team b)$/i.test(name)) return;
+    if (/pool\s+[a-z]\s+place|division\s+place|winner\s*#/i.test(name.toLowerCase())) return;
+    const key = normalizeTeam(name);
+    if (!key || derivedTeamMap.has(key)) return;
+    derivedTeamMap.set(key, {
+      id: `pg-team-name-${slugify(name)}`,
+      name,
+      from: "",
+      record: "",
+      href: undefined
+    });
+  };
+  (normalizedWithMeta.games || []).forEach((game) => {
+    addTeam(game.homeTeam);
+    addTeam(game.awayTeam);
+  });
+  const derivedTeams = Array.from(derivedTeamMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+  const teams = existingTeams.length ? existingTeams : derivedTeams;
+
+  return {
+    ...normalizedWithMeta,
+    eventId: eventId || undefined,
+    teams
+  } as Tournament;
+}
+
+function tournamentHasAnyData(tournament: Tournament | null | undefined) {
+  if (!tournament) return false;
+  return teamCount(tournament.teams) > 0 || teamCount(tournament.games) > 0;
 }
 
 export async function POST(req: NextRequest) {
@@ -1206,11 +1252,46 @@ export async function POST(req: NextRequest) {
       }, { status: 409 });
     }
 
-    const scrapedRaw = await scrapePgTournamentLive(pgLiveHint);
+    const scrapedRaw = await withTimeout(scrapePgTournamentLive(pgLiveHint), liveScrapeTimeoutMs);
+    if (!scrapedRaw) {
+      const cachedLive = readCachedLiveTournament(liveCacheKey);
+      if (cachedLive && tournamentHasAnyData(cachedLive.tournament)) {
+        return NextResponse.json({
+          ok: true,
+          tournament: cachedLive.tournament,
+          source: `${cachedLive.source}_cache_reuse`
+        });
+      }
+      if (hasSupabaseConfig) {
+        const fallbackTournament = await getHarvestedTournamentByExternalId(
+          session.orgId,
+          company,
+          inventorySlug
+        ).catch(() => null);
+        if (fallbackTournament && tournamentHasAnyData(fallbackTournament)) {
+          const canonicalFallback = canonicalizeTournamentForInventory({
+            tournament: fallbackTournament,
+            inventorySlug,
+            preferredName: selected?.name || seedMeta?.name || "",
+            tournamentHint
+          });
+          return NextResponse.json({
+            ok: true,
+            tournament: canonicalFallback,
+            source: "pg_live_fallback_cached"
+          });
+        }
+      }
+      return NextResponse.json({
+        error: "Failed to open tournament",
+        detail: "Live PG scrape timed out and no cached tournament is available."
+      }, { status: 502 });
+    }
     const scrapedTournament = canonicalizeTournamentForInventory({
       tournament: scrapedRaw,
       inventorySlug,
-      preferredName: selected?.name || seedMeta?.name || ""
+      preferredName: selected?.name || seedMeta?.name || "",
+      tournamentHint
     });
     if (!hasSupabaseConfig) {
       return NextResponse.json({

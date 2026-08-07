@@ -1461,6 +1461,10 @@ export async function POST(req: NextRequest) {
   const tournamentId = String(body?.tournamentId || "").trim();
   const tournamentName = String(body?.tournamentName || "").trim();
   const searchOnly = body?.searchOnly === true || String(body?.searchOnly || "") === "true";
+  const eventIdFromSlug = inventorySlug.match(/^pg-live-event-(\d+)/i)?.[1] || "";
+  const eventIdFromTournamentId = tournamentId.match(/\b(\d{5,})\b/)?.[1] || "";
+  const eventIdFromTeamUrl = teamUrl.match(/[?&]event=(\d+)/i)?.[1] || "";
+  const resolvedEventId = eventId || eventIdFromSlug || eventIdFromTournamentId || eventIdFromTeamUrl;
 
   if (!inventorySlug) {
     return NextResponse.json({ error: "inventorySlug is required" }, { status: 400 });
@@ -1536,13 +1540,14 @@ export async function POST(req: NextRequest) {
           || inventorySlug.startsWith("pbr-live-")
           || /^pbr-team-/i.test(teamId)
           || /prep baseball|pbr/i.test(`${tournament.name} ${teamName}`);
+        const importedRosterAllowed = isPbrTournament ? importedRoster : [] as TeamRosterRow[];
 
-        if (searchOnly && importedRoster.length) {
+        if (searchOnly && (importedScheduleNormalized.length || importedRoster.length)) {
           return NextResponse.json({
             ok: true,
             source: "imported_search_fast",
             schedule: importedScheduleNormalized,
-            roster: importedRoster,
+            roster: importedRosterAllowed,
             teamUrl: ""
           });
         }
@@ -1589,11 +1594,16 @@ export async function POST(req: NextRequest) {
 
         const shouldEnrichFromLive = !isPbrTournament && !searchOnly;
         if (shouldEnrichFromLive) {
-          const fallbackTeamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName: targetTeamName || teamName, eventId });
+          const fallbackTeamUrl = await resolveTeamUrl({
+            teamId,
+            teamUrl,
+            teamName: targetTeamName || teamName,
+            eventId: resolvedEventId
+          });
           if (fallbackTeamUrl) {
             let live = await withTimeout(scrapePgTeamLive(fallbackTeamUrl, {
               teamName: targetTeamName || teamName,
-              eventId,
+              eventId: resolvedEventId,
               fastMode: true
             }), importedScheduleSuspect ? 5200 : 3200) || { schedule: [] as TeamScheduleRow[], roster: [] as TeamRosterRow[] };
             if (
@@ -1602,7 +1612,7 @@ export async function POST(req: NextRequest) {
             ) {
               const liveRetry = await withTimeout(scrapePgTeamLive(fallbackTeamUrl, {
                 teamName: targetTeamName || teamName,
-                eventId,
+                eventId: resolvedEventId,
                 fastMode: false
               }), importedScheduleSuspect ? 12000 : 7000);
               if (liveRetry && (liveRetry.schedule.length || liveRetry.roster.length)) {
@@ -1616,7 +1626,8 @@ export async function POST(req: NextRequest) {
                 source: importedReady ? "pg_live_team_schedule" : "pg_live_fallback",
                 // Always prefer latest live schedule when available; fall back to imported schedule only when live is empty.
                 schedule: mergedSchedule.length ? mergedSchedule : importedScheduleNormalized,
-                roster: mergeRosterRows(importedRoster, live.roster, targetTeamName || teamName),
+                // Strict PG rule: roster can only come from live PG page data.
+                roster: sanitizeRosterForResponse(live.roster, targetTeamName || teamName),
                 teamUrl: fallbackTeamUrl
               });
             }
@@ -1629,7 +1640,7 @@ export async function POST(req: NextRequest) {
               ok: true,
               source: "pg_imported_schedule_suspect_live_pending",
               schedule: [] as TeamScheduleRow[],
-              roster: importedRoster,
+              roster: importedRosterAllowed,
               teamUrl: ""
             });
           }
@@ -1637,7 +1648,7 @@ export async function POST(req: NextRequest) {
             ok: true,
             source: "imported_dataset",
             schedule: importedScheduleNormalized,
-            roster: importedRoster,
+            roster: importedRosterAllowed,
             teamUrl: ""
           });
         }
@@ -1649,7 +1660,7 @@ export async function POST(req: NextRequest) {
             ok: true,
             source: "imported_dataset_partial",
             schedule: importedScheduleNormalized,
-            roster: importedRoster,
+            roster: importedRosterAllowed,
             teamUrl: ""
           });
         }
@@ -1689,11 +1700,16 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const fallbackTeamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName: targetTeamName || teamName, eventId });
+      const fallbackTeamUrl = await resolveTeamUrl({
+        teamId,
+        teamUrl,
+        teamName: targetTeamName || teamName,
+        eventId: resolvedEventId
+      });
       if (fallbackTeamUrl) {
         const liveFast = await withTimeout(scrapePgTeamLive(fallbackTeamUrl, {
           teamName: targetTeamName || teamName,
-          eventId,
+          eventId: resolvedEventId,
           fastMode: true
         }), searchOnly ? 7000 : 12000);
         if (liveFast && (liveFast.schedule.length || liveFast.roster.length)) {
@@ -1711,7 +1727,7 @@ export async function POST(req: NextRequest) {
         if (!searchOnly) {
           const liveRetry = await withTimeout(scrapePgTeamLive(fallbackTeamUrl, {
             teamName: targetTeamName || teamName,
-            eventId,
+            eventId: resolvedEventId,
             fastMode: false
           }), 12000);
           if (liveRetry && (liveRetry.schedule.length || liveRetry.roster.length)) {
@@ -1747,7 +1763,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    teamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName, eventId });
+    teamUrl = await resolveTeamUrl({ teamId, teamUrl, teamName, eventId: resolvedEventId });
     if (!teamUrl) {
       return NextResponse.json({
         ok: true,
@@ -1758,7 +1774,7 @@ export async function POST(req: NextRequest) {
       });
     }
     const livePrimary = await withTimeout(
-      scrapePgTeamLive(teamUrl, { teamName, eventId, fastMode: searchOnly }),
+      scrapePgTeamLive(teamUrl, { teamName, eventId: resolvedEventId, fastMode: searchOnly }),
       searchOnly ? 9000 : 12000
     );
     if (livePrimary && (livePrimary.schedule.length || livePrimary.roster.length)) {
@@ -1775,7 +1791,7 @@ export async function POST(req: NextRequest) {
 
     if (!searchOnly) {
       const liveRetry = await withTimeout(
-        scrapePgTeamLive(teamUrl, { teamName, eventId, fastMode: true }),
+        scrapePgTeamLive(teamUrl, { teamName, eventId: resolvedEventId, fastMode: true }),
         9000
       );
       if (liveRetry && (liveRetry.schedule.length || liveRetry.roster.length)) {
@@ -1800,7 +1816,7 @@ export async function POST(req: NextRequest) {
         const fallbackTeamName = teamName || fallbackTournament.teams?.find((team) => team.id === teamId)?.name || "";
         if (fallbackTeamName) {
           const fallbackRows = importedRowsForTeam(fallbackTournament, fallbackTeamName);
-          if (fallbackRows.schedule.length || fallbackRows.roster.length) {
+          if (fallbackRows.schedule.length || (isLikelyPbrRequest && fallbackRows.roster.length)) {
             const normalizedFallbackSchedule = mergeScheduleRows(
               fallbackRows.schedule,
               [] as TeamScheduleRow[],
@@ -1810,7 +1826,7 @@ export async function POST(req: NextRequest) {
               ok: true,
               source: "imported_after_live_timeout",
               schedule: normalizedFallbackSchedule,
-              roster: fallbackRows.roster,
+              roster: isLikelyPbrRequest ? fallbackRows.roster : [] as TeamRosterRow[],
               teamUrl
             });
           }
